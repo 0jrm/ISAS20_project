@@ -1,0 +1,9 @@
+# Core dependencies for ISAS20_project
+numpy==1.26.4
+xarray==2024.12.1
+astropy==6.1.7
+tqdm==4.66.2
+
+# Optional dependencies for specific features
+# netcdf4==1.6.0  # Required for netCDF file handling
+# dask==2024.12.1  # Required for parallel processing
