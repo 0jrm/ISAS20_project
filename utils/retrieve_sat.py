@@ -542,21 +542,22 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
 # =============================================================================
 # Batch processing function
 # =============================================================================
-def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, temporal_pad: int = 0) -> dict:
+def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, temporal_pad: int = 0, max_batch_size: int = None) -> dict:
     """
     Retrieve and interpolate satellite data for a batch of queries.
     
     Each query is a tuple (latitude, longitude, julian_date) where julian_date is in
-    astronomical Julian days. For each product, if the candidate file contains multiple time
-    steps, it is processed as a multi-time product; otherwise, it is processed as a daily product.
-    Singleton dimensions are removed using np.squeeze(). For static products (e.g. bathymetry),
-    the extra time dimension is dropped.
+    astronomical Julian days. For each product, if temporal_pad > 0, data will be gathered
+    from multiple files spanning the temporal padding window. Singleton dimensions are removed
+    using np.squeeze(). For static products (e.g. bathymetry), the extra time dimension is dropped.
     
     Parameters:
         queries (list): List of (lat, lon, julian_date) tuples.
         products (dict): Mapping of product names to lists of variable names.
         spatial_pad (int): Number of grid steps for spatial padding (e.g., 1 for 3x3).
         temporal_pad (int, optional): Number of previous days to include for daily products.
+        max_batch_size (int, optional): Maximum number of queries to process in a single batch.
+            If provided, queries will be split into smaller batches of this size.
         
     Returns:
         dict: Mapping of query index to a dict of product results. Each product result is a dict:
@@ -569,6 +570,20 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                 }
               }.
     """
+    # If max_batch_size is provided and less than the number of queries, split into batches
+    if max_batch_size and len(queries) > max_batch_size:
+        logger.info(f"Splitting {len(queries)} queries into batches of {max_batch_size}")
+        results = {}
+        for i in range(0, len(queries), max_batch_size):
+            batch_queries = queries[i:i + max_batch_size]
+            batch_results = _process_batch(batch_queries, products, spatial_pad, temporal_pad)
+            results.update(batch_results)
+        return results
+    else:
+        return _process_batch(queries, products, spatial_pad, temporal_pad)
+
+def _process_batch(queries: list, products: dict, spatial_pad: int, temporal_pad: int = 0) -> dict:
+    """Internal function to process a single batch of queries."""
     results = {}
     
     # Add progress bar for query processing
@@ -589,7 +604,7 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                 logger.warning(f"Product {prod} not found in ROOT_DIRS")
                 continue
             
-            # Get candidate file
+            # Get candidate file for the query date
             candidate_file = select_candidate_file(prod, qdt)
             if candidate_file is None:
                 logger.debug(f"No file found for product {prod} on {qdt}")
@@ -598,49 +613,21 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
             # Check if product is static
             is_static = PRODUCT_METADATA.get(prod, {}).get("is_static", False)
             
-            try:
-                # Open dataset to check time dimension
-                with xr.open_dataset(candidate_file, decode_times=True) as ds:
-                    _, _, time_name = get_coord_names(ds)
-                    time_size = ds[time_name].size if (time_name and time_name in ds.coords) else 1
-            except Exception as e:
-                logger.warning(f"Error opening {candidate_file}: {e}")
-                continue
-            
-            # Process based on time dimension
-            if time_size > 1 and not is_static:
-                # Process as multi-time product
+            # For static products, process as single-time product
+            if is_static:
                 try:
                     with xr.open_dataset(candidate_file, decode_times=True) as ds:
                         lat_name, lon_name, time_name = get_coord_names(ds)
                         target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
                         
-                        # For SSH, we need to build special interp_kw with only the relevant time slices
-                        if prod == "ssh":
-                            # Get time values
-                            time_vals = ds[time_name].values
-                            
-                            # Find the time closest to the query date
-                            query_time_np = np.datetime64(qdt)
-                            time_diff = np.abs(time_vals - query_time_np)
-                            nearest_time_idx = int(time_diff.argmin())
-                            
-                            # Get temporal_pad days before the nearest time (limited by available times)
-                            start_idx = max(0, nearest_time_idx - temporal_pad)
-                            selected_times = time_vals[start_idx:nearest_time_idx+1]
-                            
-                            # Reverse order to have most recent first
-                            selected_times = selected_times[::-1]
-                            
-                            # Build interpolation kwargs
-                            interp_kw = {
-                                lat_name: target_lats,
-                                lon_name: target_lons,
-                                time_name: selected_times
-                            }
-                        else:
-                            # For other products, use build_multitime_interp_kwargs
-                            interp_kw = build_multitime_interp_kwargs(ds, qlat, qlon, qdt, spatial_pad, temporal_pad)
+                        interp_kw = {
+                            lat_name: target_lats,
+                            lon_name: target_lons
+                        }
+                        
+                        # Add depth dimension if present
+                        if "zlev" in ds.coords:
+                            interp_kw["zlev"] = ds["zlev"].values
                         
                         prod_result = {
                             "file": candidate_file, 
@@ -651,7 +638,6 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                             }
                         }
                         
-                        # Process variables
                         for var in products[prod]:
                             var_key = get_variable_name(prod, var, ds)
                             if var_key is None:
@@ -662,79 +648,32 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                             if extracted is None:
                                 continue
                             
-                            data = extracted.values
-                            prod_result["data"][var] = data
-                        
-                        # Add time information
-                        if prod == "ssh":
-                            prod_result["data"]["time"] = selected_times
-                        elif time_name in interp_kw:
-                            prod_result["data"]["time"] = interp_kw[time_name]
-                        
+                            data_out = np.squeeze(extracted.values)
+                            prod_result["data"][var] = data_out
+                            
                         results[idx][prod] = prod_result
                         
                 except Exception as e:
-                    logger.warning(f"Error processing multi-time product {prod}: {e}")
-            else:
-                # Process daily product using the existing function
-                if temporal_pad > 0 and not is_static:
-                    daily_data = process_daily_product(prod, qlat, qlon, qdt, spatial_pad, temporal_pad, products)
-                    if daily_data is not None:
-                        # Get coordinates
-                        with xr.open_dataset(candidate_file, decode_times=True) as ds:
-                            target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
-                            
-                            prod_result = {
-                                "file": f"Files from {qdt - timedelta(days=temporal_pad)} to {qdt}",
-                                "data": daily_data,
-                                "coordinates": {
-                                    "latitude": target_lats,
-                                    "longitude": target_lons
-                                }
-                            }
-                            results[idx][prod] = prod_result
-                else:
-                    # Process single-time product
-                    try:
-                        with xr.open_dataset(candidate_file, decode_times=True) as ds:
-                            lat_name, lon_name, time_name = get_coord_names(ds)
-                            target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
-                            
-                            interp_kw = {}
-                            if "zlev" in ds.coords:
-                                interp_kw["zlev"] = ds["zlev"].values
-                            
-                            interp_kw[lat_name] = target_lats
-                            interp_kw[lon_name] = target_lons
-                            
-                            if time_name is not None:
-                                interp_kw[time_name] = ds[time_name].values[0]
-                            
-                            prod_result = {
-                                "file": candidate_file, 
-                                "data": {},
-                                "coordinates": {
-                                    "latitude": target_lats,
-                                    "longitude": target_lons
-                                }
-                            }
-                            
-                            for var in products[prod]:
-                                var_key = get_variable_name(prod, var, ds)
-                                if var_key is None:
-                                    logger.debug(f"Variable '{var}' not found in {candidate_file}")
-                                    continue
-                                
-                                extracted = safe_interpolate(ds, var_key, interp_kw)
-                                if extracted is None:
-                                    continue
-                                
-                                data_out = np.squeeze(extracted.values)
-                                prod_result["data"][var] = data_out
-                            
-                            results[idx][prod] = prod_result
-                    except Exception as e:
-                        logger.warning(f"Error processing single-time product {prod}: {e}")
+                    logger.warning(f"Error processing static product {prod}: {e}")
+                continue
+            
+            # For non-static products, use process_daily_product to handle temporal padding
+            # This will gather data from multiple files if needed
+            daily_data = process_daily_product(prod, qlat, qlon, qdt, spatial_pad, temporal_pad, products)
+            if daily_data is not None:
+                # Get coordinates from the candidate file
+                with xr.open_dataset(candidate_file, decode_times=True) as ds:
+                    target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
+                    
+                    prod_result = {
+                        "file": f"Files from {qdt - timedelta(days=temporal_pad)} to {qdt}",
+                        "data": daily_data,
+                        "coordinates": {
+                            "latitude": target_lats,
+                            "longitude": target_lons
+                        }
+                    }
+                    results[idx][prod] = prod_result
     
     return results
 
@@ -744,11 +683,15 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
 if __name__ == "__main__":
     # Example query list: (latitude, longitude, julian_date)
     queries = [
-        (45.0, -30.0, 2459020.5),
-        (45.5, -29.5, 2459020.5),
-        (44.8, -30.2, 2459020.5),
-        (45.2, -29.8, 2459025.5),
-        (45.1, -30.1, 2459025.5)
+        # (45.0, -30.0, 2459020.5),
+        # (45.5, -29.5, 2459020.5),
+        # (44.8, -30.2, 2459020.5),
+        # (45.2, -29.8, 2459025.5),
+        # (45.1, -30.1, 2459025.5)
+        (23.11, -96.74, 2457012.00),
+        (27.81, -94.53, 2457013.00),
+        (25.50, -94.05, 2457013.00),
+        (24.72, -91.40, 2457014.00)
     ]
 
     # Define the satellite products and the variables to extract
@@ -762,7 +705,7 @@ if __name__ == "__main__":
     }
 
     spatial_padding = 16  # e.g., extract a 3x3 region
-    temporal_padding = 4  # Include the query day plus one previous day for daily products
+    temporal_padding = 6  # Include the query day plus one previous day for daily products
 
     # Set logging level for testing
     logging.basicConfig(level=logging.INFO)
