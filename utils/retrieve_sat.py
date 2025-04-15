@@ -4,8 +4,11 @@ Satellite Data Retrieval Module
 This module provides functions to retrieve and interpolate satellite data for oceanographic applications.
 The main function is retrieve_satellite_data() which processes multiple queries in batch.
 
+###
 retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, temporal_pad: int = 0) -> dict:
-Retrieve and interpolate satellite data for a batch of queries.
+###
+
+# Retrieve and interpolate satellite data for a batch of queries.
 
 Each query is a tuple (latitude, longitude, julian_date) where julian_date is in
 astronomical Julian days. Singleton dimensions are removed (outputs are 3D at most).
@@ -43,6 +46,7 @@ from astropy.time import Time
 from pathlib import Path
 import warnings
 from tqdm import tqdm
+import h5py
 
 # Suppress common warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in reduce")
@@ -266,6 +270,16 @@ def build_target_coordinates(ds, query_lat, query_lon, spatial_pad):
     lat_name, lon_name, _ = get_coord_names(ds)
     lon_vals = ds[lon_name].values
     
+    # Handle the case when spatial_pad is 0
+    if spatial_pad == 0:
+        # Return single coordinates
+        query_lon_norm = normalize_longitude(query_lon)
+        # If dataset uses 0-360 range, convert target longitude to match
+        if lon_vals.min() >= 0 and lon_vals.max() > 180 and query_lon_norm < 0:
+            query_lon_norm += 360
+        return np.array([query_lat]), np.array([query_lon_norm])
+    
+    # For non-zero padding, continue with existing logic
     # Enforce fixed spatial resolution of 0.25 degrees
     lat_res = 0.25
     lon_res = 0.25
@@ -315,11 +329,9 @@ def build_multitime_interp_kwargs(ds: xr.Dataset, query_lat: float, query_lon: f
     if target_times is not None:
         interp_kwargs[time_name] = target_times
     
-    # If depth/zlev dimension exists, include only the first level (surface)
+    # Add depth dimension if present
     if "zlev" in ds.coords:
-        interp_kwargs["zlev"] = ds["zlev"].values[0:1]  # Take only the first level
-    elif "depth" in ds.coords:
-        interp_kwargs["depth"] = ds["depth"].values[0:1]  # Take only the first level
+        interp_kwargs["zlev"] = ds["zlev"].values
     
     return interp_kwargs
 
@@ -329,39 +341,68 @@ def safe_interpolate(ds, var_key, interp_kwargs, method="nearest"):
         input_data = ds[var_key]
         logger.info(f"Interpolating {var_key}")
         
-        # Performance optimization: For nearest neighbor interpolation,
+        # Get all dimension names
+        lat_name, lon_name, time_name = get_coord_names(ds)
+        
+        # Handle depth/zlev dimension if present
+        depth_name = None
+        if "depth" in input_data.dims:
+            depth_name = "depth"
+        elif "zlev" in input_data.dims:
+            depth_name = "zlev"
+        
+        # Create list of all dimensions in the correct order
+        dims = []
+        if time_name in input_data.dims:
+            dims.append(time_name)
+        if depth_name is not None:
+            dims.append(depth_name)
+        dims.extend([lat_name, lon_name])
+        
+        # Ensure all dimensions are present in the data
+        missing_dims = [dim for dim in dims if dim not in input_data.dims]
+        if missing_dims:
+            logger.warning(f"Missing dimensions {missing_dims} in data, skipping")
+            return None
+        
+        # Transpose to the correct order
+        input_data = input_data.transpose(*dims)
+        
+        # Check if we're doing single-point interpolation (spatial_pad=0)
+        is_single_point = (len(interp_kwargs[lat_name]) == 1 and len(interp_kwargs[lon_name]) == 1)
+        
+        # Performance optimization: For nearest neighbor interpolation or single points,
         # use sel with method='nearest' which is faster than interp
-        if method == "nearest":
+        if method == "nearest" or is_single_point:
             # Convert interp_kwargs to selection kwargs
             sel_kwargs = {}
             for coord, values in interp_kwargs.items():
                 if isinstance(values, np.ndarray):
-                    sel_kwargs[coord] = values
+                    sel_kwargs[coord] = values[0] if len(values) == 1 else values
                 else:
-                    sel_kwargs[coord] = [values]
-            result = ds[var_key].sel(method='nearest', **sel_kwargs)
+                    sel_kwargs[coord] = values
+            result = input_data.sel(method='nearest', **sel_kwargs)
         else:
-            result = ds[var_key].interp(method=method, **interp_kwargs)
+            result = input_data.interp(method=method, **interp_kwargs)
         
-        # First squeeze all singleton dimensions
+        # Squeeze out singleton dimensions
         result = result.squeeze()
         
-        # If there are still more than 3 dimensions (like zlev/depth), remove extra dimensions
-        # by taking values at the first level (usually the surface level)
-        if len(result.dims) > 3:
-            # Keep only time, lat, lon dimensions (if present)
-            # Find lat, lon, time dimension names
-            lat_name = next((name for name in ['lat', 'latitude'] if name in result.dims), None)
-            lon_name = next((name for name in ['lon', 'longitude'] if name in result.dims), None)
-            time_name = next((name for name in ['time'] if name in result.dims), None)
-            
-            # List of dimensions to keep
-            keep_dims = [dim for dim in [lat_name, lon_name, time_name] if dim is not None]
-            
-            # For any other dimensions, select only the first index
-            for dim in result.dims:
-                if dim not in keep_dims:
-                    result = result.isel({dim: 0})
+        # For single-point interpolation, ensure we maintain the correct dimensions
+        if is_single_point:
+            # Add back lat/lon dimensions if they were squeezed out
+            if lat_name not in result.dims and lat_name in interp_kwargs:
+                result = result.expand_dims(lat_name)
+            if lon_name not in result.dims and lon_name in interp_kwargs:
+                result = result.expand_dims(lon_name)
+        
+        # Ensure the result has the correct shape (time, lat, lon) or (lat, lon) for static products
+        if time_name in result.dims:
+            # For time-varying products, ensure shape is (time, lat, lon)
+            result = result.transpose(time_name, lat_name, lon_name)
+        else:
+            # For static products, ensure shape is (lat, lon)
+            result = result.transpose(lat_name, lon_name)
         
         return result
     except Exception as e:
@@ -373,7 +414,8 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
     """
     For daily datasets (one time stamp per file), gather files for the query day and preceding days
     (if temporal_pad > 0), extract the spatially interpolated data from each file, and stack them along
-    a new time axis.
+    a new time axis. The time index 0 corresponds to the query date, with subsequent indices
+    representing previous days.
     """
     logger.info(f"\n=== Processing Query ===")
     logger.info(f"Product: {product}")
@@ -404,10 +446,9 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
     # Adjust spatial padding for SSS to account for higher resolution
     effective_spatial_pad = spatial_pad * 2 if product == "sss" else spatial_pad
     
-    # Sort by offset (most recent first) and reverse the order to stack correctly
+    # Sort by offset (most recent first) to ensure time index 0 is query date
     file_entries = sorted(file_entries, key=lambda x: x[0], reverse=True)
     stacked_vars = {}
-    times = []
     
     # Initialize expected shape based on first file
     expected_shape = None
@@ -428,9 +469,15 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
                 
                 # Add time dimension if present
                 if time_name is not None:
-                    current_time = ds[time_name].values[0]
-                    interp_kw[time_name] = current_time
-                    times.append(current_time)
+                    # For SSH, select only the time slice closest to query_dt
+                    if product == "ssh":
+                        time_vals = ds[time_name].values
+                        time_diff = np.abs(time_vals - np.datetime64(query_dt))
+                        nearest_idx = int(time_diff.argmin())
+                        interp_kw[time_name] = time_vals[nearest_idx]
+                    else:
+                        # For other products, use the first time in the file
+                        interp_kw[time_name] = ds[time_name].values[0]
                 
                 # Process each variable
                 for var in products[product]:
@@ -442,17 +489,6 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
                     extracted = safe_interpolate(ds, var_key, interp_kw)
                     if extracted is not None:
                         data = extracted.values
-                        
-                        # Ensure we have at most 3 dimensions (potentially time, lat, lon)
-                        # If data has more than expected dimensions, select only surface level
-                        if len(data.shape) > 3:
-                            logger.warning(f"Found data with more than 3 dimensions for {var}: {data.shape}. Selecting surface level.")
-                            # Assuming extra dimension is depth/zlev, select first level
-                            if len(data.shape) == 4:
-                                data = data[:, 0, :, :] if data.shape[1] == 1 else data[0, :, :, :]
-                            # For any other case, reshape to expected 3D or 2D format
-                            while len(data.shape) > 3:
-                                data = data[0]
                         
                         # Set expected shape from first successful extraction
                         if expected_shape is None:
@@ -481,36 +517,23 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
             logger.warning(f"No valid data to stack for variable {var}")
             continue
         try:
+            # Stack arrays along time dimension
             stacked_results[var] = np.stack(arr_list, axis=0)
-            
-            # Ensure the stacked result has no more than 3 dimensions
-            if len(stacked_results[var].shape) > 3:
-                logger.warning(f"Stacked result for {var} has more than 3 dimensions: {stacked_results[var].shape}. Selecting surface level.")
-                # For 4D data, assume the extra dimension is depth and select first level
-                if len(stacked_results[var].shape) == 4:
-                    # Check which dimension is smallest (likely the depth)
-                    min_dim_idx = np.argmin(stacked_results[var].shape)
-                    # Create slices to select first index of the min dimension
-                    slices = tuple(0 if i == min_dim_idx else slice(None) for i in range(4))
-                    stacked_results[var] = stacked_results[var][slices]
-                
-                # For any remaining cases, keep reducing dimensions
-                while len(stacked_results[var].shape) > 3:
-                    stacked_results[var] = stacked_results[var][0]
             
             # Log statistics of stacked data
             nan_percentage = np.isnan(stacked_results[var]).mean() * 100
             logger.info(f"Stacked {var} statistics:")
             logger.info(f"  NaN percentage: {nan_percentage:.2f}%")
-            logger.info(f"  Shape: {stacked_results[var].shape}")
             if not np.all(np.isnan(stacked_results[var])):
                 logger.info(f"  Range: [{np.nanmin(stacked_results[var])}, {np.nanmax(stacked_results[var])}]")
         except Exception as e:
             logger.error(f"Error stacking variable '{var}': {str(e)}")
     
     # Add time information and missing files info
-    if times:
-        stacked_results["time"] = np.array(times)
+    if not PRODUCT_METADATA.get(product, {}).get("is_static", False):
+        # Create time array with query_dt at index 0 and previous days
+        times = np.array([query_dt - timedelta(days=i) for i in range(temporal_pad + 1)])
+        stacked_results["time"] = times
     if missing_files:
         stacked_results["missing_files"] = missing_files
     
@@ -589,8 +612,35 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                 # Process as multi-time product
                 try:
                     with xr.open_dataset(candidate_file, decode_times=True) as ds:
-                        interp_kw = build_multitime_interp_kwargs(ds, qlat, qlon, qdt, spatial_pad, temporal_pad)
+                        lat_name, lon_name, time_name = get_coord_names(ds)
                         target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
+                        
+                        # For SSH, we need to build special interp_kw with only the relevant time slices
+                        if prod == "ssh":
+                            # Get time values
+                            time_vals = ds[time_name].values
+                            
+                            # Find the time closest to the query date
+                            query_time_np = np.datetime64(qdt)
+                            time_diff = np.abs(time_vals - query_time_np)
+                            nearest_time_idx = int(time_diff.argmin())
+                            
+                            # Get temporal_pad days before the nearest time (limited by available times)
+                            start_idx = max(0, nearest_time_idx - temporal_pad)
+                            selected_times = time_vals[start_idx:nearest_time_idx+1]
+                            
+                            # Reverse order to have most recent first
+                            selected_times = selected_times[::-1]
+                            
+                            # Build interpolation kwargs
+                            interp_kw = {
+                                lat_name: target_lats,
+                                lon_name: target_lons,
+                                time_name: selected_times
+                            }
+                        else:
+                            # For other products, use build_multitime_interp_kwargs
+                            interp_kw = build_multitime_interp_kwargs(ds, qlat, qlon, qdt, spatial_pad, temporal_pad)
                         
                         prod_result = {
                             "file": candidate_file, 
@@ -601,10 +651,7 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                             }
                         }
                         
-                        # Initialize expected shape
-                        expected_shape = None
-                        times = []
-                        
+                        # Process variables
                         for var in products[prod]:
                             var_key = get_variable_name(prod, var, ds)
                             if var_key is None:
@@ -615,47 +662,21 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                             if extracted is None:
                                 continue
                             
-                            data = np.squeeze(extracted.values)
-                            
-                            # Ensure we have at most 3 dimensions (time, lat, lon)
-                            if len(data.shape) > 3:
-                                logger.warning(f"Found data with more than 3 dimensions for {var}: {data.shape}. Selecting surface level.")
-                                # For 4D data, assume the extra dimension is depth and select first level
-                                if len(data.shape) == 4:
-                                    # Determine which dimension to reduce (usually the smallest one is depth)
-                                    min_dim_idx = np.argmin(data.shape)
-                                    # Create slices to select first index of the min dimension
-                                    slices = tuple(0 if i == min_dim_idx else slice(None) for i in range(4))
-                                    data = data[slices]
-                                
-                                # For any remaining complex cases, keep reducing dimensions
-                                while len(data.shape) > 3:
-                                    data = data[0]
-                            
-                            # Set expected shape from first successful extraction
-                            if expected_shape is None:
-                                expected_shape = data.shape
-                                # Get time values if available
-                                if time_name in ds.coords:
-                                    times = ds[time_name].values
-                            
-                            # Ensure consistent shape
-                            if data.shape != expected_shape:
-                                logger.warning(f"Inconsistent shape for {var} in {candidate_file}: {data.shape} vs {expected_shape}")
-                                data = np.full(expected_shape, np.nan)
-                            
+                            data = extracted.values
                             prod_result["data"][var] = data
                         
-                        # Add time information if available
-                        if times is not None and len(times) > 0:
-                            prod_result["data"]["time"] = times
+                        # Add time information
+                        if prod == "ssh":
+                            prod_result["data"]["time"] = selected_times
+                        elif time_name in interp_kw:
+                            prod_result["data"]["time"] = interp_kw[time_name]
                         
                         results[idx][prod] = prod_result
                         
                 except Exception as e:
                     logger.warning(f"Error processing multi-time product {prod}: {e}")
             else:
-                # Process as daily product
+                # Process daily product using the existing function
                 if temporal_pad > 0 and not is_static:
                     daily_data = process_daily_product(prod, qlat, qlon, qdt, spatial_pad, temporal_pad, products)
                     if daily_data is not None:
@@ -679,13 +700,12 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                             lat_name, lon_name, time_name = get_coord_names(ds)
                             target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
                             
-                            interp_kw = {lat_name: target_lats, lon_name: target_lons}
-                            
-                            # If depth/zlev dimension exists, include only the first level (surface)
+                            interp_kw = {}
                             if "zlev" in ds.coords:
-                                interp_kw["zlev"] = ds["zlev"].values[0:1]  # Take only the first level
-                            elif "depth" in ds.coords:
-                                interp_kw["depth"] = ds["depth"].values[0:1]  # Take only the first level
+                                interp_kw["zlev"] = ds["zlev"].values
+                            
+                            interp_kw[lat_name] = target_lats
+                            interp_kw[lon_name] = target_lons
                             
                             if time_name is not None:
                                 interp_kw[time_name] = ds[time_name].values[0]
@@ -710,22 +730,6 @@ def retrieve_satellite_data(queries: list, products: dict, spatial_pad: int, tem
                                     continue
                                 
                                 data_out = np.squeeze(extracted.values)
-                                
-                                # Ensure we have at most 3 dimensions
-                                if len(data_out.shape) > 3:
-                                    logger.warning(f"Found data with more than 3 dimensions for {var}: {data_out.shape}. Selecting surface level.")
-                                    # For 4D data, assume the extra dimension is depth and select first level
-                                    if len(data_out.shape) == 4:
-                                        # Determine which dimension to reduce (usually the smallest one is depth)
-                                        min_dim_idx = np.argmin(data_out.shape)
-                                        # Create slices to select first index of the min dimension
-                                        slices = tuple(0 if i == min_dim_idx else slice(None) for i in range(4))
-                                        data_out = data_out[slices]
-                                    
-                                    # For any remaining complex cases, keep reducing dimensions
-                                    while len(data_out.shape) > 3:
-                                        data_out = data_out[0]
-                                
                                 prod_result["data"][var] = data_out
                             
                             results[idx][prod] = prod_result
@@ -758,7 +762,7 @@ if __name__ == "__main__":
     }
 
     spatial_padding = 16  # e.g., extract a 3x3 region
-    temporal_padding = 0  # Include the query day plus one previous day for daily products
+    temporal_padding = 4  # Include the query day plus one previous day for daily products
 
     # Set logging level for testing
     logging.basicConfig(level=logging.INFO)
@@ -775,3 +779,9 @@ if __name__ == "__main__":
             for var, data in info["data"].items():
                 if var != "time":
                     print(f"    Variable '{var}': data shape = {np.shape(data)}")
+                    
+    # #print data from the first query the same location and all times, for all products
+    print(results[0]["ostia"]["data"]["analysed_sst"][:,0,0])
+    print(results[0]["sss"]["data"]["sos"][:,0,0])
+    print(results[0]["wind"]["data"]["windspeed"][:,0,0])
+    print(results[0]["ssh"]["data"]["adt"][:,0,0])
