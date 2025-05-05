@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 from astropy.time import Time
 from tqdm import tqdm
-
+import warnings
 from retrieve_sat import retrieve_satellite_data
 
 def load_and_filter_index(index_path, start_date, end_date, min_lat, max_lat, min_lon, max_lon):
@@ -61,6 +61,86 @@ def save_to_h5(output_path, stations, results, products, args):
         products (dict): Product configuration dictionary
         args (Namespace): Command line arguments
     """
+    # Create a log file for problematic stations
+    log_dir = os.path.join(os.path.dirname(output_path), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    batch_name = os.path.splitext(os.path.basename(output_path))[0]
+    problem_log = os.path.join(log_dir, f"{batch_name}_problematic_stations.log")
+    
+    # Track problematic stations
+    problematic_stations = []
+    valid_stations = []
+    valid_results = {}
+    
+    # First pass: identify problematic stations
+    for i, station in enumerate(stations):
+        station_idx = i
+        station_data = results.get(station_idx, {})
+        is_problematic = False
+        problem_details = []
+        
+        # Check each product and variable
+        for product_name in products.keys():
+            if product_name not in station_data:
+                continue
+                
+            product_data = station_data[product_name]
+            for var_name in products[product_name]:
+                if var_name not in product_data['data']:
+                    continue
+                    
+                data = product_data['data'][var_name]
+                if not isinstance(data, np.ndarray):
+                    is_problematic = True
+                    problem_details.append(f"Non-array data for {product_name}/{var_name}")
+                    continue
+                    
+                # Check for expected shape (33, 33) or (t, 33, 33)
+                if len(data.shape) not in [2, 3]:
+                    is_problematic = True
+                    problem_details.append(f"Unexpected shape {data.shape} for {product_name}/{var_name}")
+                    continue
+                    
+                if data.shape[-2:] != (33, 33):
+                    is_problematic = True
+                    problem_details.append(f"Unexpected spatial dimensions {data.shape[-2:]} for {product_name}/{var_name}")
+        
+        if is_problematic:
+            problematic_stations.append({
+                'station': station,
+                'index': station_idx,
+                'details': problem_details
+            })
+        else:
+            valid_stations.append(station)
+            valid_results[station_idx] = station_data
+    
+    # Log problematic stations
+    if problematic_stations:
+        with open(problem_log, 'w') as f:
+            f.write(f"Problematic stations in batch {batch_name}:\n")
+            f.write(f"Total stations: {len(stations)}\n")
+            f.write(f"Problematic stations: {len(problematic_stations)}\n")
+            f.write(f"Valid stations: {len(valid_stations)}\n\n")
+            
+            for problem in problematic_stations:
+                station = problem['station']
+                f.write(f"\nStation {problem['index']}:\n")
+                f.write(f"  Latitude: {station[0]}\n")
+                f.write(f"  Longitude: {station[1]}\n")
+                f.write(f"  Julian Date: {station[2]}\n")
+                f.write(f"  Source File: {station[3]}\n")
+                f.write(f"  Profile Index: {station[4]}\n")
+                f.write("  Problems:\n")
+                for detail in problem['details']:
+                    f.write(f"    - {detail}\n")
+    
+    # If no valid stations, skip saving
+    if not valid_stations:
+        print(f"Warning: No valid stations in batch {batch_name}. Skipping save.")
+        return
+    
+    # Save valid stations to HDF5
     with h5py.File(output_path, 'w') as f:
         # Store metadata
         meta = f.create_group('metadata')
@@ -74,6 +154,9 @@ def save_to_h5(output_path, stations, results, products, args):
         meta.attrs['temporal_padding'] = args.temporal_padding
         meta.attrs['products'] = str(products)
         meta.attrs['index_path'] = args.index_path
+        meta.attrs['original_batch_size'] = len(stations)
+        meta.attrs['valid_stations'] = len(valid_stations)
+        meta.attrs['problematic_stations'] = len(problematic_stations)
         
         # Create groups for each product
         for product_name in products.keys():
@@ -81,7 +164,7 @@ def save_to_h5(output_path, stations, results, products, args):
             
             # Get the shape of data for this product from the first non-empty result
             sample_data = None
-            for res in results.values():
+            for res in valid_results.values():
                 if product_name in res and res[product_name]['data']:
                     sample_data = res[product_name]
                     break
@@ -100,7 +183,7 @@ def save_to_h5(output_path, stations, results, products, args):
                     var_shape = sample_data['data'][var_name].shape
                     
                     # Create dataset with full shape
-                    full_shape = (len(stations),) + var_shape
+                    full_shape = (len(valid_stations),) + var_shape
                     var_ds = product_group.create_dataset(
                         var_name, 
                         shape=full_shape,
@@ -111,18 +194,32 @@ def save_to_h5(output_path, stations, results, products, args):
                     )
                     
                     # Fill data
-                    for i, (station_idx, station_data) in enumerate(results.items()):
+                    for i, (station_idx, station_data) in enumerate(valid_results.items()):
                         if (product_name in station_data and 
                             var_name in station_data[product_name]['data']):
                             var_ds[i] = station_data[product_name]['data'][var_name]
         
         # Store station information
         station_group = f.create_group('stations')
-        station_group.create_dataset('latitude', data=[s[0] for s in stations])
-        station_group.create_dataset('longitude', data=[s[1] for s in stations])
-        station_group.create_dataset('julian_date', data=[s[2] for s in stations])
-        station_group.create_dataset('source_file', data=np.array([s[3] for s in stations], dtype='S'))
-        station_group.create_dataset('profile_index', data=[s[4] for s in stations])
+        station_group.create_dataset('latitude', data=[s[0] for s in valid_stations])
+        station_group.create_dataset('longitude', data=[s[1] for s in valid_stations])
+        station_group.create_dataset('julian_date', data=[s[2] for s in valid_stations])
+        station_group.create_dataset('source_file', data=np.array([s[3] for s in valid_stations], dtype='S'))
+        station_group.create_dataset('profile_index', data=[s[4] for s in valid_stations])
+        
+        # Store information about problematic stations
+        if problematic_stations:
+            problem_group = f.create_group('problematic_stations')
+            problem_group.create_dataset('indices', data=[p['index'] for p in problematic_stations])
+            problem_group.create_dataset('latitudes', data=[p['station'][0] for p in problematic_stations])
+            problem_group.create_dataset('longitudes', data=[p['station'][1] for p in problematic_stations])
+            problem_group.create_dataset('julian_dates', data=[p['station'][2] for p in problematic_stations])
+            problem_group.create_dataset('source_files', data=np.array([p['station'][3] for p in problematic_stations], dtype='S'))
+            problem_group.create_dataset('profile_indices', data=[p['station'][4] for p in problematic_stations])
+            
+            # Store problem details as attributes
+            for i, problem in enumerate(problematic_stations):
+                problem_group.attrs[f'station_{i}_details'] = str(problem['details'])
 
 def main():
     parser = argparse.ArgumentParser(
@@ -155,6 +252,8 @@ def main():
                         help="Directory to save output HDF5 files")
     parser.add_argument('--batch_size', type=int, default=100,
                         help="Number of stations to process in each batch")
+    parser.add_argument('-m', '--missing_batches_only', action='store_true',
+                        help="Skip batches whose output file already exists. This is a resume/resume-like feature.")
     
     args = parser.parse_args()
     
@@ -198,6 +297,11 @@ def main():
             args.output_dir,
             f"satellite_data_batch_{batch_start:06d}-{batch_end:06d}.h5"
         )
+        
+        # NEW: Skip if missing_batches_only is set and output file exists
+        if args.missing_batches_only and os.path.exists(output_file):
+            print(f"Skipping batch {batch_start}-{batch_end} (output file already exists)")
+            continue
         
         print(f"\nProcessing batch {batch_start}-{batch_end} of {len(stations)} stations")
         

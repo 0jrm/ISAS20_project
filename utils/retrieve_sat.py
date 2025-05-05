@@ -185,6 +185,15 @@ def select_candidate_file(product: str, query_dt: datetime) -> str:
         logger.warning(f"Missing regex or date format for product {product}")
         return None
     
+    # For SSH, attempt to match a file whose year in its name matches the query year
+    if product == "ssh":
+        year_str = query_dt.strftime(date_fmt)
+        for f in files:
+            m_year = re.search(regex, os.path.basename(f), re.IGNORECASE)
+            if m_year and m_year.group(1) == year_str:
+                logger.info(f"SSH: exact year match file selected: {f}")
+                return f
+    
     candidate, min_diff = None, None
     for f in files:
         m = re.search(regex, os.path.basename(f), re.IGNORECASE)
@@ -437,7 +446,7 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
             logger.info(f"Found file for offset {offset}: {os.path.basename(fp)}")
         else:
             missing_files.append(dt_i)
-            logger.warning(f"No file found for {product} at date offset {offset} (date {dt_i}).")
+            logger.warning(f"No file found for product {product} at date offset {offset} (date {dt_i}).")
     
     if not file_entries:
         logger.error(f"No files found for product {product} around {query_dt}")
@@ -458,6 +467,8 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
         try:
             with xr.open_dataset(file_path, decode_times=True) as ds:
                 lat_name, lon_name, time_name = get_coord_names(ds)
+                # Compute the date corresponding to this offset for accurate SSH time selection
+                dt_i = query_dt - timedelta(days=offset)
                 target_lats, target_lons = build_target_coordinates(ds, query_lat, query_lon, effective_spatial_pad)
                 
                 # For SSS, subsample the points to match other products' resolution
@@ -469,12 +480,18 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
                 
                 # Add time dimension if present
                 if time_name is not None:
-                    # For SSH, select only the time slice closest to query_dt
+                    # For SSH, select only the time slice closest to the specific offset date
                     if product == "ssh":
                         time_vals = ds[time_name].values
-                        time_diff = np.abs(time_vals - np.datetime64(query_dt))
+                        time_diff = np.abs(time_vals - np.datetime64(dt_i))
                         nearest_idx = int(time_diff.argmin())
                         interp_kw[time_name] = time_vals[nearest_idx]
+                        # print(f"SSH Debug: Query date: {dt_i}, File: {os.path.basename(file_path)}, Chosen time index: {nearest_idx}")
+                        # print(f"SSH Debug: File metadata: {list(ds.dims)}")
+                        # # Additional SSH debug outputs
+                        # print(f"SSH Debug: Dataset data_vars: {list(ds.data_vars)}")
+                        # print(f"SSH Debug: Dataset coords: {list(ds.coords)}")
+                        # print(f"SSH Debug: Time values axis length: {len(time_vals)}; first: {time_vals[0]}, last: {time_vals[-1]}")
                     else:
                         # For other products, use the first time in the file
                         interp_kw[time_name] = ds[time_name].values[0]
@@ -510,6 +527,13 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
             logger.error(f"Error processing {file_path}: {str(e)}")
             continue
     
+    for var, arr_list in stacked_vars.items():
+        if expected_shape is None:
+            continue
+        # pad with all‑NaN slices so that len == temporal_pad+1
+        while len(arr_list) < temporal_pad + 1:
+            arr_list.append(np.full(expected_shape, np.nan))
+    
     # Stack results
     stacked_results = {}
     for var, arr_list in stacked_vars.items():
@@ -531,12 +555,18 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
     
     # Add time information and missing files info
     if not PRODUCT_METADATA.get(product, {}).get("is_static", False):
-        # Create time array with query_dt at index 0 and previous days
-        times = np.array([query_dt - timedelta(days=i) for i in range(temporal_pad + 1)])
+        # Create time array aligned with stacked data order: from oldest (query_dt - temporal_pad) to query_dt
+        times = np.array([query_dt - timedelta(days=offset) for offset in range(temporal_pad, -1, -1)])
         stacked_results["time"] = times
     if missing_files:
         stacked_results["missing_files"] = missing_files
     
+    # Debug final SSH stacked_results info
+    if product == "ssh":
+        print(f"SSH Debug: Final stacked_results keys: {list(stacked_results.keys())}")
+        for var, val in stacked_results.items():
+            shape = getattr(val, 'shape', None)
+            print(f"SSH Debug: stacked var '{var}' type {type(val)}, shape {shape}")
     return stacked_results
 
 # =============================================================================
@@ -691,7 +721,7 @@ if __name__ == "__main__":
         (23.11, -96.74, 2457012.00),
         (27.81, -94.53, 2457013.00),
         (25.50, -94.05, 2457013.00),
-        (24.72, -91.40, 2457014.00)
+        (24.72, -91.40, 2457024.00)
     ]
 
     # Define the satellite products and the variables to extract
@@ -723,8 +753,10 @@ if __name__ == "__main__":
                 if var != "time":
                     print(f"    Variable '{var}': data shape = {np.shape(data)}")
                     
-    # #print data from the first query the same location and all times, for all products
-    print(results[0]["ostia"]["data"]["analysed_sst"][:,0,0])
-    print(results[0]["sss"]["data"]["sos"][:,0,0])
-    print(results[0]["wind"]["data"]["windspeed"][:,0,0])
-    print(results[0]["ssh"]["data"]["adt"][:,0,0])
+    # #print data from queries in the same location and all times, for all products
+    for i in range(len(queries)):
+        print(f"Query {i}: {queries[i]}")
+        print(results[i]["ostia"]["data"]["analysed_sst"][:,0,0])
+        print(results[i]["sss"]["data"]["sos"][:,0,0])
+        print(results[i]["wind"]["data"]["windspeed"][:,0,0])
+        print(results[i]["ssh"]["data"]["adt"][:,0,0])
