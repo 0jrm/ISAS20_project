@@ -561,12 +561,12 @@ def process_daily_product(product: str, query_lat: float, query_lon: float, quer
     if missing_files:
         stacked_results["missing_files"] = missing_files
     
-    # Debug final SSH stacked_results info
-    if product == "ssh":
-        print(f"SSH Debug: Final stacked_results keys: {list(stacked_results.keys())}")
-        for var, val in stacked_results.items():
-            shape = getattr(val, 'shape', None)
-            print(f"SSH Debug: stacked var '{var}' type {type(val)}, shape {shape}")
+    # # Debug final SSH stacked_results info
+    # if product == "ssh":
+    #     print(f"SSH Debug: Final stacked_results keys: {list(stacked_results.keys())}")
+    #     for var, val in stacked_results.items():
+    #         shape = getattr(val, 'shape', None)
+    #         print(f"SSH Debug: stacked var '{var}' type {type(val)}, shape {shape}")
     return stacked_results
 
 # =============================================================================
@@ -683,27 +683,38 @@ def _process_batch(queries: list, products: dict, spatial_pad: int, temporal_pad
                             
                         results[idx][prod] = prod_result
                         
+                except (OSError, RuntimeError) as e:
+                    logger.warning(f"Error reading file {candidate_file}: {str(e)}")
+                    continue
                 except Exception as e:
                     logger.warning(f"Error processing static product {prod}: {e}")
+                    continue
                 continue
             
             # For non-static products, use process_daily_product to handle temporal padding
             # This will gather data from multiple files if needed
-            daily_data = process_daily_product(prod, qlat, qlon, qdt, spatial_pad, temporal_pad, products)
-            if daily_data is not None:
-                # Get coordinates from the candidate file
-                with xr.open_dataset(candidate_file, decode_times=True) as ds:
-                    target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
-                    
-                    prod_result = {
-                        "file": f"Files from {qdt - timedelta(days=temporal_pad)} to {qdt}",
-                        "data": daily_data,
-                        "coordinates": {
-                            "latitude": target_lats,
-                            "longitude": target_lons
+            try:
+                daily_data = process_daily_product(prod, qlat, qlon, qdt, spatial_pad, temporal_pad, products)
+                if daily_data is not None:
+                    # Get coordinates from the candidate file
+                    with xr.open_dataset(candidate_file, decode_times=True) as ds:
+                        target_lats, target_lons = build_target_coordinates(ds, qlat, qlon, spatial_pad)
+                        
+                        prod_result = {
+                            "file": f"Files from {qdt - timedelta(days=temporal_pad)} to {qdt}",
+                            "data": daily_data,
+                            "coordinates": {
+                                "latitude": target_lats,
+                                "longitude": target_lons
+                            }
                         }
-                    }
-                    results[idx][prod] = prod_result
+                        results[idx][prod] = prod_result
+            except (OSError, RuntimeError) as e:
+                logger.warning(f"Error reading file {candidate_file}: {str(e)}")
+                continue
+            except Exception as e:
+                logger.warning(f"Error processing non-static product {prod}: {e}")
+                continue
     
     return results
 
@@ -734,8 +745,8 @@ if __name__ == "__main__":
         "ssh": ["adt", "sla", "ugos", "vgos"]
     }
 
-    spatial_padding = 16  # e.g., extract a 3x3 region
-    temporal_padding = 6  # Include the query day plus one previous day for daily products
+    spatial_padding = 0  # e.g., extract a 3x3 region
+    temporal_padding = 0  # Include the query day plus one previous day for daily products
 
     # Set logging level for testing
     logging.basicConfig(level=logging.INFO)
@@ -760,3 +771,4 @@ if __name__ == "__main__":
         print(results[i]["sss"]["data"]["sos"][:,0,0])
         print(results[i]["wind"]["data"]["windspeed"][:,0,0])
         print(results[i]["ssh"]["data"]["adt"][:,0,0])
+        print(results[i]["bathymetry"]["data"]["elevation"][:,0,0])

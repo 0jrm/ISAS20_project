@@ -95,15 +95,32 @@ def save_to_h5(output_path, stations, results, products, args):
                     problem_details.append(f"Non-array data for {product_name}/{var_name}")
                     continue
                     
-                # Check for expected shape (33, 33) or (t, 33, 33)
+                # Determine expected grid size based on spatial_padding
+                expected_grid = 2 * args.spatial_padding + 1
+                
+                # Special handling for bathymetry when spatial_padding is 0
+                if product_name == "bathymetry" and args.spatial_padding == 0:
+                    if data.shape != ():
+                        is_problematic = True
+                        problem_details.append(f"Unexpected shape {data.shape} for bathymetry/elevation")
+                    continue
+                
+                # For non-bathymetry products with spatial_padding 0, expect (1, 1, 1) shape
+                if args.spatial_padding == 0:
+                    if data.shape != (1, 1, 1):
+                        is_problematic = True
+                        problem_details.append(f"Unexpected shape {data.shape} for {product_name}/{var_name}, expected (1, 1, 1)")
+                    continue
+                
+                # For non-zero spatial padding, check for expected shape
                 if len(data.shape) not in [2, 3]:
                     is_problematic = True
                     problem_details.append(f"Unexpected shape {data.shape} for {product_name}/{var_name}")
                     continue
-                    
-                if data.shape[-2:] != (33, 33):
+
+                if data.shape[-2:] != (expected_grid, expected_grid):
                     is_problematic = True
-                    problem_details.append(f"Unexpected spatial dimensions {data.shape[-2:]} for {product_name}/{var_name}")
+                    problem_details.append(f"Unexpected spatial dimensions {data.shape[-2:]} for {product_name}/{var_name}, expected {(expected_grid, expected_grid)}")
         
         if is_problematic:
             problematic_stations.append({
