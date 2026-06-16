@@ -1,0 +1,11 @@
+{
+    "years": [2, 3, 4, 5, 6, 7, 15, 17, 18, 20],
+    "products": {
+        "bathymetry": ["elevation"],
+        "ostia": ["analysed_sst"],
+        "sss": ["sos"],
+        "ssh": ["sla"]
+    },
+    "spatial_pad": 0,
+    "temporal_pad": 0
+}

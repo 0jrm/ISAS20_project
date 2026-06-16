@@ -30,4 +30,8 @@ ENV/
 .ipynb_checkpoints
 
 # Log files
-*.log 
+*.log
+
+# Large data (kept out of git; GitHub rejects >100MB files)
+data/
+*.h5

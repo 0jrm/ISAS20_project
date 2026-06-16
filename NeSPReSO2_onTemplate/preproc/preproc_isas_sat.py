@@ -9,6 +9,7 @@ import sys
 import h5py
 import json
 import os
+import torch
 from typing import Dict, Tuple, Optional, Union
 
 # Given IO specifications, load, preprocess, and save the data and it's masks
@@ -41,7 +42,7 @@ def load_config(config_path: Optional[str] = None) -> Dict:
     if config_path is None:
         # Default configuration
         return {
-            "data_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/NeSPReSO_v2_GoM_sat",
+            "data_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/utils/NeSPReSO_v1_global_sat",
             "BBox": None,
             "input_params": {
                 "bathymetry": ["elevation"],
@@ -147,8 +148,8 @@ def preprocess_data(config: Dict) -> Dict:
         dict: Processed data dictionary containing inputs, outputs, masks, and statistics.
     """
     data_path = config["data_path"]
-    sat_file = os.path.join(data_path, 'satellite_NeSPReSO_v2_GoM.h5')
-    prof_file = os.path.join(data_path, 'profiles_NeSPReSO_v2_GoM.h5')
+    sat_file = os.path.join(data_path, 'satellite_NeSPReSO_v1_global.h5')
+    prof_file = os.path.join(data_path, 'profiles_NeSPReSO_v1_global.h5')
 
     # Load station positions from profiles
     with h5py.File(prof_file, 'r') as pf:
@@ -199,14 +200,29 @@ def preprocess_data(config: Dict) -> Dict:
 
 def save_processed_data(processed: Dict, save_path: str) -> None:
     """
-    Save processed data to a pickle file.
+    Save processed data to a pickle file, converting numpy arrays to pytorch tensors.
 
     Parameters:
         processed (dict): Processed data dictionary.
         save_path (str): Path where to save the pickle file.
     """
+    # Convert numpy arrays to pytorch tensors
+    tensor_processed = {}
+    for key, value in processed.items():
+        if key == 'station_indices':
+            tensor_processed[key] = torch.tensor(value)
+        elif isinstance(value, dict):
+            tensor_processed[key] = {
+                k: torch.tensor(v) if isinstance(v, np.ndarray) else v 
+                for k, v in value.items()
+            }
+        elif isinstance(value, np.ndarray):
+            tensor_processed[key] = torch.tensor(value)
+        else:
+            tensor_processed[key] = value
+
     with open(save_path, 'wb') as f:
-        pickle.dump(processed, f)
+        pickle.dump(tensor_processed, f)
     print(f"Preprocessed data saved to {save_path}")
 
 def __main__(config_path: Optional[str] = None):

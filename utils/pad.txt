@@ -1,0 +1,16 @@
+Loading and filtering ISAS20 reference index...
+Found 5044 stations within specified bounds
+
+Processing batch 0-2 of 5044 stations
+Saving results to ./NeSPReSO_v2_GoM_sat/satellite_data_batch_000000-000002.h5
+Completed batch 0-2
+
+Processing batch 2-4 of 5044 stations
+Saving results to ./NeSPReSO_v2_GoM_sat/satellite_data_batch_000002-000004.h5
+Completed batch 2-4
+
+Processing batch 4-6 of 5044 stations
+Saving results to ./NeSPReSO_v2_GoM_sat/satellite_data_batch_000004-000006.h5
+Completed batch 4-6
+
+Processing batch 6-8 of 5044 stations

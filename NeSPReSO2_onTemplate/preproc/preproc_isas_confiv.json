@@ -1,5 +1,5 @@
 {
-    "data_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/NeSPReSO_v2_GoM_sat",
+    "data_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/utils/NeSPReSO_v1_global_sat",
     "BBox": None,
     "input_params": {
         "bathymetry": ["elevation"],
@@ -9,9 +9,9 @@
         "wind": ["windspeed", "u_wind", "v_wind"]
     },
     "input_processing": "norm",
-    "spatial_step": 1,
-    "spatial_pad": 2,
-    "temporal_pad": 3,
+    "spatial_step": 0,
+    "spatial_pad": 0,
+    "temporal_pad": 0,
     "output_params": {
         "temperature": ["TEMP"],
         "salinity": ["PSAL"]
