@@ -35,3 +35,9 @@ ENV/
 # Large data (kept out of git; GitHub rejects >100MB files)
 data/
 *.h5
+
+# Model artifacts and run logs (keep playground/run outputs out of git)
+*.pth
+*_log.txt
+# but keep the shipped NeSPReSO base model
+!NeSPReSO2_onTemplate/base/model.pth
