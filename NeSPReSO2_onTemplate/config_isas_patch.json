@@ -1,17 +1,18 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM",
+    "name": "NeSPReSO2_ISAS_GoM_patch",
     "n_gpu": 1,
     "seed": 42,
 
     "arch": {
         "type": "PatchConvMLP",
         "args": {
-            "input_dim": 9,
+            "input_dim": 306,
             "output_dim": 32,
             "dropout_prob": 0.2,
             "d_model": 128,
             "head_layers": [1024, 1024],
-            "patch_shape": null,
+            "conv_channels": [32, 64],
+            "patch_shape": [3, 4, 5, 5],
             "n_enc": 6,
             "n_sat": 3
         }
@@ -31,14 +32,19 @@
     },
 
     "io": {
-        "dataset_tag": "argo_v2",
+        "dataset_tag": "isas20",
+        "data_path": "../data/NeSPReSO_v2_GoM_sat",
+        "sat_file": "satellite_NeSPReSO_v2_GoM.h5",
+        "prof_file": "profiles_NeSPReSO_v2_GoM.h5",
+        "spatial_pad": 2,
+        "temporal_pad": 3,
+        "BBox": null,
         "cache_dir": "../data/cache",
-        "spatial_pad": 0,
-        "temporal_pad": 0,
-        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
-        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
-        "v2_reload": false,
-        "refit_pca": true
+        "groups": {
+            "sss": {"h5_group": "sss", "h5_var": "sos"},
+            "sst": {"h5_group": "ostia", "h5_var": "analysed_sst"},
+            "ssh": {"h5_group": "ssh", "h5_var": "adt"}
+        }
     },
 
     "outputs": {

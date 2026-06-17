@@ -192,8 +192,10 @@ def make_loss(
     device,
     density_config: dict[str, Any] | None = None,
     density_meta=None,
+    loss_scales: dict[str, Any] | None = None,
     **kwargs,
 ) -> CombinedPCALoss:
+    scales = loss_scales or {}
     return CombinedPCALoss(
         pca_models=pca_models,
         outputs=outputs,
@@ -201,5 +203,8 @@ def make_loss(
         device=device,
         density_config=density_config,
         density_meta=density_meta,
+        profile_scales=scales.get("profile_scales"),
+        combined_pca_scale=scales.get("combined_pca_scale"),
+        combined_mse_scale=scales.get("combined_mse_scale"),
         **kwargs,
     )

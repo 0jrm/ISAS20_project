@@ -48,6 +48,98 @@ class PredictionModel(BaseModel):
         return self.model(x)
 
 
+class PatchConvMLP(BaseModel):
+    """
+    Patch-aware surface encoder + MLP head for PCA latent prediction.
+
+    Point mode (``patch_shape=None``): linear embed of 3 satellite scalars.
+    Patch mode: reshape flattened sat block to ``(B, C, T, H, W)`` and run a small Conv2d trunk.
+    """
+
+    def __init__(
+        self,
+        input_dim=9,
+        output_dim=32,
+        dropout_prob=0.2,
+        d_model=128,
+        head_layers=None,
+        conv_channels=None,
+        patch_shape=None,
+        n_enc=6,
+        n_sat=3,
+        **kwargs,
+    ):
+        super().__init__()
+        if head_layers is None:
+            head_layers = [1024, 1024]
+        if conv_channels is None:
+            conv_channels = [32, 64]
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_enc = n_enc
+        self.n_sat = n_sat
+        self.d_model = d_model
+        self.patch_shape = tuple(patch_shape) if patch_shape else None
+
+        self.enc_proj = nn.Linear(n_enc, d_model)
+
+        if self.patch_shape is None:
+            self.sat_proj = nn.Linear(n_sat, d_model)
+            self.conv = None
+        else:
+            c, t, h, w = self.patch_shape
+            per_var = t * h * w
+            expected_sat = c * per_var
+            if input_dim != n_enc + expected_sat:
+                raise ValueError(
+                    f"PatchConvMLP input_dim={input_dim} != n_enc({n_enc}) + sat({expected_sat})"
+                )
+            layers = []
+            in_ch = c
+            for out_ch in conv_channels:
+                layers.extend(
+                    [
+                        nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                        nn.ReLU(inplace=True),
+                    ]
+                )
+                in_ch = out_ch
+            layers.append(nn.AdaptiveAvgPool2d(1))
+            self.conv = nn.Sequential(*layers)
+            self.sat_proj = nn.Linear(conv_channels[-1], d_model)
+
+        head = []
+        prev = d_model
+        for width in head_layers:
+            head.extend([nn.Linear(prev, width), nn.ReLU(), nn.Dropout(dropout_prob)])
+            prev = width
+        head.append(nn.Linear(prev, output_dim))
+        self.head = nn.Sequential(*head)
+
+    def _encode_sat_point(self, sat_flat):
+        return self.sat_proj(sat_flat)
+
+    def _encode_sat_patch(self, sat_flat):
+        b = sat_flat.size(0)
+        c, t, h, w = self.patch_shape
+        per_var = t * h * w
+        sat = sat_flat.view(b, c, per_var).view(b, c, t, h, w)
+        sat = sat.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
+        sat = self.conv(sat).view(b, t, -1).mean(dim=1)
+        return self.sat_proj(sat)
+
+    def forward(self, x):
+        enc = x[:, : self.n_enc]
+        sat_flat = x[:, self.n_enc :]
+        h = self.enc_proj(enc)
+        if self.patch_shape is None:
+            h = h + self._encode_sat_point(sat_flat)
+        else:
+            h = h + self._encode_sat_patch(sat_flat)
+        return self.head(h)
+
+
 class Autoencoder(nn.Module):
     def __init__(self, encoding_dim, encoder_layers=None, decoder_layers=None, input_dim=187):
         super(Autoencoder, self).__init__()

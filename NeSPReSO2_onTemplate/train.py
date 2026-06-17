@@ -12,7 +12,13 @@ from model.loss import make_loss
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device
 from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model
-from preproc.preproc_isas_sat import build_train_cache, compute_input_dim
+from preproc.preproc_isas_sat import (
+    build_train_cache,
+    compute_input_dim,
+    count_encoding_dims,
+    count_sat_vars,
+    sat_patch_shape,
+)
 from trainer import Trainer
 
 
@@ -39,9 +45,36 @@ def ensure_cache(config):
     else:
         cache_path = build_train_cache(config.config)
     config.config["data_loader"]["args"]["cache_path"] = cache_path
-    expected_dim = compute_input_dim(config["input_params"])
+    spatial_pad = int(io_cfg.get("spatial_pad", 0))
+    temporal_pad = int(io_cfg.get("temporal_pad", 0))
+    input_params = config["input_params"]
+    expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
     if config["arch"]["args"].get("input_dim") != expected_dim:
         config.config["arch"]["args"]["input_dim"] = expected_dim
+
+    expected_out = sum(config["outputs"].values())
+    if config["arch"]["args"].get("output_dim") != expected_out:
+        config.config["arch"]["args"]["output_dim"] = expected_out
+
+    arch_type = config["arch"]["type"]
+    if arch_type == "PatchConvMLP":
+        n_sat = count_sat_vars(input_params)
+        patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
+        arch_args = config.config["arch"]["args"]
+        arch_args["n_enc"] = count_encoding_dims(input_params)
+        arch_args["n_sat"] = n_sat
+        arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
+
+    import pickle
+
+    with open(cache_path, "rb") as f:
+        cache_dim = pickle.load(f)["inputs"].shape[1]
+    if cache_dim != expected_dim:
+        raise ValueError(
+            f"cache input dim {cache_dim} != expected {expected_dim} "
+            f"(spatial_pad={spatial_pad}, temporal_pad={temporal_pad})"
+        )
+
     split_seed = config.config.get("seed", 42)
     config.config["data_loader"]["args"]["split_seed"] = split_seed
     return cache_path
@@ -82,6 +115,7 @@ def main(config):
         device=device,
         density_config=config.config.get("density"),
         density_meta=density_meta,
+        loss_scales=config.config.get("loss_scales"),
     )
 
     metrics = [getattr(module_metric, met) for met in config["metrics"]]

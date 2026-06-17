@@ -20,10 +20,52 @@ from model.loss import OUTPUT_H5_VARS, get_pca_weights
 # ponytail: patch flatten order = time (oldest..newest within window), then row-major (lat, lon) per slice
 PATCH_ORDER_DOC = "time_major_row_major_lat_lon"
 
+ENCODING_KEYS = ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")
+SAT_KEYS = ("sss", "sst", "ssh")
 
-def compute_input_dim(input_params: Mapping[str, bool]) -> int:
-    """Match v2: ``sum(flags) - 1`` when ``sat`` groups sss/sst/ssh."""
-    return sum(v for v in input_params.values() if v) - (1 if input_params.get("sat") else 0)
+
+def count_encoding_dims(input_params: Mapping[str, bool]) -> int:
+    return sum(1 for k in ENCODING_KEYS if input_params.get(k))
+
+
+def count_sat_vars(input_params: Mapping[str, bool], n_sat_vars: int = 3) -> int:
+    n = sum(1 for k in SAT_KEYS if input_params.get(k))
+    if n == 0 and input_params.get("sat"):
+        n = n_sat_vars
+    return n
+
+
+def sat_features_per_var(spatial_pad: int, temporal_pad: int) -> int:
+    if spatial_pad == 0 and temporal_pad == 0:
+        return 1
+    spatial_size = 2 * spatial_pad + 1
+    temporal_size = temporal_pad + 1
+    return spatial_size * spatial_size * temporal_size
+
+
+def sat_patch_shape(
+    spatial_pad: int,
+    temporal_pad: int,
+    n_sat_vars: int = 3,
+) -> tuple[int, int, int, int] | None:
+    """``(C, T, H, W)`` when patches enabled; else ``None`` for point mode."""
+    if spatial_pad == 0 and temporal_pad == 0:
+        return None
+    h = w = 2 * spatial_pad + 1
+    return (n_sat_vars, temporal_pad + 1, h, w)
+
+
+def compute_input_dim(
+    input_params: Mapping[str, bool],
+    spatial_pad: int = 0,
+    temporal_pad: int = 0,
+    n_sat_vars: int = 3,
+) -> int:
+    """Feature count including flattened satellite patches when pads are set."""
+    n_enc = count_encoding_dims(input_params)
+    n_sat = count_sat_vars(input_params, n_sat_vars)
+    per_var = sat_features_per_var(spatial_pad, temporal_pad)
+    return n_enc + n_sat * per_var
 
 
 def config_hash(config: Dict) -> str:
@@ -246,6 +288,8 @@ def build_train_cache(config: Dict, force: bool = False) -> str:
         for name in outputs
     }
     dataset_tag = io_cfg.get("dataset_tag", "isas20")
+    n_sat = count_sat_vars(input_params)
+    patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
 
     payload = {
         "inputs": inputs,
@@ -261,6 +305,9 @@ def build_train_cache(config: Dict, force: bool = False) -> str:
         "JULD": juld.astype(np.float32),
         "station_indices": station_indices,
         "input_params": dict(input_params),
+        "spatial_pad": spatial_pad,
+        "temporal_pad": temporal_pad,
+        "sat_patch_shape": patch_shape,
         "patch_order": PATCH_ORDER_DOC,
         "config_hash": chash,
         "dataset_tag": dataset_tag,

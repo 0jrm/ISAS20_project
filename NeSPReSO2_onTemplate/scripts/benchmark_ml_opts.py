@@ -37,7 +37,13 @@ from playground.performance import (
     maybe_compile_model,
     variant_to_performance,
 )
-from preproc.preproc_isas_sat import build_train_cache, compute_input_dim
+from preproc.preproc_isas_sat import (
+    build_train_cache,
+    compute_input_dim,
+    count_encoding_dims,
+    count_sat_vars,
+    sat_patch_shape,
+)
 from train import ensure_cache
 
 WARMUP_EPOCHS = 10
@@ -134,11 +140,12 @@ def build_stack(config, device, *, rank: int = 0, world_size: int = 1):
         device=device,
         density_config=config.config.get("density"),
         density_meta=density_meta,
+        loss_scales=config.config.get("loss_scales"),
     )
     return model, criterion, train_loader, valid_data_loader, sampler
 
 
-def _train_step(model, criterion, optimizer, batch, device, perf, scaler):
+def _train_step(model, criterion, optimizer, batch, device, perf, scaler, *, forward_only=False):
     data, target, indices = batch
     data = data.to(device, non_blocking=True)
     target = target.to(device, non_blocking=True)
@@ -148,6 +155,9 @@ def _train_step(model, criterion, optimizer, batch, device, perf, scaler):
     dtype = autocast_dtype_from_name(perf.get("autocast_dtype", "bfloat16"))
     with torch.autocast(device_type=device.type, dtype=dtype, enabled=bool(perf.get("autocast"))):
         output = model(data)
+        if forward_only:
+            return float(output.sum().item())
+
         loss = criterion(output, target, indices)
 
     if scaler is not None:
@@ -171,9 +181,15 @@ def run_epochs(
     epochs: int,
     sampler=None,
     timed: bool = False,
+    forward_only: bool = False,
 ) -> tuple[float | None, float]:
     scaler = None
-    if perf.get("autocast") and perf.get("autocast_dtype") == "float16" and device.type == "cuda":
+    if (
+        not forward_only
+        and perf.get("autocast")
+        and perf.get("autocast_dtype") == "float16"
+        and device.type == "cuda"
+    ):
         scaler = torch.amp.GradScaler("cuda")
 
     total_time = 0.0
@@ -192,7 +208,16 @@ def run_epochs(
         epoch_loss = 0.0
         n_batches = 0
         for batch in train_loader:
-            last_loss = _train_step(model, criterion, optimizer, batch, device, perf, scaler)
+            last_loss = _train_step(
+                model,
+                criterion,
+                optimizer,
+                batch,
+                device,
+                perf,
+                scaler,
+                forward_only=forward_only,
+            )
             epoch_loss += last_loss
             n_batches += 1
 
@@ -269,6 +294,7 @@ def run_variant(
     world_size: int,
     seed: int,
     profile: bool = False,
+    forward_only: bool = False,
 ) -> dict:
     perf = variant_to_performance(spec)
     apply_backend_settings(perf, seed=seed)
@@ -302,11 +328,26 @@ def run_variant(
         sampler=sampler,
         timed=True,
     )
+    sec_per_epoch_forward = None
+    if forward_only:
+        sec_per_epoch_forward, _ = run_epochs(
+            model,
+            criterion,
+            train_loader,
+            optimizer,
+            device,
+            perf,
+            epochs=TIMED_EPOCHS,
+            sampler=sampler,
+            timed=True,
+            forward_only=True,
+        )
     val_loss = eval_val_loss(model, criterion, valid_loader, device, perf)
 
     result = {
         "variant": spec.name,
         "sec_per_epoch": sec_per_epoch,
+        "sec_per_epoch_forward": sec_per_epoch_forward,
         "final_train_loss": train_loss,
         "final_val_loss": val_loss,
         "notes": spec.notes,
@@ -331,8 +372,11 @@ def run_ddp_variant(config, seed: int, rank: int, local_rank: int, world_size: i
         pass
 
 
-def print_table(results: list[dict], baseline_sec: float | None) -> None:
-    header = f"{'variant':<16} {'sec/epoch':>10} {'speedup':>8} {'val_loss':>12} notes"
+def print_table(results: list[dict], baseline_sec: float | None, *, show_forward: bool = False) -> None:
+    if show_forward:
+        header = f"{'variant':<16} {'sec/epoch':>10} {'fwd/epoch':>10} {'speedup':>8} {'val_loss':>12} notes"
+    else:
+        header = f"{'variant':<16} {'sec/epoch':>10} {'speedup':>8} {'val_loss':>12} notes"
     print(header)
     print("-" * len(header))
     for row in results:
@@ -342,7 +386,12 @@ def print_table(results: list[dict], baseline_sec: float | None) -> None:
         sec_s = f"{sec:.4f}" if sec is not None else "n/a"
         val_s = f"{row.get('final_val_loss', 0):.6f}"
         notes = row.get("notes", "")
-        print(f"{row['variant']:<16} {sec_s:>10} {speedup_s:>8} {val_s:>12} {notes}")
+        if show_forward:
+            fwd = row.get("sec_per_epoch_forward")
+            fwd_s = f"{fwd:.4f}" if fwd is not None else "n/a"
+            print(f"{row['variant']:<16} {sec_s:>10} {fwd_s:>10} {speedup_s:>8} {val_s:>12} {notes}")
+        else:
+            print(f"{row['variant']:<16} {sec_s:>10} {speedup_s:>8} {val_s:>12} {notes}")
 
 
 def main():
@@ -354,6 +403,11 @@ def main():
     parser.add_argument("--warmup-epochs", type=int, default=WARMUP_EPOCHS)
     parser.add_argument("--timed-epochs", type=int, default=TIMED_EPOCHS)
     parser.add_argument("--profile", action="store_true", help="Collect torch.profiler top ops for baseline/combo")
+    parser.add_argument(
+        "--forward-only",
+        action="store_true",
+        help="Also time forward-pass-only epochs (no loss/backward)",
+    )
     parser.add_argument("--out", default=None, type=str, help="JSON output path")
     parser.add_argument("-d", "--device", default=None, type=str, help="CUDA_VISIBLE_DEVICES")
     args = parser.parse_args()
@@ -410,12 +464,21 @@ def main():
         spec = BENCHMARK_VARIANTS[name]
         print(f"Running {name}...", flush=True)
         do_profile = args.profile and name in {"baseline", "combo_best"}
-        row = run_variant(config, spec, device=device, rank=0, world_size=1, seed=seed, profile=do_profile)
+        row = run_variant(
+            config,
+            spec,
+            device=device,
+            rank=0,
+            world_size=1,
+            seed=seed,
+            profile=do_profile,
+            forward_only=args.forward_only,
+        )
         results.append(row)
 
     baseline_sec = next((r["sec_per_epoch"] for r in results if r["variant"] == "baseline"), None)
     print()
-    print_table(results, baseline_sec)
+    print_table(results, baseline_sec, show_forward=args.forward_only)
 
     for row in results:
         if baseline_sec and row["variant"] != "baseline":

@@ -14,7 +14,8 @@ from model.loss import (
     sklearn_inverse_transform_pcs,
     torch_reconstruct_profile,
 )
-from model.model import PredictionModel
+from model.model import PatchConvMLP, PredictionModel
+from preproc.preproc_isas_sat import compute_input_dim, sat_patch_shape
 
 TOL = 1e-6
 GOLDEN = {
@@ -39,6 +40,63 @@ def _synthetic_pca_pair():
     temp_pcs = pca_temp.transform(temp.T)
     sal_pcs = pca_sal.transform(sal.T)
     return pca_temp, pca_sal, temp_pcs, sal_pcs, n_components
+
+
+def test_compute_input_dim():
+    flags = {
+        "timecos": True,
+        "timesin": True,
+        "latcos": True,
+        "latsin": True,
+        "loncos": True,
+        "lonsin": True,
+        "sss": True,
+        "sst": True,
+        "ssh": True,
+        "sat": True,
+    }
+    assert compute_input_dim(flags, 0, 0) == 9
+    assert compute_input_dim(flags, 2, 3) == 306
+    assert sat_patch_shape(2, 3) == (3, 4, 5, 5)
+    assert sat_patch_shape(0, 0) is None
+
+
+def test_patch_conv_mlp_point_mode():
+    torch.manual_seed(0)
+    model = PatchConvMLP(
+        input_dim=9,
+        output_dim=32,
+        dropout_prob=0.0,
+        d_model=32,
+        head_layers=[16],
+        patch_shape=None,
+        n_enc=6,
+        n_sat=3,
+    )
+    model.eval()
+    x = torch.randn(4, 9)
+    with torch.no_grad():
+        out = model(x)
+    assert out.shape == (4, 32)
+
+
+def test_patch_conv_mlp_patch_mode():
+    torch.manual_seed(0)
+    model = PatchConvMLP(
+        input_dim=306,
+        output_dim=32,
+        dropout_prob=0.0,
+        d_model=32,
+        head_layers=[16],
+        patch_shape=[3, 4, 5, 5],
+        n_enc=6,
+        n_sat=3,
+    )
+    model.eval()
+    x = torch.randn(2, 306)
+    with torch.no_grad():
+        out = model(x)
+    assert out.shape == (2, 32)
 
 
 def test_prediction_model_v2():
@@ -240,6 +298,10 @@ def test_cache_schema_keys():
             continue
         for key in ("dataset_tag", "inputs", "targets", "pca_models"):
             assert key in cache, f"{path.name} missing {key}"
+        for key in ("spatial_pad", "temporal_pad", "sat_patch_shape"):
+            if key in cache:
+                continue
+            # legacy caches may omit patch metadata until rebuilt
         prof = cache["profiles"]
         assert "temperature" in prof and prof["temperature"].ndim == 2
         return
@@ -247,6 +309,9 @@ def test_cache_schema_keys():
 
 
 if __name__ == "__main__":
+    test_compute_input_dim()
+    test_patch_conv_mlp_point_mode()
+    test_patch_conv_mlp_patch_mode()
     test_prediction_model_v2()
     test_combined_pca_loss_v2()
     test_pca_round_trip()

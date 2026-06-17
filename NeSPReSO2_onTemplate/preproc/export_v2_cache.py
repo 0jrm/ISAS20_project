@@ -15,9 +15,22 @@ if str(_ROOT) not in sys.path:
 
 import numpy as np
 import torch
+from sklearn.decomposition import PCA
 
 from model.loss import get_pca_weights
 from preproc.preproc_isas_sat import config_hash, write_train_cache
+
+
+def _refit_pca_from_profiles(prof: np.ndarray, n_comp: int) -> tuple[PCA, np.ndarray]:
+    """Fit PCA on depth profiles; returns model and pcs (n_comp, n_stations)."""
+    arr = np.asarray(prof, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError(f"profile array must be 2-D, got shape {arr.shape}")
+    # depth-major (n_z, N) from v2 caches
+    fit_x = np.nan_to_num(arr.T, nan=0.0)
+    pca = PCA(n_components=n_comp).fit(fit_x)
+    pcs = pca.transform(fit_x).astype(np.float32).T
+    return pca, pcs
 
 
 def build_argo_cache(config: Dict, force: bool = False) -> str:
@@ -59,6 +72,7 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
     pcs_by_name = {}
     pca_models = {}
     profiles = {}
+    refit_pca = bool(io_cfg.get("refit_pca", True))
     for name, n_comp in outputs.items():
         if name == "temperature":
             pca, pcs = ds.pca_temp, ds.temp_pcs
@@ -69,11 +83,16 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
         else:
             raise KeyError(f"ponytail: v2 export only knows temperature/salinity, got {name}")
         if n_comp != pca.n_components_:
-            raise ValueError(f"{name}: config asks {n_comp} PCs, pickle has {pca.n_components_}")
+            if not refit_pca:
+                raise ValueError(
+                    f"{name}: config asks {n_comp} PCs, pickle has {pca.n_components_} "
+                    "(set io.refit_pca=true to refit from profiles)"
+                )
+            pca, pcs = _refit_pca_from_profiles(np.asarray(prof), n_comp)
         pca_models[name] = pca
         pcs_by_name[name] = pcs
         target_cols.append(pcs.T.astype(np.float32))
-        profiles[name] = np.ascontiguousarray(prof.astype(np.float32))
+        profiles[name] = np.ascontiguousarray(np.asarray(prof, dtype=np.float32))
 
     targets = np.hstack(target_cols).astype(np.float32)
     weights = get_pca_weights(pca_models, pcs_by_name, list(outputs.keys()))
@@ -94,6 +113,9 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
         "JULD": ds.TIME.astype(np.float32),
         "station_indices": np.arange(n, dtype=np.int64),
         "input_params": input_params,
+        "spatial_pad": int(io_cfg.get("spatial_pad", 0)),
+        "temporal_pad": int(io_cfg.get("temporal_pad", 0)),
+        "sat_patch_shape": None,
         "config_hash": chash,
         "dataset_tag": dataset_tag,
         "min_depth": int(ds.min_depth),
