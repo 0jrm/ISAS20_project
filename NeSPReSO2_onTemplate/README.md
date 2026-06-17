@@ -30,7 +30,38 @@ srun --ntasks=1 --cpus-per-task=8 python3 eval_run.py -c config_isas.json -r sav
 | `config_isas.json` | `isas20` | ISAS HDF5 | 187 levels |
 | `config_argo.json` | `argo_v2` | v2 pickle | 1801 m (0–1800) |
 
-Both use `seed=42`, `70/15/15` split, v2-matched trainer settings (`batch=512`, `early_stop=500`).
+Both use `seed=42`, `70/15/15` split, v2-matched trainer settings (`early_stop=500`). Batch size defaults vary by config — see **Batch size** below.
+
+## Batch size
+
+GoM runs barely use GPU VRAM at the default `batch_size=512`. Use the batch benchmark to find throughput, or set **`batch_size: 0`** to auto-pick the largest batch that fits.
+
+| Config key | Meaning |
+|---|---|
+| `batch_size: 512` | Fixed batch (capped by train-set size) |
+| **`batch_size: 0`** | **Auto: probe largest batch that fits in VRAM** (also capped by train-set size) |
+| `batch_size_safety: 0.95` | Shrink auto-probed max by 5% headroom (default) |
+
+CLI override: `python3 train.py -c config_isas_patch.json --bs 0`
+
+```bash
+# Sweep powers-of-two up to max-fit; writes JSON under saved/benchmarks/
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_batch_size.py -c config_isas_patch.json
+
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_batch_size.py -c config_argo.json
+```
+
+**Findings (A100 80GB, GoM):** VRAM stays under ~1% even at max batch — the bottleneck is **FLOPs/step**, not memory. Throughput rises monotonically with batch size until the full train split fits in one step (~3.5k ISAS / ~2.9k ARGO samples). On GoM, `batch_size=0` therefore resolves to **one batch per epoch** (best samples/s, but fewer optimizer steps per epoch). For fixed-batch training comparable to v2, keep `batch_size=512`.
+
+| Config | Train N | Max fit | Best throughput batch | Peak VRAM |
+|---|---:|---:|---:|---:|
+| `config_isas_patch.json` (PatchConvMLP) | 3530 | 3353 | 3353 | ~335 MiB |
+| `config_isas.json` (PredictionModel) | 3530 | 3353 | 3353 | ~68 MiB |
+| `config_argo.json` (PatchConvMLP + PCA loss) | 2901 | 2755 | 2755 | ~215 MiB |
+
+`config_isas_patch.json` ships with `batch_size: 0` (auto max). Point configs keep `batch_size: 512` for v2 parity unless you override.
 Edit paths in `config_argo.json` (`v2_pickle`, `v2_src`) for your machine.
 
 **Eval rule:** always pair checkpoint with the cache it was trained on (`eval_run.py`).

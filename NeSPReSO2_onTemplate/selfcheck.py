@@ -42,6 +42,29 @@ def _synthetic_pca_pair():
     return pca_temp, pca_sal, temp_pcs, sal_pcs, n_components
 
 
+def test_cap_batch_size():
+    from playground.batch_size import cap_batch_size, resolve_batch_size
+
+    assert cap_batch_size(512, 100) == 100
+    assert cap_batch_size(256, 1000) == 256
+
+
+def test_resolve_batch_size_fixed():
+    from playground.batch_size import resolve_batch_size
+
+    class _Tiny(torch.nn.Module):
+        def forward(self, x):
+            return x
+
+    model = _Tiny()
+    criterion = _Tiny()
+    inputs = torch.randn(10, 4)
+    targets = torch.randn(10, 2)
+    device = torch.device("cpu")
+    assert resolve_batch_size(512, 10, model, criterion, inputs, targets, device) == 10
+    assert resolve_batch_size(256, 10, model, criterion, inputs, targets, device) == 10
+
+
 def test_compute_input_dim():
     flags = {
         "timecos": True,
@@ -309,6 +332,8 @@ def test_cache_schema_keys():
 
 
 if __name__ == "__main__":
+    test_cap_batch_size()
+    test_resolve_batch_size_fixed()
     test_compute_input_dim()
     test_patch_conv_mlp_point_mode()
     test_patch_conv_mlp_patch_mode()

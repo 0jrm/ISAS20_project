@@ -1,5 +1,6 @@
 import argparse
 import collections
+import pickle
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,6 +12,7 @@ import model.model as module_arch
 from model.loss import make_loss
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device
+from playground.batch_size import resolve_batch_size, train_samples_from_cache
 from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model
 from preproc.preproc_isas_sat import (
     build_train_cache,
@@ -65,10 +67,10 @@ def ensure_cache(config):
         arch_args["n_sat"] = n_sat
         arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
 
-    import pickle
+    import pickle as _pickle
 
     with open(cache_path, "rb") as f:
-        cache_dim = pickle.load(f)["inputs"].shape[1]
+        cache_dim = _pickle.load(f)["inputs"].shape[1]
     if cache_dim != expected_dim:
         raise ValueError(
             f"cache input dim {cache_dim} != expected {expected_dim} "
@@ -80,20 +82,66 @@ def ensure_cache(config):
     return cache_path
 
 
+def _load_cache_tensors(cache_path: str):
+    with open(cache_path, "rb") as f:
+        cache = pickle.load(f)
+    inputs = torch.tensor(cache["inputs"], dtype=torch.float32)
+    targets = torch.tensor(cache["targets"], dtype=torch.float32)
+    return cache, inputs, targets
+
+
+def resolve_dataloader_batch_size(config, model, criterion, cache_path, device, logger):
+    """Resolve ``batch_size``; ``0`` probes the largest value that fits (VRAM and train set)."""
+    dl_args = config.config["data_loader"]["args"]
+    configured = int(dl_args.get("batch_size", 512))
+    train_frac = float(dl_args.get("train_frac", 0.7))
+    safety = float(dl_args.get("batch_size_safety", 0.95))
+
+    _, inputs, targets = _load_cache_tensors(cache_path)
+    n_train = train_samples_from_cache(inputs.shape[0], train_frac)
+
+    optimizer_factory = lambda: build_optimizer(
+        config.config,
+        model.parameters(),
+        fused=bool(get_performance_config(config.config).get("fused_optimizer")),
+        device=device,
+    )
+
+    resolved = resolve_batch_size(
+        configured,
+        n_train,
+        model,
+        criterion,
+        inputs,
+        targets,
+        device,
+        safety_fraction=safety,
+        optimizer_factory=optimizer_factory,
+    )
+    if resolved != configured:
+        logger.info(
+            "Resolved batch_size=%s (configured=%s, n_train=%s, safety=%s)",
+            resolved,
+            configured,
+            n_train,
+            safety,
+        )
+    config.config["data_loader"]["args"]["batch_size"] = resolved
+    return resolved
+
+
 def main(config):
     logger = config.get_logger("train")
     performance = get_performance_config(config.config)
     set_seed(config.config.get("seed", 123), performance=performance)
 
     ensure_cache(config)
+    cache_path = config.config["data_loader"]["args"]["cache_path"]
 
-    data_loader = config.init_obj("data_loader", module_data)
-    valid_data_loader = data_loader.split_validation()
+    device, device_ids = prepare_device(config["n_gpu"])
 
     model = config.init_obj("arch", module_arch)
     logger.info(model)
-
-    device, device_ids = prepare_device(config["n_gpu"])
     model = model.to(device)
     if performance.get("compile"):
         model = maybe_compile_model(model, True)
@@ -101,22 +149,28 @@ def main(config):
     if len(device_ids) > 1:
         model = torch.nn.DataParallel(model, device_ids=device_ids)
 
+    cache, _, _ = _load_cache_tensors(cache_path)
     density_meta = SimpleNamespace(
-        LAT=data_loader.LAT,
-        LON=data_loader.LON,
-        PRES=data_loader.PRES,
-        min_depth=data_loader.min_depth,
-        max_depth=data_loader.max_depth,
+        LAT=cache["LAT"],
+        LON=cache["LON"],
+        PRES=cache.get("PRES"),
+        min_depth=cache.get("min_depth", 0),
+        max_depth=cache.get("max_depth", cache["targets"].shape[1] - 1 if hasattr(cache["targets"], "shape") else 0),
     )
     criterion = make_loss(
-        pca_models=data_loader.pca_models,
-        outputs=data_loader.outputs,
-        weights=data_loader.weights,
+        pca_models=cache["pca_models"],
+        outputs=cache["outputs"],
+        weights=cache["weights"],
         device=device,
         density_config=config.config.get("density"),
         density_meta=density_meta,
         loss_scales=config.config.get("loss_scales"),
     )
+
+    resolve_dataloader_batch_size(config, model, criterion, cache_path, device, logger)
+
+    data_loader = config.init_obj("data_loader", module_data)
+    valid_data_loader = data_loader.split_validation()
 
     metrics = [getattr(module_metric, met) for met in config["metrics"]]
 

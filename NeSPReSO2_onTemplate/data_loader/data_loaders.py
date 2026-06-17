@@ -53,6 +53,7 @@ class NeSPReSODataLoader(DataLoader):
     ):
         kwargs.pop("validation_split", None)
         kwargs.pop("training", None)
+        kwargs.pop("batch_size_safety", None)
 
         with open(cache_path, "rb") as f:
             self.cache = pickle.load(f)
