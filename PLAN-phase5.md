@@ -33,11 +33,22 @@ flowchart LR
 
 | Step | Task | Status |
 |---|---|---|
-| A1 | Train/freeze profile AE per tag × variable (`encoding_dim=16`) | **in progress** — `scripts/train_profile_ae.py` |
+| A1 | Train/freeze profile AE per tag × variable (`encoding_dim=16`) | **smoke done** — `scripts/train_profile_ae.py`; see initial RMSE below |
 | A2 | Export AE latent targets into cache (optional; can use `model.encode`) | pending |
 | A3 | `DecoderProfileLoss` in `model/loss.py`; `loss_config.mode: decoder` | pending |
 | A4 | Eval RMSE: PCA-16 vs AE-16 vs KAN-16 (ISAS + ARGO) | pending |
 | A5 | `benchmark_ml_opts.py` full-step — speed win only if ≥10% | pending |
+
+### Stage A initial results (GoM, Autoencoder, 200–300 epochs)
+
+| Tag | Variable | PCA-16 recon RMSE | AE-16 val RMSE | Notes |
+|---|---|---:|---:|---|
+| argo_v2 | temperature | 0.061 | 0.391 | AE far behind — 1801-deep needs more capacity/training |
+| argo_v2 | salinity | 0.013 | 0.157 | same |
+| isas20 | temperature | 0.291 | 0.471 | AE behind |
+| isas20 | salinity | 1.169 | **0.208** | **AE wins** — PCA struggles on masked NaN salinity |
+
+**Next A1 iterations:** deeper/wider decoder for ARGO; longer training; KAN smoke on ISAS sal only; mask-aware metrics aligned with eval.
 
 ---
 
