@@ -35,6 +35,8 @@ class VariantSpec:
     compile_model: bool = False
     compile_loss: bool = False
     fused_optimizer: bool = False
+    loss_mode: str | None = None
+    batch_size: int | None = None
     notes: str = ""
 
 
@@ -65,6 +67,14 @@ BENCHMARK_VARIANTS: dict[str, VariantSpec] = {
         fused_optimizer=True,
         notes="stack cudnn_benchmark + matmul_high + autocast_bf16 + fused_adam",
     ),
+    "combo_phase4b_all": VariantSpec(
+        "combo_phase4b_all",
+        compile_model=True,
+        compile_loss=True,
+        loss_mode="pred_profile_cached",
+        batch_size=0,
+        notes="Phase 4b stack: max batch + compile model+loss + pred_profile_cached",
+    ),
 }
 
 
@@ -91,6 +101,8 @@ def variant_to_performance(spec: VariantSpec) -> dict[str, Any]:
         "compile": spec.compile_model,
         "compile_loss": spec.compile_loss,
         "fused_optimizer": spec.fused_optimizer,
+        "loss_mode": spec.loss_mode,
+        "batch_size": spec.batch_size,
     }
 
 

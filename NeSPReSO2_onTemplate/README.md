@@ -194,7 +194,7 @@ Results JSON: `saved/benchmarks/ml_opts_*.json`.
 | compile_loss | 0.0226 | 1.02× | 0.137 |
 | compile_both | 0.0224 | 1.03× | 0.139 |
 
-**Phase 4b verdict (Jun 2026, GoM ARGO):** All three levers tested — max batch (~4%), `compile_loss` (~2%), `pred_profile_cached` (~2%) — **below the 10% full-step bar**. GoM ARGO is fast enough; reserve loss optimizations for global scale. Config defaults unchanged (`batch_size: 512`, `loss_config.mode: combined`).
+**Phase 4b verdict (Jun 2026, GoM ARGO):** All three levers tested — max batch (~4%), `compile_loss` (~2%), `pred_profile_cached` (~2%) — **below the 10% full-step bar**. Combined stack (`combo_phase4b_all`: max batch + compile model+loss + `pred_profile_cached`) is **~10% slower** than baseline (0.0272 vs 0.0246 s/epoch) — compile overhead dominates at 1 batch/epoch. GoM ARGO is fast enough; reserve loss optimizations for global scale. Config defaults unchanged (`batch_size: 512`, `loss_config.mode: combined`).
 
 Optional faster loss (same objective as profile MSE branch):
 
@@ -202,7 +202,7 @@ Optional faster loss (same objective as profile MSE branch):
 "loss_config": { "mode": "pred_profile_cached" }
 ```
 
-**Phase 5 (in progress):** learned profile decoders — see [PLAN-phase5.md](../PLAN-phase5.md). Stage A: `scripts/train_profile_ae.py`.
+**Phase 5 (in progress):** learned profile decoders — see [PLAN-phase5.md](../PLAN-phase5.md). Stage A: `scripts/train_profile_ae.py`; dim sweep: `scripts/benchmark_profile_ae_dims.py` (dims 16–256 vs PCA-X). ISAS salinity AE beats PCA at every dim (best 0.202 @ dim 128); ARGO still PCA-dominant at 200 epochs.
 
 **DDP (2 GPU, ISAS smoke, 20 timed epochs):** `0.0184 s/epoch` vs `0.0256` 1-GPU baseline — **~1.39× faster** per epoch (each rank processes half the batches).
 

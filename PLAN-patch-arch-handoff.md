@@ -2,7 +2,7 @@
 
 **Saved:** 2026-06-17 (updated end-of-session)  
 **Branch:** `nespreso-v2-port`  
-**Status:** Phases 1–4 **done**; Phase 4b **exhausted** (batch, compile_loss, pred_profile_cached all &lt;10% ARGO full-step bar)
+**Status:** Phases 1–4 **done**; Phase 4b **exhausted** (individual levers and combined stack all miss 10% ARGO full-step bar); Phase 5 Stage A **in progress** (AE dim sweep done)
 
 ---
 
@@ -18,10 +18,14 @@
 | `loss_config.mode=pred_profile_cached` | `model/loss.py`, cache preproc, `config_argo_pred_profile_cached.json` |
 | Cached-loss benchmark | `saved/benchmarks/ml_opts_argo_pred_profile_cached.json` |
 | TensorBoard enabled for GoM configs | `config_argo.json`, `config_isas.json`, `config_isas_patch.json` |
+| Phase 5 Stage A smoke + AE dim sweep (16–256) | `scripts/train_profile_ae.py`, `scripts/benchmark_profile_ae_dims.py` |
+| Phase 4b combined stack benchmark | `combo_phase4b_all` variant in `playground/performance.py` |
+| AE sweep JSON | `saved/benchmarks/ae_dims_isas20_Autoencoder.json`, `ae_dims_argo_v2_Autoencoder.json` |
+| Combined stack JSON | `saved/benchmarks/ml_opts_argo_combo_phase4b_all.json` |
 
 ### What is NOT done (next session starts here)
 
-- [ ] **Phase 5 Stage A:** finish AE/KAN decoder training (ISAS + ARGO); compare recon RMSE vs PCA-16
+- [ ] **Phase 5 Stage A:** deeper/wider ARGO AE or longer training; KAN smoke on ISAS sal; fair PCA-X re-run
 - [ ] **Phase 5 Stage B:** `DecoderProfileLoss` + latent cache export
 - [ ] **Phase 4c (optional):** ISAS global scale-up + DDP
 
@@ -52,6 +56,17 @@ Basis differs for ISAS (16 vs 15 PCs). Patch ISAS wins on salinity RMSE; baselin
 | compile_both | 0.0224 | 1.03× (~3%) | 0.139 |
 
 **Below 10% bar.** All Phase 4b levers exhausted at GoM scale; see batch + cached-loss tables below.
+
+### Phase 4b combined stack (Jun 2026, ARGO full step)
+
+| Variant | sec/epoch | vs baseline | batch |
+|---|---:|---:|---:|
+| baseline | 0.0246 | 1.00× | 512 |
+| **combo_phase4b_all** | 0.0272 | **0.90× (~10% slower)** | 2755 |
+
+Stack: `batch_size=0` (auto 2755) + `loss_config.mode=pred_profile_cached` + `compile(model+loss)`. **Do not enable combined** on GoM — compile overhead exceeds per-step savings at 1 batch/epoch.
+
+JSON: `saved/benchmarks/ml_opts_argo_combo_phase4b_all.json`.
 
 ### Phase 4b pred_profile_cached results (Jun 2026, ARGO full step)
 

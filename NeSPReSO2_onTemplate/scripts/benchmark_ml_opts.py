@@ -114,50 +114,73 @@ def _attach_loader_metadata(dst, src):
     return dst
 
 
-def build_stack(config, device, *, rank: int = 0, world_size: int = 1):
+def build_stack(
+    config,
+    device,
+    *,
+    rank: int = 0,
+    world_size: int = 1,
+    loss_mode: str | None = None,
+    batch_size: int | None = None,
+):
+    import copy
     import logging
 
-    ensure_cache(config)
-    cache_path = config.config["data_loader"]["args"]["cache_path"]
+    cfg_backup = None
+    if loss_mode is not None or batch_size is not None:
+        cfg_backup = copy.deepcopy(config.config)
+        if loss_mode is not None:
+            config.config.setdefault("loss_config", {})["mode"] = loss_mode
+        if batch_size is not None:
+            config.config["data_loader"]["args"]["batch_size"] = batch_size
 
-    model = config.init_obj("arch", module_arch).to(device)
+    try:
+        ensure_cache(config)
+        cache_path = config.config["data_loader"]["args"]["cache_path"]
 
-    import pickle as _pickle
+        model = config.init_obj("arch", module_arch).to(device)
 
-    with open(cache_path, "rb") as f:
-        cache = _pickle.load(f)
-    density_meta = SimpleNamespace(
-        LAT=cache["LAT"],
-        LON=cache["LON"],
-        PRES=cache.get("PRES"),
-        min_depth=cache.get("min_depth", 0),
-        max_depth=cache.get("max_depth", cache["targets"].shape[1] - 1),
-    )
-    criterion = make_loss(
-        pca_models=cache["pca_models"],
-        outputs=cache["outputs"],
-        weights=cache["weights"],
-        device=device,
-        density_config=config.config.get("density"),
-        density_meta=density_meta,
-        loss_scales=config.config.get("loss_scales"),
-        loss_config=config.config.get("loss_config"),
-        targets=cache["targets"],
-        true_profiles=cache.get("true_profiles"),
-    )
-    resolve_dataloader_batch_size(
-        config, model, criterion, cache_path, device, logging.getLogger("benchmark_ml_opts")
-    )
+        import pickle as _pickle
 
-    data_loader = config.init_obj("data_loader", module_data)
-    valid_data_loader = data_loader.split_validation()
+        with open(cache_path, "rb") as f:
+            cache = _pickle.load(f)
+        density_meta = SimpleNamespace(
+            LAT=cache["LAT"],
+            LON=cache["LON"],
+            PRES=cache.get("PRES"),
+            min_depth=cache.get("min_depth", 0),
+            max_depth=cache.get("max_depth", cache["targets"].shape[1] - 1),
+        )
+        criterion = make_loss(
+            pca_models=cache["pca_models"],
+            outputs=cache["outputs"],
+            weights=cache["weights"],
+            device=device,
+            density_config=config.config.get("density"),
+            density_meta=density_meta,
+            loss_scales=config.config.get("loss_scales"),
+            loss_config=config.config.get("loss_config"),
+            targets=cache["targets"],
+            true_profiles=cache.get("true_profiles"),
+        )
+        resolve_dataloader_batch_size(
+            config, model, criterion, cache_path, device, logging.getLogger("benchmark_ml_opts")
+        )
 
-    sampler = None
-    if world_size > 1:
-        sampler = DistributedSampler(data_loader.dataset, shuffle=True)
-    train_loader = _make_train_loader(data_loader, sampler=sampler)
-    _attach_loader_metadata(train_loader, data_loader)
-    return model, criterion, train_loader, valid_data_loader, sampler
+        data_loader = config.init_obj("data_loader", module_data)
+        valid_data_loader = data_loader.split_validation()
+
+        sampler = None
+        if world_size > 1:
+            sampler = DistributedSampler(data_loader.dataset, shuffle=True)
+        train_loader = _make_train_loader(data_loader, sampler=sampler)
+        _attach_loader_metadata(train_loader, data_loader)
+        resolved_bs = config.config["data_loader"]["args"]["batch_size"]
+        return model, criterion, train_loader, valid_data_loader, sampler, resolved_bs
+    finally:
+        if cfg_backup is not None:
+            config.config.clear()
+            config.config.update(cfg_backup)
 
 
 def _train_step(model, criterion, optimizer, batch, device, perf, scaler, *, forward_only=False):
@@ -314,8 +337,13 @@ def run_variant(
     perf = variant_to_performance(spec)
     apply_backend_settings(perf, seed=seed)
 
-    model, criterion, train_loader, valid_loader, sampler = build_stack(
-        config, device, rank=rank, world_size=world_size
+    model, criterion, train_loader, valid_loader, sampler, resolved_bs = build_stack(
+        config,
+        device,
+        rank=rank,
+        world_size=world_size,
+        loss_mode=spec.loss_mode,
+        batch_size=spec.batch_size,
     )
     if perf.get("compile"):
         model = maybe_compile_model(model, True)
@@ -369,6 +397,7 @@ def run_variant(
         "final_val_loss": val_loss,
         "notes": spec.notes,
         "settings": perf,
+        "resolved_batch_size": resolved_bs,
         "world_size": world_size,
     }
     if profile and rank == 0:

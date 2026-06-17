@@ -33,22 +33,43 @@ flowchart LR
 
 | Step | Task | Status |
 |---|---|---|
-| A1 | Train/freeze profile AE per tag × variable (`encoding_dim=16`) | **smoke done** — `scripts/train_profile_ae.py`; see initial RMSE below |
+| A1 | Train/freeze profile AE per tag × variable (`encoding_dim=16`) | **dim sweep done** — `scripts/train_profile_ae.py`, `scripts/benchmark_profile_ae_dims.py` |
 | A2 | Export AE latent targets into cache (optional; can use `model.encode`) | pending |
 | A3 | `DecoderProfileLoss` in `model/loss.py`; `loss_config.mode: decoder` | pending |
 | A4 | Eval RMSE: PCA-16 vs AE-16 vs KAN-16 (ISAS + ARGO) | pending |
 | A5 | `benchmark_ml_opts.py` full-step — speed win only if ≥10% | pending |
 
-### Stage A initial results (GoM, Autoencoder, 200–300 epochs)
+### Stage A AE dimension sweep (GoM, Autoencoder, 200 epochs, dims 16–256)
 
-| Tag | Variable | PCA-16 recon RMSE | AE-16 val RMSE | Notes |
-|---|---|---:|---:|---|
-| argo_v2 | temperature | 0.061 | 0.391 | AE far behind — 1801-deep needs more capacity/training |
-| argo_v2 | salinity | 0.013 | 0.157 | same |
-| isas20 | temperature | 0.291 | 0.471 | AE behind |
-| isas20 | salinity | 1.169 | **0.208** | **AE wins** — PCA struggles on masked NaN salinity |
+Compared to **PCA-X** at matching X (fair bottleneck). JSON: `saved/benchmarks/ae_dims_*_Autoencoder.json`.
 
-**Next A1 iterations:** deeper/wider decoder for ARGO; longer training; KAN smoke on ISAS sal only; mask-aware metrics aligned with eval.
+**ISAS (`isas20`, 187 levels)**
+
+| dim | temp PCA | temp AE | sal PCA | sal AE | sal winner |
+|---:|---:|---:|---:|---:|---|
+| 16 | 0.291 | 0.476 | 1.169 | **0.256** | AE |
+| 32 | 0.291 | 0.478 | 1.169 | **0.263** | AE |
+| 64 | 0.291 | 0.493 | 1.169 | **0.433** | AE |
+| 128 | 0.291 | 0.486 | 1.169 | **0.202** | AE (best sal) |
+| 256 | 0.291 | 0.471 | 1.169 | **0.278** | AE |
+
+**ARGO (`argo_v2`, 1801 levels)** — PCA wins every cell at 200 epochs; AE needs more capacity/training.
+
+| dim | temp PCA | temp AE | sal PCA | sal AE |
+|---:|---:|---:|---:|---:|
+| 16 | 0.061 | 0.355 | 0.013 | 0.159 |
+| 256 | 0.061 | 0.400 | 0.013 | 0.161 |
+
+*Note: sweep above used PCA-16 for all dims (config cap). Script now uses PCA-X per dim for fair comparison on re-run.*
+
+### Phase 4b combined stack vs baseline (ARGO full step)
+
+| Variant | sec/epoch | vs baseline | batch |
+|---|---:|---:|---:|
+| baseline | 0.0246 | 1.00× | 512 |
+| **combo_phase4b_all** | 0.0272 | **0.90× (~10% slower)** | 2755 |
+
+Stack: max batch + `pred_profile_cached` + `compile(model+loss)`. **Do not enable combined** on GoM — overhead exceeds savings.
 
 ---
 
@@ -73,6 +94,17 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
   python3 scripts/train_profile_ae.py -c config_isas_patch.json --arch Autoencoder
 
 # Compare AE recon RMSE vs PCA on held-out profiles (printed at end of train_profile_ae.py)
+
+# Stage A — sweep encoding dims 16–256 vs PCA-X (fair bottleneck)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_profile_ae_dims.py -c config_isas_patch.json --arch Autoencoder
+
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_profile_ae_dims.py -c config_argo.json --arch Autoencoder
+
+# Phase 4b combined stack vs baseline (ARGO full step)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_ml_opts.py -c config_argo.json --variant combo_phase4b_all
 ```
 
 ---
