@@ -48,6 +48,7 @@ class BaseTrainer:
         if self.monitor == 'off':
             self.mnt_mode = 'off'
             self.mnt_best = 0
+            self.early_stop = inf
         else:
             self.mnt_mode, self.mnt_metric = self.monitor.split()
             assert self.mnt_mode in ['min', 'max']
