@@ -1,0 +1,70 @@
+{
+  "runtime": {
+    "device": "cuda",
+    "cache_load_ms": 188.6332780122757,
+    "checkpoint_load_ms": 31.571676023304462,
+    "template_inference_ms": 17.529787262901664,
+    "v2_package_inference_ms": 19.82945459894836,
+    "template_us_per_profile": 23.187549289552464,
+    "v2_us_per_profile": 26.229437300196242,
+    "template_over_v2_ratio": 0.8840277061292116,
+    "v2_pickle_load_ms": 732.9126293770969
+  },
+  "forward": {
+    "max_abs_pcs_diff": 0.0,
+    "mean_abs_pcs_diff": 0.0
+  },
+  "metrics_template_pca": {
+    "T_rmse": 9.477103244857807,
+    "S_rmse": 10.775008001582988,
+    "T_bias": -5.799785303326258,
+    "S_bias": 0.6457439259064737,
+    "cross_impl_T_rmse": 0.0,
+    "cross_impl_S_rmse": 0.0
+  },
+  "pca_compare": {
+    "T_rmse_template_pca": 9.477103244857807,
+    "T_rmse_v2_ckpt_pca_aligned": 3.5394122494165994,
+    "S_rmse_template_pca": 10.775008001582988,
+    "S_rmse_v2_ckpt_pca_aligned": 13.00045302719437,
+    "template_depth_levels": 187,
+    "v2_ckpt_depth_levels": 1801
+  },
+  "depth_samples": {
+    "depths_m_head": [
+      1.0,
+      3.0,
+      5.0,
+      10.0,
+      15.0,
+      20.0,
+      25.0,
+      30.0
+    ],
+    "T_rmse_surface": 6.059180776292514,
+    "T_rmse_near_500m": 10.653578491812995,
+    "T_rmse_near_1500m": 3.522878344969429,
+    "S_rmse_surface": 0.6830875784392211
+  },
+  "maps": {
+    "grid_shape": [
+      13,
+      18
+    ],
+    "max_profiles_per_bin": 22.0,
+    "mean_bin_T_rmse_template": 9.330662493931175,
+    "mean_bin_T_rmse_v2": 9.330662493931175,
+    "max_abs_bin_T_rmse_diff": 0.0
+  },
+  "v2_native": {
+    "N_full": 4145,
+    "N_val": 621,
+    "inference_ms": 29.765690583735704,
+    "us_per_profile": 47.93186889490451
+  },
+  "data": {
+    "N": 5044,
+    "n_val": 756,
+    "input_dim": 9
+  }
+}

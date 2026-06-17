@@ -20,9 +20,33 @@ class FFNN(BaseModel):
         layers.append(nn.Linear(prev_dim, output_dim))
         
         self.model = nn.Sequential(*layers)
-    
-        def forward(self, x):
-            return self.model(x)
+
+    def forward(self, x):
+        return self.model(x)
+
+
+class PredictionModel(BaseModel):
+    """MLP for PCA-component prediction from surface inputs (v2 ``PredictionModel``)."""
+
+    def __init__(self, input_dim=1, layers_config=None, output_dim=30, dropout_prob=0.5):
+        super(PredictionModel, self).__init__()
+        if layers_config is None:
+            layers_config = [512, 256]
+        layers = []
+        prev_dim = input_dim
+        self.layers_config = layers_config
+        for neurons in layers_config:
+            layers.append(nn.Linear(prev_dim, neurons))
+            layers.append(nn.ReLU())
+            if dropout_prob > 0:
+                layers.append(nn.Dropout(dropout_prob))
+            prev_dim = neurons
+        layers.append(nn.Linear(prev_dim, output_dim))
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+
 
 class Autoencoder(nn.Module):
     def __init__(self, encoding_dim, encoder_layers=None, decoder_layers=None, input_dim=187):

@@ -3,6 +3,10 @@ numpy==1.26.4
 xarray==2024.12.1
 astropy==6.1.7
 tqdm==4.66.2
+scikit-learn
+h5py
+pyyaml
+torch
 
 # Optional dependencies for specific features
 # netcdf4==1.6.0  # Required for netCDF file handling

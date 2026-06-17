@@ -6,6 +6,23 @@ from operator import getitem
 from datetime import datetime
 from logger import setup_logging
 from playground import read_json, write_json
+from playground.performance import validate_performance_config
+
+
+def validate_config(config):
+    """Trust-boundary checks before training or cache build."""
+    outputs = config["outputs"]
+    output_dim = config["arch"]["args"]["output_dim"]
+    assert output_dim == sum(outputs.values()), "output_dim must equal sum(outputs.values())"
+    assert int(config["io"]["spatial_pad"]) >= 0 and int(config["io"]["temporal_pad"]) >= 0
+    density = config.get("density", {})
+    if density.get("enabled"):
+        assert os.path.isfile(density["checkpoint"]), f"missing density checkpoint: {density['checkpoint']}"
+        assert os.path.isfile(density["stats_path"]), f"missing density stats: {density['stats_path']}"
+    if config.get("performance"):
+        from playground.performance import get_performance_config
+
+        validate_performance_config(get_performance_config(config))
 
 
 class ConfigParser:
@@ -69,13 +86,15 @@ class ConfigParser:
             cfg_fname = Path(args.config)
         
         config = read_json(cfg_fname)
+        validate_config(config)
         if args.config and resume:
             # update new config for fine-tuning
             config.update(read_json(args.config))
 
         # parse custom cli options into dictionary
         modification = {opt.target : getattr(args, _get_opt_name(opt.flags)) for opt in options}
-        return cls(config, resume, modification)
+        run_id = getattr(args, "run_id", None)
+        return cls(config, resume, modification, run_id=run_id)
 
     def init_obj(self, name, module, *args, **kwargs):
         """
@@ -144,8 +163,8 @@ def _update_config(config, modification):
 def _get_opt_name(flags):
     for flg in flags:
         if flg.startswith('--'):
-            return flg.replace('--', '')
-    return flags[0].replace('--', '')
+            return flg.replace('--', '').replace('-', '_')
+    return flags[0].replace('--', '').replace('-', '_')
 
 def _set_by_path(tree, keys, value):
     """Set a value in a nested object in tree by sequence of keys."""

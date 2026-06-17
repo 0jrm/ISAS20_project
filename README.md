@@ -2,6 +2,8 @@
 
 This repository contains utilities for working with ISAS20 and ARGO data.
 
+**NeSPReSO v2 port + next steps:** see [`PLAN.md`](PLAN.md) (port complete), [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md) (session handoff: ML opt benchmarks done, patch-arch roadmap pending), and [`NeSPReSO2_onTemplate/README.md`](NeSPReSO2_onTemplate/README.md) (training ops).
+
 ## Module Structure
 
 The repository is organized as a Python package with the following structure:

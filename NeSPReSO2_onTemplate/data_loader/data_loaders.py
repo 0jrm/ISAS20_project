@@ -1,150 +1,143 @@
-from torchvision import datasets, transforms
-import pickle
+from collections import OrderedDict
+
 import numpy as np
-import sys
+import pickle
 import torch
-sys.path.append("../base/")
-from base_data_loader import BaseDataLoader
+from torch.utils.data import DataLoader, Dataset, random_split
+
+from base.base_data_loader import BaseDataLoader
 
 
+def _collate_with_index(batch):
+    inputs, targets, indices = zip(*batch)
+    return torch.stack(inputs), torch.stack(targets), torch.tensor(indices, dtype=torch.long)
 
-## % From old code (nespreso 1 on template)
 
-sys.path.append("../preproc/")
-from preproc_argo import preprocArgoNoSat, get_COAPS_ssh_sst, applyPCA, inverse_PCA
-
-class PCA_ArgoDataLoader(BaseDataLoader):
-    """
-    ARGO data loading
-    """
-    def __init__(self, data_dir, batch_size, shuffle=True, validation_split=0.0, num_workers=2, training=True, inputs = None, outputs = None, max_depth = 2000):
-        super().__init__(data_dir, batch_size, shuffle, validation_split, num_workers, training)
-
-        if data_dir.endswith('.pkl'):
-            with open(data_dir, "rb") as file:
-                loaded_data = pickle.load(file)
-                self.TIME = loaded_data['TIME']
-                self.LAT = loaded_data['LAT']
-                self.LON = loaded_data['LON']
-                self.TEMP = loaded_data['TEMP']
-                self.SAL = loaded_data['SAL']
-                self.ADT = loaded_data['ADT']
-                self.RHO = loaded_data['RHO']
-                self.PRES = loaded_data['PRES']
-                self.satSSH = loaded_data['satSSH']
-                self.satSST = loaded_data['satSST']
-        elif data_dir.endswith('.mat'):
-            self.TIME, self.LAT, self.LON, self.TEMP, self.SAL, self.ADT, self.RHO, self.PRES = preprocArgoNoSat(data_dir)
-            self.satSSH, self.satSST = get_COAPS_ssh_sst(data_dir)
-        else:
-            raise ValueError("Provided data_dir does not match supported file types (.pickle or .mat)")
-        
-        if inputs is None:
-            inputs = {
-                "time": True,
-                "lat": True,
-                "lon": True,
-                "sst": True,
-                "sss": True,
-                "adt": True,
-                "satSSH": False,
-                "satSST": False,
-                "depth": False
-            }
-            
+class NeSPReSODataset(Dataset):
+    def __init__(self, inputs, targets):
         self.inputs = inputs
-            
-        if outputs is None:
-            outputs = {
-                "temp": True,
-                "sal": True,
-                "rho": True,
-                "adt": False
-            }
-            
-        self.outputs = outputs
-                    
-        self.data_inputs, self.input_norm_params = self.create_inputs()
-        self.data_outputs, self.output_norm_params = self.create_outputs()
-    
-    def normalize_data(data):
-        mean = np.mean(data, axis=0)
-        std = np.std(data, axis=0)
-        return (data - mean) / (std + 1e-12), mean, std
-        
-    def create_inputs(self):
-        inputs = []
-        
-        input_array = []
-    
-        if inputs["time"]:
-            cosT = np.cos(2*np.pi*self.TIME%365)/365
-            sinT = np.sin(2*np.pi*self.TIME%365)/365
-            avgTc = np.mean(cosT)
-            avgTs = np.mean(sinT)
-            input_array.append(cosT)
-            input_array.append(sinT)
-            
-        if inputs["geo"]:
-            cosLa = np.cos(2*np.pi*self.LAT/180)
-            sinLa= np.sin(2*np.pi*self.LAT/180)
-            cosLo = np.cos(2*np.pi*self.LON/360)
-            sinLo = np.sin(2*np.pi*self.LON/360)
-            avgLac = np.mean(cosLa)
-            avgLas = np.mean(sinLa)
-            avgLos = np.mean(sinLo)
-            avgLoc = np.mean(cosLo)
-            
-            input_array.append(cosLa)
-            input_array.append(sinLa)
-            input_array.append(cosLo)
-            input_array.append(sinLo)
-            
-        if inputs["sst"]:
-            input_array.append(self.TEMP[0,:])
-            avgST = np.mean(self.TEMP[0,:])
-        elif inputs["satSST"]:
-            input_array.append(self.satSST)
-        if inputs["sss"]:
-            input_array.append(self.SAL[0,:])
-        if inputs["ssh"]:
-            input_array.append(self.ADT)
-        elif inputs["satSSH"]:
-            input_array.append(self.satSSH)
-        if inputs["depth"]:
-            input_array.append(self.PRES)
-        
-        inputs_data = np.array(inputs_data).T
-        
-        normalized_inputs , self.mean, self.std = self.normalize_data(inputs_data)
-        
-        return torch.tensor(normalized_inputs, dtype=torch.float32)
-    
-    def create_outputs(self):
-        outputs = []
-        
-        output_array = []
-        
-        if outputs["temp"]:
-            output_array.append(self.TEMP)
-        if outputs["sal"]:
-            output_array.append(self.SAL)
-        if outputs["rho"]:
-            output_array.append(self.RHO)
-        if outputs["adt"]:
-            output_array.append(self.ADT)
-        
-        outputs_data = np.array(outputs_data).T
-        
-        normalized_outputs , self.mean, self.std = self.normalize_data(outputs_data)
-        
-        return torch.tensor(normalized_outputs, dtype=torch.float32)
+        self.targets = targets
+
+    def __len__(self):
+        return self.inputs.shape[0]
+
+    def __getitem__(self, idx):
+        return self.inputs[idx], self.targets[idx], idx
 
 
-# normalizar os dados
-        # PCA self.Tpcs, self.Tpca = applyPCA(self.TEMP)
-        # PCA self.Spcs, self.Spca = applyPCA(self.SAL) 
-        # PCA self.Rpcs, self.Rpca = applyPCA(self.RHO)
-        
-        # inverse PCA self.TEMP = inverse_PCA(self.Tpca, self.Tpcs)
+def _split_lengths(n: int, train_frac: float, val_frac: float, test_frac: float):
+    if abs(train_frac + val_frac + test_frac - 1.0) > 1e-6:
+        raise ValueError("train_frac + val_frac + test_frac must equal 1")
+    train_len = int(n * train_frac)
+    val_len = int(n * val_frac)
+    test_len = n - train_len - val_len
+    return train_len, val_len, test_len
 
+
+class NeSPReSODataLoader(DataLoader):
+    """Loads train-ready pickle; 70/15/15 split via ``torch.random_split`` + seed."""
+
+    def __init__(
+        self,
+        cache_path,
+        batch_size,
+        shuffle=True,
+        train_frac=0.7,
+        val_frac=0.15,
+        test_frac=0.15,
+        split_seed=42,
+        split="train",
+        num_workers=0,
+        pin_memory=False,
+        **kwargs,
+    ):
+        kwargs.pop("validation_split", None)
+        kwargs.pop("training", None)
+
+        with open(cache_path, "rb") as f:
+            self.cache = pickle.load(f)
+
+        inputs = torch.tensor(self.cache["inputs"], dtype=torch.float32)
+        targets = torch.tensor(self.cache["targets"], dtype=torch.float32)
+        full_ds = NeSPReSODataset(inputs, targets)
+
+        n = len(full_ds)
+        train_len, val_len, test_len = _split_lengths(n, train_frac, val_frac, test_frac)
+        g = torch.Generator().manual_seed(int(split_seed))
+        train_sub, val_sub, test_sub = random_split(
+            full_ds, [train_len, val_len, test_len], generator=g
+        )
+        self.train_subset = train_sub
+        self.val_subset = val_sub
+        self.test_subset = test_sub
+        self.split_indices = {
+            "train": list(train_sub.indices),
+            "val": list(val_sub.indices),
+            "test": list(test_sub.indices),
+        }
+
+        subsets = {"train": train_sub, "val": val_sub, "test": test_sub}
+        if split not in subsets:
+            raise ValueError(f"split must be train|val|test, got {split}")
+        active = subsets[split]
+
+        self.cache_path = cache_path
+        self.pca_models = self.cache["pca_models"]
+        self.outputs = OrderedDict(self.cache["outputs"])
+        self.weights = self.cache["weights"]
+        self.LAT = self.cache["LAT"]
+        self.LON = self.cache["LON"]
+        self.PRES = self.cache.get("PRES")
+        self.profiles = self.cache.get("profiles")
+        self.input_params = self.cache.get("input_params", {})
+        self.dataset_tag = self.cache.get("dataset_tag", "unknown")
+        self.min_depth = self.cache.get("min_depth", 0)
+        self.max_depth = self.cache.get("max_depth", targets.shape[1] - 1)
+        self.batch_size = batch_size
+        self._split = split
+
+        super().__init__(
+            active,
+            batch_size=batch_size,
+            shuffle=shuffle and split == "train",
+            num_workers=num_workers,
+            collate_fn=_collate_with_index,
+            pin_memory=pin_memory,
+        )
+
+    def split_validation(self):
+        dl = DataLoader(
+            self.val_subset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=_collate_with_index,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+        dl.pca_models = self.pca_models
+        dl.outputs = self.outputs
+        return dl
+
+    def split_test(self):
+        dl = DataLoader(
+            self.test_subset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=_collate_with_index,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+        dl.pca_models = self.pca_models
+        dl.outputs = self.outputs
+        return dl
+
+
+class MnistDataLoader(BaseDataLoader):
+    """Legacy MNIST loader (template default)."""
+
+    def __init__(self, data_dir, batch_size, shuffle=True, validation_split=0.0, num_workers=2, training=True):
+        from torchvision import datasets, transforms
+
+        trs = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+        self.dataset = datasets.MNIST(data_dir, train=training, download=True, transform=trs)
+        super().__init__(self.dataset, batch_size, shuffle, validation_split, num_workers)
