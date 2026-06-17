@@ -1,11 +1,11 @@
 {
-    "name": "NeSPReSO2_ISAS_GoM_patch",
+    "name": "NeSPReSO2_ARGO_GoM",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
         "type": "PatchConvMLP",
         "args": {
-            "input_dim": 306,
+            "input_dim": 9,
             "output_dim": 32,
             "dropout_prob": 0.2,
             "d_model": 128,
@@ -13,16 +13,7 @@
                 1024,
                 1024
             ],
-            "conv_channels": [
-                32,
-                64
-            ],
-            "patch_shape": [
-                3,
-                4,
-                5,
-                5
-            ],
+            "patch_shape": null,
             "n_enc": 6,
             "n_sat": 3
         }
@@ -40,28 +31,14 @@
         "sat": true
     },
     "io": {
-        "dataset_tag": "isas20",
-        "data_path": "../data/NeSPReSO_v2_GoM_sat",
-        "sat_file": "satellite_NeSPReSO_v2_GoM.h5",
-        "prof_file": "profiles_NeSPReSO_v2_GoM.h5",
-        "spatial_pad": 2,
-        "temporal_pad": 3,
-        "BBox": null,
+        "dataset_tag": "argo_v2",
         "cache_dir": "../data/cache",
-        "groups": {
-            "sss": {
-                "h5_group": "sss",
-                "h5_var": "sos"
-            },
-            "sst": {
-                "h5_group": "ostia",
-                "h5_var": "analysed_sst"
-            },
-            "ssh": {
-                "h5_group": "ssh",
-                "h5_var": "adt"
-            }
-        }
+        "spatial_pad": 0,
+        "temporal_pad": 0,
+        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "v2_reload": false,
+        "refit_pca": true
     },
     "outputs": {
         "temperature": 16,
@@ -69,11 +46,11 @@
     },
     "loss_scales": {
         "profile_scales": {
-            "temperature": 6.0308,
-            "salinity": 102.758
+            "temperature": 2.0029,
+            "salinity": 0.0313
         },
         "combined_pca_scale": 2.0,
-        "combined_mse_scale": 4.1592
+        "combined_mse_scale": 0.2174
     },
     "density": {
         "enabled": false,
@@ -86,8 +63,7 @@
         "type": "NeSPReSODataLoader",
         "args": {
             "cache_path": "",
-            "batch_size": 0,
-            "batch_size_safety": 0.95,
+            "batch_size": 512,
             "shuffle": true,
             "train_frac": 0.7,
             "val_frac": 0.15,
@@ -106,6 +82,9 @@
         }
     },
     "loss": "combined_pca_loss",
+    "loss_config": {
+        "mode": "pred_profile_cached"
+    },
     "metrics": [
         "profile_rmse"
     ],

@@ -2,7 +2,6 @@
     "name": "NeSPReSO2_ARGO_GoM",
     "n_gpu": 1,
     "seed": 42,
-
     "arch": {
         "type": "PatchConvMLP",
         "args": {
@@ -10,13 +9,15 @@
             "output_dim": 32,
             "dropout_prob": 0.2,
             "d_model": 128,
-            "head_layers": [1024, 1024],
+            "head_layers": [
+                1024,
+                1024
+            ],
             "patch_shape": null,
             "n_enc": 6,
             "n_sat": 3
         }
     },
-
     "input_params": {
         "timecos": true,
         "timesin": true,
@@ -29,7 +30,6 @@
         "ssh": true,
         "sat": true
     },
-
     "io": {
         "dataset_tag": "argo_v2",
         "cache_dir": "../data/cache",
@@ -40,18 +40,18 @@
         "v2_reload": false,
         "refit_pca": true
     },
-
     "outputs": {
         "temperature": 16,
         "salinity": 16
     },
-
     "loss_scales": {
-        "profile_scales": {"temperature": 37.86, "salinity": 0.28},
-        "combined_pca_scale": 2.8294,
-        "combined_mse_scale": 0.0255
+        "profile_scales": {
+            "temperature": 2.0029,
+            "salinity": 0.0313
+        },
+        "combined_pca_scale": 2.0,
+        "combined_mse_scale": 0.2174
     },
-
     "density": {
         "enabled": false,
         "checkpoint": "",
@@ -59,7 +59,6 @@
         "stab_weight": 0.0,
         "smooth_weight": 0.0
     },
-
     "data_loader": {
         "type": "NeSPReSODataLoader",
         "args": {
@@ -74,7 +73,6 @@
             "pin_memory": false
         }
     },
-
     "optimizer": {
         "type": "Adam",
         "args": {
@@ -83,10 +81,13 @@
             "amsgrad": false
         }
     },
-
     "loss": "combined_pca_loss",
-    "metrics": ["profile_rmse"],
-
+    "loss_config": {
+        "mode": "combined"
+    },
+    "metrics": [
+        "profile_rmse"
+    ],
     "lr_scheduler": {
         "type": "StepLR",
         "args": {
@@ -94,7 +95,6 @@
             "gamma": 1.0
         }
     },
-
     "trainer": {
         "epochs": 8000,
         "save_dir": "saved/",
@@ -103,6 +103,6 @@
         "verbosity": 2,
         "monitor": "min val_loss",
         "early_stop": 500,
-        "tensorboard": false
+        "tensorboard": true
     }
 }

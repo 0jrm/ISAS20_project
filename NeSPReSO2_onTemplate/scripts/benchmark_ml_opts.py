@@ -35,6 +35,7 @@ from playground.performance import (
     autocast_dtype_from_name,
     build_optimizer,
     maybe_compile_model,
+    maybe_compile_module,
     variant_to_performance,
 )
 from preproc.preproc_isas_sat import (
@@ -44,7 +45,7 @@ from preproc.preproc_isas_sat import (
     count_sat_vars,
     sat_patch_shape,
 )
-from train import ensure_cache
+from train import ensure_cache, resolve_dataloader_batch_size
 
 WARMUP_EPOCHS = 10
 TIMED_EPOCHS = 100
@@ -114,7 +115,39 @@ def _attach_loader_metadata(dst, src):
 
 
 def build_stack(config, device, *, rank: int = 0, world_size: int = 1):
+    import logging
+
     ensure_cache(config)
+    cache_path = config.config["data_loader"]["args"]["cache_path"]
+
+    model = config.init_obj("arch", module_arch).to(device)
+
+    import pickle as _pickle
+
+    with open(cache_path, "rb") as f:
+        cache = _pickle.load(f)
+    density_meta = SimpleNamespace(
+        LAT=cache["LAT"],
+        LON=cache["LON"],
+        PRES=cache.get("PRES"),
+        min_depth=cache.get("min_depth", 0),
+        max_depth=cache.get("max_depth", cache["targets"].shape[1] - 1),
+    )
+    criterion = make_loss(
+        pca_models=cache["pca_models"],
+        outputs=cache["outputs"],
+        weights=cache["weights"],
+        device=device,
+        density_config=config.config.get("density"),
+        density_meta=density_meta,
+        loss_scales=config.config.get("loss_scales"),
+        loss_config=config.config.get("loss_config"),
+        targets=cache["targets"],
+        true_profiles=cache.get("true_profiles"),
+    )
+    resolve_dataloader_batch_size(
+        config, model, criterion, cache_path, device, logging.getLogger("benchmark_ml_opts")
+    )
 
     data_loader = config.init_obj("data_loader", module_data)
     valid_data_loader = data_loader.split_validation()
@@ -124,24 +157,6 @@ def build_stack(config, device, *, rank: int = 0, world_size: int = 1):
         sampler = DistributedSampler(data_loader.dataset, shuffle=True)
     train_loader = _make_train_loader(data_loader, sampler=sampler)
     _attach_loader_metadata(train_loader, data_loader)
-
-    model = config.init_obj("arch", module_arch).to(device)
-    density_meta = SimpleNamespace(
-        LAT=data_loader.LAT,
-        LON=data_loader.LON,
-        PRES=data_loader.PRES,
-        min_depth=data_loader.min_depth,
-        max_depth=data_loader.max_depth,
-    )
-    criterion = make_loss(
-        pca_models=data_loader.pca_models,
-        outputs=data_loader.outputs,
-        weights=data_loader.weights,
-        device=device,
-        density_config=config.config.get("density"),
-        density_meta=density_meta,
-        loss_scales=config.config.get("loss_scales"),
-    )
     return model, criterion, train_loader, valid_data_loader, sampler
 
 
@@ -304,6 +319,8 @@ def run_variant(
     )
     if perf.get("compile"):
         model = maybe_compile_model(model, True)
+    if perf.get("compile_loss"):
+        criterion = maybe_compile_module(criterion, True)
 
     optimizer = build_optimizer(
         config.config,
@@ -463,7 +480,7 @@ def main():
             raise SystemExit(f"Unknown variant: {name}. Choices: {', '.join(BENCHMARK_VARIANTS)}")
         spec = BENCHMARK_VARIANTS[name]
         print(f"Running {name}...", flush=True)
-        do_profile = args.profile and name in {"baseline", "combo_best"}
+        do_profile = args.profile and name in {"baseline", "combo_best", "compile_loss"}
         row = run_variant(
             config,
             spec,

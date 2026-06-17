@@ -53,9 +53,9 @@
     },
 
     "loss_scales": {
-        "profile_scales": {"temperature": 37.86, "salinity": 0.28},
-        "combined_pca_scale": 2.8294,
-        "combined_mse_scale": 0.0255
+        "profile_scales": {"temperature": 6.0308, "salinity": 102.758},
+        "combined_pca_scale": 2.0,
+        "combined_mse_scale": 4.1592
     },
 
     "density": {

@@ -15,7 +15,7 @@ import h5py
 import numpy as np
 from sklearn.decomposition import PCA
 
-from model.loss import OUTPUT_H5_VARS, get_pca_weights
+from model.loss import OUTPUT_H5_VARS, get_pca_weights, true_profiles_numpy
 
 # ponytail: patch flatten order = time (oldest..newest within window), then row-major (lat, lon) per slice
 PATCH_ORDER_DOC = "time_major_row_major_lat_lon"
@@ -299,6 +299,7 @@ def build_train_cache(config: Dict, force: bool = False) -> str:
         "outputs": outputs,
         "weights": weights,
         "profiles": profiles,
+        "true_profiles": true_profiles_numpy(targets, pca_models, outputs),
         "LAT": lat.astype(np.float32),
         "LON": lon.astype(np.float32),
         "PRES": pres,

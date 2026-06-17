@@ -53,15 +53,15 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
   python3 scripts/benchmark_batch_size.py -c config_argo.json
 ```
 
-**Findings (A100 80GB, GoM):** VRAM stays under ~1% even at max batch — the bottleneck is **FLOPs/step**, not memory. Throughput rises monotonically with batch size until the full train split fits in one step (~3.5k ISAS / ~2.9k ARGO samples). On GoM, `batch_size=0` therefore resolves to **one batch per epoch** (best samples/s, but fewer optimizer steps per epoch). For fixed-batch training comparable to v2, keep `batch_size=512`.
+**Findings (A100 80GB, GoM, Jun 2026):** VRAM stays under ~1% even at max batch — the bottleneck is **FLOPs/step**, not memory. Per-step throughput rises monotonically with batch size (512 → 222k samples/s; max 2755 → 773k samples/s on ARGO). Full-epoch wall-clock gain is modest (~4% ARGO) because max batch collapses to **1 step/epoch** (~2.9k ARGO / ~3.5k ISAS train samples). On GoM, `batch_size=0` therefore resolves to one batch per epoch (best per-step samples/s, but fewer optimizer steps per epoch). For fixed-batch training comparable to v2, keep `batch_size=512` on ARGO; ISAS patch ships with `batch_size: 0`.
 
-| Config | Train N | Max fit | Best throughput batch | Peak VRAM |
-|---|---:|---:|---:|---:|
-| `config_isas_patch.json` (PatchConvMLP) | 3530 | 3353 | 3353 | ~335 MiB |
-| `config_isas.json` (PredictionModel) | 3530 | 3353 | 3353 | ~68 MiB |
-| `config_argo.json` (PatchConvMLP + PCA loss) | 2901 | 2755 | 2755 | ~215 MiB |
+| Config | Train N | Max fit | Best throughput batch | Peak VRAM | Epoch speedup vs 512 |
+|---|---:|---:|---:|---:|---:|
+| `config_isas_patch.json` (PatchConvMLP) | 3530 | 3353 | 3353 | ~335 MiB | — |
+| `config_isas.json` (PredictionModel) | 3530 | 3353 | 3353 | ~68 MiB | — |
+| `config_argo.json` (PatchConvMLP + PCA loss) | 2901 | 2755 | 2755 | ~215 MiB | ~4% (0.0233→0.0223 s/epoch) |
 
-`config_isas_patch.json` ships with `batch_size: 0` (auto max). Point configs keep `batch_size: 512` for v2 parity unless you override.
+`config_isas_patch.json` ships with `batch_size: 0` (auto max). `config_argo.json` keeps `batch_size: 512` for v2 parity (max batch benchmarked but below 10% full-step bar).
 Edit paths in `config_argo.json` (`v2_pickle`, `v2_src`) for your machine.
 
 **Eval rule:** always pair checkpoint with the cache it was trained on (`eval_run.py`).
@@ -117,6 +117,18 @@ python3 eval_run.py -c config_argo.json -r saved/models/NeSPReSO2_ARGO_GoM/${RUN
 ```
 
 Stdout sentinels: `NESPRO_TRAIN_EPOCH`, `NESPRO_TRAIN_DONE`, `NESPRO_TRAIN_FAIL`. Per-run `status.json` lives under each `save_dir`.
+
+### GoM eval (Jun 2026, test split, `eval_run.py`)
+
+| Model | config | temp RMSE | sal RMSE |
+|---|---|---:|---:|
+| PatchConvMLP 16-PC ISAS patch | `config_isas_patch.json` | 1.016 | **5.32** |
+| PredictionModel 15-PC ISAS point | `config_isas.json` | **1.002** | 5.53 |
+| PatchConvMLP 16-PC ARGO point | `config_argo.json` | **0.416** | **0.072** |
+
+ISAS bases differ (16 vs 15 PCs); not strictly apples-to-apples. JSON: `saved/eval_*_test.json`.
+
+**TensorBoard** (enabled in GoM configs): `tensorboard --logdir saved/log --port 6006`. Past runs with `tensorboard: false` only have `info.log` — no event files.
 
 ## ML optimization benchmarks
 
@@ -179,6 +191,18 @@ Results JSON: `saved/benchmarks/ml_opts_*.json`.
 | fused_adam | 0.0212 | 1.01× | 0.767 |
 | autocast_bf16 | 0.0241 | 0.89× | 0.753 |
 | compile_model | 0.0243 | 0.88× | 0.734 |
+| compile_loss | 0.0226 | 1.02× | 0.137 |
+| compile_both | 0.0224 | 1.03× | 0.139 |
+
+**Phase 4b verdict (Jun 2026, GoM ARGO):** All three levers tested — max batch (~4%), `compile_loss` (~2%), `pred_profile_cached` (~2%) — **below the 10% full-step bar**. GoM ARGO is fast enough; reserve loss optimizations for global scale. Config defaults unchanged (`batch_size: 512`, `loss_config.mode: combined`).
+
+Optional faster loss (same objective as profile MSE branch):
+
+```json
+"loss_config": { "mode": "pred_profile_cached" }
+```
+
+**Phase 5 (in progress):** learned profile decoders — see [PLAN-phase5.md](../PLAN-phase5.md). Stage A: `scripts/train_profile_ae.py`.
 
 **DDP (2 GPU, ISAS smoke, 20 timed epochs):** `0.0184 s/epoch` vs `0.0256` 1-GPU baseline — **~1.39× faster** per epoch (each rank processes half the batches).
 
@@ -193,6 +217,7 @@ Profiler (ISAS baseline): top CUDA time in `Adam.step` and `aten::mm` (PCA recon
   "autocast": false,
   "autocast_dtype": "bfloat16",
   "compile": false,
+  "compile_loss": false,
   "fused_optimizer": false
 }
 ```

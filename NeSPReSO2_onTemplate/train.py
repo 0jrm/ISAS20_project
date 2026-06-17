@@ -13,7 +13,7 @@ from model.loss import make_loss
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device
 from playground.batch_size import resolve_batch_size, train_samples_from_cache
-from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model
+from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model, maybe_compile_module
 from preproc.preproc_isas_sat import (
     build_train_cache,
     compute_input_dim,
@@ -165,7 +165,13 @@ def main(config):
         density_config=config.config.get("density"),
         density_meta=density_meta,
         loss_scales=config.config.get("loss_scales"),
+        loss_config=config.config.get("loss_config"),
+        targets=cache["targets"],
+        true_profiles=cache.get("true_profiles"),
     )
+    if performance.get("compile_loss"):
+        criterion = maybe_compile_module(criterion, True)
+        logger.info("torch.compile enabled on loss")
 
     resolve_dataloader_batch_size(config, model, criterion, cache_path, device, logger)
 

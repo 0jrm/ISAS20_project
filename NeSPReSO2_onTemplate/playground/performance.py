@@ -16,6 +16,7 @@ DEFAULT_PERFORMANCE: dict[str, Any] = {
     "autocast": False,
     "autocast_dtype": "bfloat16",
     "compile": False,
+    "compile_loss": False,
     "fused_optimizer": False,
 }
 
@@ -32,6 +33,7 @@ class VariantSpec:
     autocast: bool = False
     autocast_dtype: str = "bfloat16"
     compile_model: bool = False
+    compile_loss: bool = False
     fused_optimizer: bool = False
     notes: str = ""
 
@@ -45,6 +47,13 @@ BENCHMARK_VARIANTS: dict[str, VariantSpec] = {
     "autocast_bf16": VariantSpec("autocast_bf16", autocast=True, autocast_dtype="bfloat16"),
     "autocast_fp16": VariantSpec("autocast_fp16", autocast=True, autocast_dtype="float16"),
     "compile_model": VariantSpec("compile_model", compile_model=True),
+    "compile_loss": VariantSpec("compile_loss", compile_loss=True, notes="torch.compile on CombinedPCALoss"),
+    "compile_both": VariantSpec(
+        "compile_both",
+        compile_model=True,
+        compile_loss=True,
+        notes="torch.compile on model + loss",
+    ),
     "fused_adam": VariantSpec("fused_adam", fused_optimizer=True),
     "combo_best": VariantSpec(
         "combo_best",
@@ -80,6 +89,7 @@ def variant_to_performance(spec: VariantSpec) -> dict[str, Any]:
         "autocast": spec.autocast,
         "autocast_dtype": spec.autocast_dtype,
         "compile": spec.compile_model,
+        "compile_loss": spec.compile_loss,
         "fused_optimizer": spec.fused_optimizer,
     }
 
@@ -104,11 +114,15 @@ def autocast_dtype_from_name(name: str) -> torch.dtype:
 
 
 def maybe_compile_model(model: torch.nn.Module, enabled: bool) -> torch.nn.Module:
+    return maybe_compile_module(model, enabled)
+
+
+def maybe_compile_module(module: torch.nn.Module, enabled: bool) -> torch.nn.Module:
     if not enabled:
-        return model
+        return module
     if not hasattr(torch, "compile"):
         raise RuntimeError("torch.compile requires PyTorch 2.0+")
-    return torch.compile(model)
+    return torch.compile(module)
 
 
 def build_optimizer(

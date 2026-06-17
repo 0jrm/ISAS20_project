@@ -1,8 +1,8 @@
 # Patch-Aware Architecture + ML Opt Handoff
 
-**Saved:** 2026-06-17  
-**Branch:** `nespreso-v2-port` (per git status at session start)  
-**Status:** ML optimization benchmark **done**; patch architecture plan **not started**
+**Saved:** 2026-06-17 (updated end-of-session)  
+**Branch:** `nespreso-v2-port`  
+**Status:** Phases 1–4 **done**; Phase 4b **exhausted** (batch, compile_loss, pred_profile_cached all &lt;10% ARGO full-step bar)
 
 ---
 
@@ -12,66 +12,217 @@
 
 | Deliverable | Location |
 |---|---|
-| ML optimization benchmark harness | [`NeSPReSO2_onTemplate/scripts/benchmark_ml_opts.py`](NeSPReSO2_onTemplate/scripts/benchmark_ml_opts.py) |
-| Launch wrapper | [`NeSPReSO2_onTemplate/scripts/launch_benchmark.sh`](NeSPReSO2_onTemplate/scripts/launch_benchmark.sh) |
-| Performance knobs module | [`NeSPReSO2_onTemplate/playground/performance.py`](NeSPReSO2_onTemplate/playground/performance.py) |
-| Optional `performance` config block wired into train | [`train.py`](NeSPReSO2_onTemplate/train.py), [`trainer/trainer.py`](NeSPReSO2_onTemplate/trainer/trainer.py) |
-| Benchmark results + applicability table | [`NeSPReSO2_onTemplate/README.md`](NeSPReSO2_onTemplate/README.md) (ML optimization section) |
-| Result JSONs | `NeSPReSO2_onTemplate/saved/benchmarks/ml_opts_isas_full.json`, `ml_opts_argo_full.json`, `ml_opts_ddp_isas.json` |
+| Final ISAS test eval (patch16 vs baseline15) | `saved/eval_patch16_test.json`, `saved/eval_baseline15_test.json` |
+| Phase 4b `compile_loss` wiring | `playground/performance.py`, `train.py`, `benchmark_ml_opts.py` |
+| ARGO max-batch benchmarks | `saved/benchmarks/batch_size_argo.json`, `ml_opts_argo_maxbatch.json` |
+| `loss_config.mode=pred_profile_cached` | `model/loss.py`, cache preproc, `config_argo_pred_profile_cached.json` |
+| Cached-loss benchmark | `saved/benchmarks/ml_opts_argo_pred_profile_cached.json` |
+| TensorBoard enabled for GoM configs | `config_argo.json`, `config_isas.json`, `config_isas_patch.json` |
 
 ### What is NOT done (next session starts here)
 
-All items below are **pending** — see roadmap Phases 1–5.
+- [ ] **Phase 5 Stage A:** finish AE/KAN decoder training (ISAS + ARGO); compare recon RMSE vs PCA-16
+- [ ] **Phase 5 Stage B:** `DecoderProfileLoss` + latent cache export
+- [ ] **Phase 4c (optional):** ISAS global scale-up + DDP
 
-- [ ] Fix `compute_input_dim()` — currently **ignores** `spatial_pad` / `temporal_pad` (will break patch training silently)
-- [ ] Bump to **16 PCs per variable** (`output_dim=32`); ARGO cache must **refit PCA**, not reuse v2's 15-PC models
-- [ ] Implement `PatchConvMLP` (conv branch ISAS, point branch ARGO)
-- [ ] Add `config_isas_patch.json` (`spatial_pad=2`, `temporal_pad=3`)
-- [ ] Re-benchmark opts on new arch with forward/loss timing split
-- [ ] Phase 5 (later): AE / KAN_Autoencoder as learned latent spaces replacing PCA
+### Training status (GoM, 16-PC + scales)
+
+| Run | Config | Status | Notes |
+|---|---|---|---|
+| `argo16_scales` | `config_argo.json` | **done** (early stop @ 950) | test RMSE temp 0.416°C, sal 0.072 psu |
+| `patch16_scales` | `config_isas_patch.json` | **done** (manual stop @ 3148) | test RMSE temp **1.016**, sal **5.32** |
+| `baseline15pc` | `config_isas.json` | **done** (manual stop @ 1982) | test RMSE temp 1.002, sal 5.53 |
+
+### Eval results (test split, final checkpoints)
+
+| Model | temp RMSE | sal RMSE | Checkpoint maturity |
+|---|---:|---:|---|
+| PatchConvMLP 16-PC patch | **1.016** | **5.32** | final (`model_best`, run stopped @ epoch 3148) |
+| PredictionModel 15-PC point | 1.002 | 5.53 | final (`model_best`, run stopped @ epoch 1982) |
+| PatchConvMLP 16-PC ARGO | **0.416** | **0.072** | final (early stop @ 950) |
+
+Basis differs for ISAS (16 vs 15 PCs). Patch ISAS wins on salinity RMSE; baseline slightly better on temperature (within noise).
+
+### Phase 4b compile_loss results (Jun 2026, ARGO full step)
+
+| Variant | sec/epoch | speedup vs baseline | val_loss |
+|---|---:|---:|---:|
+| baseline | 0.0231 | 1.00× | 0.139 |
+| compile_loss | 0.0226 | 1.02× (~2%) | 0.137 |
+| compile_both | 0.0224 | 1.03× (~3%) | 0.139 |
+
+**Below 10% bar.** All Phase 4b levers exhausted at GoM scale; see batch + cached-loss tables below.
+
+### Phase 4b pred_profile_cached results (Jun 2026, ARGO full step)
+
+| Mode | sec/epoch | speedup vs combined | eval RMSE |
+|---|---:|---:|---|
+| `combined` (default) | 0.0231 | 1.00× | temp 0.416, sal 0.072 |
+| `pred_profile_cached` | 0.0226 | 1.02× (~2%) | **identical** |
+
+Enable via `"loss_config": { "mode": "pred_profile_cached" }`. Cuts half the PCA inverses in profile MSE; still below 10% bar on GoM.
+
+### Phase 4b max batch results (Jun 2026, ARGO full step)
+
+| Setting | batch | batches/epoch | sec/epoch | samples/s (epoch) | per-step samples/s | val_loss |
+|---|---:|---:|---:|---:|---:|---:|
+| `batch_size: 512` (kept in config) | 512 | 6 | 0.0233 | 124.6k | 222k | 0.139 |
+| `batch_size: 0` → auto 2755 | 2755 | 1 | 0.0223 | 129.9k | 773k | 0.258* |
+
+\* val_loss not comparable at equal epoch count (1 vs 6 optimizer steps/epoch). Epoch wall-clock speedup **~4.2%** — below 10% bar. Per-step throughput rises **3.5×** but GoM epoch overhead dominates. **Decision:** keep `config_argo.json` at `batch_size: 512` for v2 parity; use `batch_size: 0` only when maximizing samples/s and accepting 1 step/epoch.
+
+JSON: `saved/benchmarks/batch_size_argo.json`, `saved/benchmarks/ml_opts_argo_maxbatch.json`.
+
+### TensorBoard note
+
+Killed runs had **`tensorboard: false`** — no `events.out.tfevents.*` files exist for them. View curves via `info.log` or `status.json`. TensorBoard is now **enabled** for future GoM runs; logs go to `saved/log/<exper_name>/<run_id>/`.
+
+```bash
+tensorboard --logdir saved/log --port 6006
+```
+
+### Phase 3 benchmark takeaways (Jun 2026, PatchConvMLP)
+
+**ISAS patch** (`ml_opts_isas_patch_forward.json`): baseline forward **0.0254 s/epoch**; best forward `matmul_high` **0.0237 s/epoch** (~**7%**). Full-step best `autocast_fp16` ~7%. **Below 10% threshold — keep FP32 defaults on model.**
+
+**ARGO point** (`ml_opts_argo_forward.json`): baseline forward **0.0139 s/epoch**; best forward `matmul_high` **0.0120 s/epoch** (~**14%** forward-only) but full epoch **0.0241 → 0.0246** (neutral/slower). **Loss + backward dominate; model `performance` block not worth enabling.**
+
+**What “loss-dominated” means:** `CombinedPCALoss` already runs on GPU (`pcs @ components + mean` in [`model/loss.py`](NeSPReSO2_onTemplate/model/loss.py)). ARGO does **four** profile reconstructions per variable per step (pred/true × pred/true profiles) at **16 × 1801** matmuls. Forward is ~42% of epoch time on ARGO; the rest is loss backward + Adam. This is not a CPU sklearn problem — it is **GPU matmul volume in the loss**.
+
+### 16-PC loss scales (derived from caches)
+
+```bash
+python3 scripts/derive_loss_scales.py -c config_isas_patch.json --update-config
+python3 scripts/derive_loss_scales.py -c config_argo.json --update-config
+```
+
+| Tag | `profile_scales` (temp / sal) | `combined_pca_scale` | `combined_mse_scale` |
+|---|---|---:|---:|
+| ISAS patch | 6.0308 / 102.758 | 2.0 | 4.1592 |
+| ARGO point | 2.0029 / 0.0313 | 2.0 | 0.2174 |
+
+Method: per-variable profile MSE at zero-PC init; combined PCA scale = sum of normalized terms (= 2.0 for two outputs).
 
 ### Brutally honest takeaways
 
-1. **The current model is too small to care about GPU tricks.** `PredictionModel` (9→512→512→30, ~283K params) ran **~6–7 batches/epoch** on GoM. Every single-GPU optimization we tested was **neutral or slower** than FP32 baseline. Do not expect `autocast`, `torch.compile`, or `matmul_precision` to help until the forward pass is a real fraction of wall time.
+1. **Tuning the MLP forward pass is the wrong lever on ARGO.** We measured ~14% forward-only gain and **zero** full-epoch gain. The profiler was right: `aten::mm` in PCA reconstruction and `Adam.step` eat the step. A bigger `PatchConvMLP` helps ISAS more than ARGO.
 
-2. **The bottleneck is the loss, not the MLP.** Profiler shows top CUDA time in **`Adam.step`** and **`aten::mm`** from PCA profile reconstruction — especially on ARGO (1801 depth levels). Bigger models on ISAS may help; on ARGO you're mostly optimizing sklearn-inverse-shaped matmuls unless you compile the loss path separately.
+2. **The loss is already on GPU.** “Push it to GPU” is already done. Speedups require **less loss work**, **better batching**, or **compiling/fusing the loss graph** — not moving sklearn to CUDA.
 
-3. **DDP is the only clear win at current scale** — ~1.39× per epoch on ISAS smoke (2 GPU). But that's because each rank sees half the batches, not because the model is compute-heavy. DDP only becomes essential at **global scale** (~881K stations in v1 global logs).
+3. **`PCALoss` is wasteful by construction.** Four inverse transforms per variable per step (`pred` and `true` PCs both reconstructed for both sides of profile MSE). That is ~10× worse on ARGO (1801 levels) than ISAS (187). Any serious speed effort starts here.
 
-4. **Flash attention, ZeRO, tensor parallelism, quantization, KV-cache:** wrong problem. This is tabular regression with PCA loss, not an LLM.
+4. **GoM batch counts are tiny; optimizations have overhead tax.** ISAS patch auto-resolves to **~2 batches/epoch** (batch 3353, train N≈3530). ARGO runs **~6 batches/epoch** at batch 512 but could use **~2755** (VRAM probe). Small epoch = kernel launch + Python + compile warmup dominate.
 
-5. **16 components instead of 15** is a legitimate basis change, not a hack — but it **breaks v2 equivalence** (`selfcheck.py` pins), requires **loss scale re-derivation**, and forces **new cache pickles** for both dataset tags. Budget time for that; don't hand-wave it.
+5. **16-PC was the right science call, not a free speed win.** New caches, new scales, broken v2 pins — all handled — but PCA-16 does not shrink the 1801-deep ARGO inverse.
 
-6. **Patch inputs are wired in preproc but not safe to enable yet** because `train.py` overwrites `input_dim` from the broken `compute_input_dim()`. Turning on `spatial_pad>0` today would train a 9-input model on 306-dim data.
+6. **`compute_input_dim` / patch pipeline: fixed.** Do not repeat the old blocker warning; patch training works. `batch_size=0` needed fixes in benchmark and eval (done).
 
-7. **AE/KAN as PCA replacement is interesting science, not a speed fix.** Defer until PatchConvMLP + PCA-16 works. KAN splines are expensive; you'll trade PCA simplicity for training surface area.
+7. **`performance` block on model: leave off.** ISAS &lt;10% forward threshold; ARGO loss-dominated. Revisit only after Phase 4b compiles **loss** or enlarges batch.
 
-8. **Don't chase optimization benchmarks on GoM.** If the goal is faster training, scale data (global ISAS, larger BBox) or reduce epoch count / early-stop patience before tuning kernels.
+8. **AE/KAN is not a guaranteed speed fix.** It is a **representation change** that *might* let you optimize a smaller decoder graph — or might be slower (KAN splines). Treat as Phase 5 science with a speed go/no-go gate.
+
+9. **DDP still helps wall-clock at scale** (~1.39× seen on ISAS smoke) by splitting batches across ranks — not because the step got cheaper.
+
+10. **Do not chase flash attention / ZeRO / quantization.** Wrong problem entirely.
 
 ### Recommendations (priority order)
 
-1. **Phase 1 first, no shortcuts:** fix `compute_input_dim`, store patch metadata in cache, add 16+16 PCA with ARGO refit. Run `selfcheck.py` after.
-2. **Then PatchConvMLP** with ISAS `spatial_pad=2, temporal_pad=3` and ARGO point mode — one model class, twin configs.
-3. **Re-run benchmark** with `--forward-only` timing (to add) before claiming GPU wins.
-4. **Enable `performance` block only if benchmark proves >10% on forward pass** — default stays FP32.
-5. **Phase 5 (AE/KAN)** only after eval RMSE with PCA-16 patch model is acceptable vs current 15-PC point baseline.
+**Done (Phases 1–3):** patch arch, 16-PC, loss scales, forward-only benchmarks, ARGO E2E.
+
+**Next — Phase 4 wrap-up:**
+1. Finish ISAS train + final eval (`patch16_scales` vs `baseline15pc`).
+2. Document RMSE in README.
+
+**Next — Phase 4b loss-speed (see full roadmap below):**
+1. ~~**Batch size**~~ — **done:** max fit 2755; ~4% epoch speedup vs 512 (below 10% bar); config stays 512.
+2. ~~**Compile loss**~~ — **done:** ~3% ARGO full-step (below 10% bar).
+3. ~~**Cheaper loss variants**~~ — **done:** `loss_config.mode=pred_profile_cached` (~2% ARGO full-step, same eval RMSE); `pc_mse_only` stubbed.
+4. **Phase 5 AE/KAN** — only after PCA-16 eval acceptable; measure decoder FLOPs vs PCA inverse before committing.
 
 ### Quick commands for next session
 
 ```bash
 cd NeSPReSO2_onTemplate
 
-# Verify port still healthy
+# Health
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
 
-# Re-run ML opt sweep (already implemented)
+# Final eval (after training converges)
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 scripts/benchmark_ml_opts.py -c config_isas.json --profile
+  python3 eval_run.py -c config_isas_patch.json \
+  -r saved/models/NeSPReSO2_ISAS_GoM_patch/patch16_scales/model_best.pth --split test
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 eval_run.py -c config_isas.json \
+  -r saved/models/NeSPReSO2_ISAS_GoM/baseline15pc/model_best.pth --split test
 
-# After Phase 1: rebuild caches
-srun --ntasks=1 --cpus-per-task=8 python3 preproc/preproc_isas_sat.py cache config_isas_patch.json --force
-srun --ntasks=1 --cpus-per-task=8 python3 preproc/export_v2_cache.py -c config_argo.json --force
+# Loss scales (if caches change)
+python3 scripts/derive_loss_scales.py -c config_argo.json --update-config
+
+# Forward-only benchmark (already run; re-run after loss changes)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_ml_opts.py -c config_argo.json --forward-only \
+  --out saved/benchmarks/ml_opts_argo_forward.json
+
+# Batch-size probe (ARGO — suggestion 1)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/benchmark_batch_size.py -c config_argo.json
 ```
+
+---
+
+## Phase 4b — Loss-speed roadmap (ARGO-first)
+
+**Problem:** Full training step time is dominated by `CombinedPCALoss` backward through **1801-level** profile reconstructions on ARGO, not by `PatchConvMLP` forward. Model-level `performance` knobs underperform.
+
+**Goal:** Reduce per-step wall time without abandoning dual-dataset parity. ISAS benefits indirectly; ARGO is the pain point.
+
+### Suggestion 1 — Maximize batch size (low risk, do first) — **done Jun 2026**
+
+| Item | Detail |
+|---|---|
+| **What** | ARGO `config_argo.json` uses `batch_size: 512`. VRAM probe confirmed **max fit = 2755** on A100 80GB (~215 MiB peak). ISAS patch auto-probes via `batch_size: 0` → ~3353. |
+| **Result** | Per-step throughput 222k → 773k samples/s (3.5×), but full-epoch wall-clock only **~4.2% faster** (0.0233 → 0.0223 s/epoch) — below 10% bar. Config kept at 512 for v2 parity. |
+| **JSON** | `saved/benchmarks/batch_size_argo.json`, `saved/benchmarks/ml_opts_argo_maxbatch.json` |
+
+### Suggestion 2 — Compile the loss path, not just the model (medium risk)
+
+| Item | Detail |
+|---|---|
+| **What** | `performance.compile` today wraps only `PatchConvMLP`. Extend benchmark/train to compile **`CombinedPCALoss`** or the entire forward+loss callable used in the training step. |
+| **Why it helps** | Profiler top ops are `aten::mm` inside `PCALoss.forward` — exactly what `torch.compile` targets. Forward-only ARGO gain was 14% but lost in full step; compiling loss+backward may capture it. |
+| **Work** | Add `performance.compile_loss: true` in config; in `train.py` / `benchmark_ml_opts.py`, `criterion = maybe_compile_model(criterion, True)`; add `--profile` loss-top-ops; benchmark ARGO full step vs forward-only. |
+| **Honest expectation** | **Uncertain.** Compile warmup hurts tiny GoM runs. May help more when batch is large and step count is high. First compile can be slower than baseline — measure steady-state after warmup. |
+| **Risk** | Medium. Compile + dynamic shapes + `torch.autocast` interactions need testing. Validate `val_loss` drift (benchmark already flags &gt;1%). |
+
+### Suggestion 3 — Reduce loss FLOPs (higher risk — changes objective)
+
+| Item | Detail |
+|---|---|
+| **What** | `PCALoss` reconstructs **both** pred and true PCs into profile space every step. Cheaper variants: |
+| | **(a)** `weighted_mse_only` — drop profile MSE branch; train on PC space only (fast, but diverges from v2 objective). |
+| | **(b)** `pred_profile_mse` — reconstruct **pred only**, compare to **precomputed true profiles** cached in GPU tensors (cuts inverses in half). |
+| | **(c)** `depth_masked_loss` — MSE only on valid depth levels (helps ISAS NaN salinity; fewer wasted FLOPs on zero-filled PCA fit). |
+| | **(d)** Fuse `true` branch — true profiles are constant per sample; cache `true_profiles` in cache pickle, stop re-inverse-transforming targets every step. |
+| **Work** | Add `loss.mode` in config (`combined` / `pc_mse_only` / `pred_profile_cached`); implement in [`model/loss.py`](NeSPReSO2_onTemplate/model/loss.py); `selfcheck.py` golden update; eval RMSE comparison required. |
+| **Honest expectation** | **(d)** is the best speed/quality trade — same math, fewer matmuls. **(a)** is fastest but may hurt profile RMSE. **(b)/(c)** need careful NaN handling on ISAS. |
+| **Risk** | High for (a); medium for (b–d). Any change breaks v2 loss parity — document and re-derive scales. |
+
+### Suggestion 6 — Phase 5 learned latent (AE / KAN) (science bet, speed TBD)
+
+| Item | Detail |
+|---|---|
+| **What** | Replace sklearn PCA inverse with a **frozen MLP decoder** trained per tag (ISAS 187-deep, ARGO 1801-deep). Surface model still predicts 16-d latent; loss = decoder(latent) vs true profile. |
+| **Why it might help** | Decoder can be **narrower** than full PCA matrix if bottleneck is structured; `torch.compile` on a small decoder may beat four sparse PCA inverses. Latent training is 16-d — matmul-friendly. |
+| **Why it might not** | AE decoder still maps 16→1801 every step — same output shape as PCA. **KAN splines are expensive**; default `KAN_Autoencoder` may be slower than PCA. Two-stage pipeline adds ops burden. |
+| **Work** | Stage A: train/freeze AE per tag (mask-aware). Stage B: export latent targets to cache; swap `CombinedPCALoss` for `DecoderProfileLoss`. Compare RMSE **and** `benchmark_ml_opts.py` full step. |
+| **Honest expectation** | **Science first, speed second.** Only pursue if PCA-16 eval is acceptable **and** compiled decoder beats PCA inverse in A/B benchmark. Otherwise keep PCA. |
+| **Risk** | High complexity. Per-tag decoders, NaN masks, depth grid mismatch ISAS vs ARGO. Do not start until Phase 4 eval is signed off. |
+
+### Phase 4b success criteria
+
+1. ARGO full-step benchmark shows **≥10% speedup** from at least one of: max batch, compile-loss, or cached-true-profile loss — **without** val_loss drift &gt;1%.
+2. If none hit 10%, document that GoM ARGO is **fast enough** and reserve optimizations for global scale.
+3. Phase 5 go/no-go doc: decoder vs PCA inverse on RMSE **and** sec/step.
 
 ---
 
@@ -79,13 +230,16 @@ srun --ntasks=1 --cpus-per-task=8 python3 preproc/export_v2_cache.py -c config_a
 
 | ID | Status | Task |
 |---|---|---|
-| `fix-input-dim` | pending | Fix `compute_input_dim`; patch metadata in cache; selfcheck validation |
-| `pca-16-components` | pending | 16 PCs per var; ARGO PCA refit; loss scales; new selfcheck pins |
-| `implement-patch-conv-mlp` | pending | `PatchConvMLP` in `model/model.py` |
-| `patch-configs` | pending | `config_isas_patch.json` + twin ARGO config |
-| `rebenchmark-arch` | pending | Extend benchmark for new arch + forward/loss split |
-| `run-compare-document` | pending | Train smoke, benchmark, README update |
-| `ae-kan-latent-roadmap` | pending | Phase 5: AE/KAN latent spaces vs PCA-16 |
+| `fix-input-dim` | **done** | Fix `compute_input_dim`; patch metadata in cache; selfcheck validation |
+| `pca-16-components` | **done** | 16 PCs per var; ARGO PCA refit; loss scales derived; selfcheck passes |
+| `implement-patch-conv-mlp` | **done** | `PatchConvMLP` in `model/model.py` |
+| `patch-configs` | **done** | `config_isas_patch.json` + twin ARGO config |
+| `rebenchmark-arch` | **done** | Forward-only benchmarks on patch + ARGO configs |
+| `run-compare-document` | **done** | ARGO + ISAS eval complete; patch16 wins sal RMSE |
+| `loss-speed-batch` | **done** | ARGO max batch probed (2755); ~4% epoch speedup vs 512 — below 10% bar; config stays 512 |
+| `loss-speed-compile` | **done** | `torch.compile` on `CombinedPCALoss` — ~3% ARGO full-step (&lt;10% bar) |
+| `loss-speed-cheaper` | **done** | Cached true profiles / `loss_config.mode=pred_profile_cached` — ~2% ARGO full-step (0.0230→0.0226 s/epoch); eval RMSE identical; val_loss drift ~1.2% in 100-epoch bench noise |
+| `ae-kan-latent-roadmap` | **in progress** | Stage A: `scripts/train_profile_ae.py` — see [PLAN-phase5.md](PLAN-phase5.md) |
 
 ---
 
@@ -128,7 +282,7 @@ The satellite patch pipeline is **ready** in [`preproc/preproc_isas_sat.py`](NeS
 - v1 global path exists via legacy `preprocess_data()` + [`preproc_isas_confiv.json`](NeSPReSO2_onTemplate/preproc/preproc_isas_confiv.json) (881K stations; throughput play)
 - ARGO [`export_v2_cache.py`](NeSPReSO2_onTemplate/preproc/export_v2_cache.py) exports **point inputs** from v2 pickle (~9 dims today); patches not required for dual-dataset parity
 
-**Blocker discovered:** [`compute_input_dim()`](NeSPReSO2_onTemplate/preproc/preproc_isas_sat.py) only counts feature flags and **ignores `spatial_pad` / `temporal_pad`**. [`train.py`](NeSPReSO2_onTemplate/train.py) overwrites `arch.input_dim` with this value, so enabling patches would silently mismatch model vs cache. This must be fixed before any patch experiment.
+**Blocker (resolved):** `compute_input_dim()` now includes `spatial_pad` / `temporal_pad`; patch training validated via `selfcheck.py` and smoke runs.
 
 ```mermaid
 flowchart TB
@@ -210,9 +364,9 @@ Apply the **16+16 PC change to both** patch configs so dual-dataset comparison s
 
 ### Throughput path
 
-1. **Near term (GoM ~5K profiles):** DDP (~1.39× seen already) + optional `performance.compile` on `PatchConvMLP`
-2. **Medium term:** ISAS v1 global or larger BBox → many more batches/epoch; DDP + fused Adam + autocast become essential
-3. **ARGO note:** 1801-level PCA inverse in loss will still dominate unless batch size grows or loss is compiled separately — do not expect ARGO to show the same forward-pass speedup as ISAS patch runs
+1. **Near term (GoM):** Do **not** enable model `performance` block (benchmarked &lt;10% on ISAS forward). Pursue **Phase 4b loss-speed** instead: max batch on ARGO, compile loss, cheaper loss variants.
+2. **Medium term:** ISAS v1 global or larger BBox → more batches/epoch; DDP (~1.39× seen) + Phase 4b wins compound.
+3. **ARGO note:** 1801-level PCA inverse in loss dominates full-step time. Forward-only opts showed ~14% gain that **vanished** in full epoch — optimize loss graph, not MLP.
 
 ---
 
@@ -251,14 +405,35 @@ Extend [`scripts/benchmark_ml_opts.py`](NeSPReSO2_onTemplate/scripts/benchmark_m
 
 Expected outcome: ISAS patch conv model shows **largest speedup** from `autocast`/`compile`/`matmul_high`; ARGO point mode remains loss-dominated; DDP helps both when scaling N.
 
-### Phase 4 — Optional throughput scale-up
+### Phase 4 — GoM train + eval (in progress)
+
+- ISAS patch + 15-PC baseline training running; ARGO **complete** (early stop @ 950)
+- Final `eval_run.py` on converged checkpoints; interim eval favors patch16 on ISAS
+- README update with RMSE table
+
+### Phase 4b — Loss-speed (next engineering priority)
+
+See **Phase 4b — Loss-speed roadmap** at top of this doc. Summary:
+
+| # | Suggestion | Risk | Expected impact |
+|---|---|---|---|
+| 1 | Max batch size (ARGO) | Low | **Measured ~4% epoch** (below 10% bar); config stays 512 |
+| 2 | `torch.compile` on `CombinedPCALoss` | Medium | Uncertain; targets real bottleneck |
+| 3 | Cheaper loss (`cached true profiles`, `loss.mode`) | Medium–high | Best quality/speed trade via (d) |
+| 6 | AE/KAN learned latent (Phase 5) | High | Science bet; speed not guaranteed |
+
+### Phase 4c — Optional global throughput scale-up
 
 - Add `config_isas_global.json` pointing at v1 global HDF5 + legacy richer `input_params` (wind, bathymetry) when data is available on host
 - Train with DDP + `performance` block enabled; compare wall-clock to dual GoM runs
 
-### Phase 5 — Learned latent spaces (post-roadmap; explore AE / KAN alternatives to PCA)
+### Phase 5 — Learned latent spaces (Suggestion 6; science + speed go/no-go)
 
-**Goal:** Replace fixed sklearn PCA with a **learned profile encoder** as the objective representation space, while keeping the surface → latent → profile reconstruction training pattern.
+**Goal:** Replace fixed sklearn PCA with a **learned profile decoder** as the objective representation space, while keeping the surface → latent → profile reconstruction training pattern.
+
+**Speed hypothesis (honest):** A frozen 16→1801 decoder *might* beat four PCA inverses per step when compiled — but it still materializes full-depth profiles every backward pass. **KAN is likely slower than PCA.** Treat speed as a hypothesis to benchmark, not a promise.
+
+**Gate:** Do not start until Phase 4 ISAS eval is signed off **and** Phase 4b (Suggestions 1–3) fails to hit 10% full-step speedup on ARGO.
 
 **Candidates already in repo:**
 - [`Autoencoder`](NeSPReSO2_onTemplate/model/model.py) — classic MLP encoder/decoder on depth profiles (ISAS 187 / ARGO 1801)
@@ -286,9 +461,9 @@ flowchart LR
 | A2 | Export latent targets into train cache (replace PCA `targets` + `pca_models`) |
 | A3 | Swap `CombinedPCALoss` for **decoder-based profile loss** (reuse `torch_reconstruct_profile` pattern with learned decoder weights) |
 | A4 | Compare eval RMSE: PCA-16 vs AE-16 vs KAN-16 on ISAS and ARGO |
-| A5 | Re-run ML opt benchmarks — AE decoder matmuls at 16-dim latent may benefit more from `autocast`/`compile` than sklearn PCA path |
+| A5 | Re-run ML opt benchmarks — **only count as speed win if full-step ≥10%**, not forward-only |
 
-**Defer until:** PatchConvMLP + 16-PC PCA path is stable and benchmarked (Phases 1–4). AE/KAN adds training complexity (masking, depth-grid differences ISAS vs ARGO, per-tag decoders).
+**Defer until:** PatchConvMLP + PCA-16 eval acceptable; Phase 4b cheaper-loss options exhausted or rejected on RMSE grounds.
 
 ---
 
@@ -303,11 +478,12 @@ flowchart LR
 
 ## Success criteria
 
-1. ISAS patch + ARGO point train end-to-end with **one model class**, **32-d latent output (16+16 PCs)**, and existing eval path
-2. `PatchConvMLP` ISAS run shows **measurable forward-pass speedup** (target: >10%) from at least one of `autocast_bf16`, `matmul_high`, or `compile` in benchmark harness
-3. `eval_run.py` val/test RMSE **not worse** than current `PredictionModel` 15-PC point baseline on ISAS (acknowledge basis change; compare within 16-PC regime)
-4. `selfcheck.py` passes with updated 16-PC pins
-5. **(Phase 5, later)** AE/KAN latent prototype documented with go/no-go vs PCA-16 on at least ISAS tag
+1. ISAS patch + ARGO point train end-to-end with **one model class**, **32-d latent output (16+16 PCs)**, and existing eval path — **ARGO done; ISAS in progress**
+2. `PatchConvMLP` ISAS forward-pass speedup measured — **~7%, below 10% bar**; model `performance` block stays off
+3. `eval_run.py` val/test RMSE **not worse** than 15-PC point baseline on ISAS — **interim test RMSE favors patch16** (basis differs)
+4. `selfcheck.py` passes with updated 16-PC pins — **done**
+5. **Phase 4b:** ARGO full-step speedup ≥10% from batch / compile-loss / cached-profile loss, or documented as unnecessary at GoM scale
+6. **(Phase 5)** AE/KAN prototype with RMSE **and** sec/step go/no-go vs PCA-16
 
 ---
 

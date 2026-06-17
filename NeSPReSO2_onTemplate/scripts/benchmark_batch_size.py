@@ -71,6 +71,9 @@ def _build_stack(config: ConfigParser, device: torch.device):
         density_config=config.config.get("density"),
         density_meta=density_meta,
         loss_scales=config.config.get("loss_scales"),
+        loss_config=config.config.get("loss_config"),
+        targets=cache["targets"],
+        true_profiles=cache.get("true_profiles"),
     )
 
     optimizer_factory = lambda: build_optimizer(

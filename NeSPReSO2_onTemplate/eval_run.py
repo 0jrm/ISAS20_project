@@ -20,6 +20,26 @@ from playground import prepare_device, read_json
 from train import ensure_cache, set_seed
 
 
+def _resolve_eval_batch_size(dl_args: dict, split: str) -> None:
+    """``batch_size=0`` means one batch over the whole split (inference-only)."""
+    if int(dl_args.get("batch_size", 512)) > 0:
+        return
+    import pickle
+
+    with open(dl_args["cache_path"], "rb") as f:
+        n = int(pickle.load(f)["inputs"].shape[0])
+    train_frac = float(dl_args.get("train_frac", 0.7))
+    val_frac = float(dl_args.get("val_frac", 0.15))
+    test_frac = float(dl_args.get("test_frac", 0.15))
+    if abs(train_frac + val_frac + test_frac - 1.0) > 1e-6:
+        raise ValueError("train_frac + val_frac + test_frac must equal 1")
+    train_len = int(n * train_frac)
+    val_len = int(n * val_frac)
+    test_len = n - train_len - val_len
+    split_lens = {"train": train_len, "val": val_len, "test": test_len}
+    dl_args["batch_size"] = max(1, split_lens[split])
+
+
 def raw_profile_rmse(pred_pcs, true_profiles, pca_models, outputs, indices):
     """RMSE in physical space vs cache ``profiles`` (not PCA-reconstructed targets)."""
     pred = sklearn_inverse_transform_pcs(pred_pcs, pca_models, outputs)
@@ -38,6 +58,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
     dl_args = dict(config["data_loader"]["args"])
     dl_args["split"] = split
     dl_args["shuffle"] = False
+    _resolve_eval_batch_size(dl_args, split)
     data_loader = getattr(module_data, config["data_loader"]["type"])(**dl_args)
 
     if not data_loader.profiles:
@@ -69,6 +90,10 @@ def main(config, checkpoint_path: str, split: str = "test"):
             min_depth=data_loader.min_depth,
             max_depth=data_loader.max_depth,
         ),
+        loss_scales=config.config.get("loss_scales"),
+        loss_config=config.config.get("loss_config"),
+        targets=data_loader.cache["targets"],
+        true_profiles=data_loader.cache.get("true_profiles"),
     )
 
     total_loss = 0.0

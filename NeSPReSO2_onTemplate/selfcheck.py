@@ -141,7 +141,7 @@ def test_combined_pca_loss_v2():
     weights = np.ones(2 * n_components, dtype=np.float64)
     device = torch.device("cpu")
 
-    combined = CombinedPCALoss(pca_models, outputs, weights, device)
+    combined = CombinedPCALoss(pca_models, outputs, weights, device, mode="combined")
     combined.eval()
     pcs = torch.tensor(pred_np, dtype=torch.float32)
     targets = torch.tensor(pcs_np, dtype=torch.float32)
@@ -157,6 +157,49 @@ def test_combined_pca_loss_v2():
     assert np.isclose(weighted_mse.item(), GOLDEN["weighted_mse_loss"], rtol=0, atol=TOL)
     assert np.allclose(recon_t[0, :5].numpy(), GOLDEN["recon_temp_head"], rtol=0, atol=TOL)
     assert np.allclose(recon_s[0, :5].numpy(), GOLDEN["recon_sal_head"], rtol=0, atol=TOL)
+
+
+def test_pred_profile_cached_matches_combined():
+    from model.loss import make_loss
+
+    pca_temp, pca_sal, temp_pcs, sal_pcs, n_components = _synthetic_pca_pair()
+    full_pcs = np.hstack([temp_pcs, sal_pcs]).astype(np.float32)
+    pred_np = full_pcs[:4] + np.array([[0.1, -0.05, 0.02, 0.03, -0.01, 0.04]], dtype=np.float32)
+    outputs = OrderedDict([("temperature", n_components), ("salinity", n_components)])
+    pca_models = {"temperature": pca_temp, "salinity": pca_sal}
+    weights = np.ones(2 * n_components, dtype=np.float64)
+    device = torch.device("cpu")
+
+    combined = make_loss(
+        pca_models=pca_models,
+        outputs=outputs,
+        weights=weights,
+        device=device,
+        loss_config={"mode": "combined"},
+    )
+    cached = make_loss(
+        pca_models=pca_models,
+        outputs=outputs,
+        weights=weights,
+        device=device,
+        loss_config={"mode": "pred_profile_cached"},
+        targets=full_pcs,
+    )
+    combined.eval()
+    cached.eval()
+
+    pcs = torch.tensor(pred_np, dtype=torch.float32)
+    targets = torch.tensor(full_pcs[:4], dtype=torch.float32)
+    indices = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+
+    with torch.no_grad():
+        loss_combined = combined(pcs, targets, indices)
+        loss_cached = cached(pcs, targets, indices)
+        pca_combined = combined.pca_loss(pcs, targets)
+        pca_cached = cached.pca_loss(pcs, targets, indices)
+
+    assert np.allclose(loss_combined.item(), loss_cached.item(), rtol=0, atol=1e-5)
+    assert np.allclose(pca_combined.item(), pca_cached.item(), rtol=0, atol=1e-5)
 
 
 def test_pca_round_trip():
@@ -339,6 +382,7 @@ if __name__ == "__main__":
     test_patch_conv_mlp_patch_mode()
     test_prediction_model_v2()
     test_combined_pca_loss_v2()
+    test_pred_profile_cached_matches_combined()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
     test_split_matches_torch_seed()

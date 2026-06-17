@@ -19,6 +19,11 @@ def validate_config(config):
     if density.get("enabled"):
         assert os.path.isfile(density["checkpoint"]), f"missing density checkpoint: {density['checkpoint']}"
         assert os.path.isfile(density["stats_path"]), f"missing density stats: {density['stats_path']}"
+    loss_cfg = config.get("loss_config") or {}
+    mode = loss_cfg.get("mode", "combined")
+    from model.loss import VALID_LOSS_MODES
+
+    assert mode in VALID_LOSS_MODES, f"loss_config.mode must be one of {VALID_LOSS_MODES}, got {mode!r}"
     if config.get("performance"):
         from playground.performance import get_performance_config
 

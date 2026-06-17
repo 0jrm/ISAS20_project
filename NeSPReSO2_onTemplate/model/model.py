@@ -289,14 +289,14 @@ class Decoder(nn.Module):
 
 
 class KAN_Autoencoder(nn.Module):
-    def __init__(self, encoding_dim):
+    def __init__(self, encoding_dim, input_dim=187, hidden_size=64):
         super(KAN_Autoencoder, self).__init__()
-        input_size = 187  # Number of levels
-        hidden_size = 64
+        self.encoding_dim = encoding_dim
+        self.input_dim = input_dim
         bottleneck_size = encoding_dim
 
-        self.encoder = Encoder(input_size, hidden_size, bottleneck_size)
-        self.decoder = Decoder(bottleneck_size, hidden_size, input_size)
+        self.encoder = Encoder(input_dim, hidden_size, bottleneck_size)
+        self.decoder = Decoder(bottleneck_size, hidden_size, input_dim)
 
     def forward(self, x, mask=None):
         # Store original values for masked points

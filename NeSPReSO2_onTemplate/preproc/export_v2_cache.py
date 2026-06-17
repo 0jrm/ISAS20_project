@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
-from model.loss import get_pca_weights
+from model.loss import get_pca_weights, true_profiles_numpy
 from preproc.preproc_isas_sat import config_hash, write_train_cache
 
 
@@ -107,6 +107,7 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
         "outputs": outputs,
         "weights": weights,
         "profiles": profiles,
+        "true_profiles": true_profiles_numpy(targets, pca_models, outputs),
         "LAT": ds.LAT.astype(np.float32),
         "LON": ds.LON.astype(np.float32),
         "PRES": pres,

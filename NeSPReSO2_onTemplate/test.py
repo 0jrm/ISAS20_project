@@ -55,6 +55,9 @@ def main(config):
         device=device,
         density_config=config.config.get("density"),
         density_meta=density_meta,
+        loss_config=config.config.get("loss_config"),
+        targets=data_loader.cache["targets"],
+        true_profiles=data_loader.cache.get("true_profiles"),
     )
 
     total_loss = 0.0
