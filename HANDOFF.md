@@ -27,7 +27,7 @@ GoM dissertation NeSPReSO: **ARGO/CORA subsurface targets**, **mask-native L3 su
 | 3 L3 pipeline | 7–9 | **Done** | `download_l3_products.py`, `l3_rasterize.py`, `export_l3_cache.py`, `build_l3_samples.py` |
 | 4 L4 augmentation | 10 | **Scaffolded** | `preproc/l4_augment.py`, `io.l4` in config (disabled) |
 | 5 L3 model channels | 11 | **Done** | `l3_input.py`, `train.py` L3 cache branch, PatchConvMLP 15-ch patches |
-| 6 Stratified eval | 12 | **Pending** | — |
+| 6 Stratified eval | 12 | **Done** | `eval_stratified.py` — RMSE/bias by L3 coverage, track distance, census year subsets |
 | 7+ Diagnostics / physics / ensemble | 13–15 | **Pending** | — |
 
 ### Merged from `nespreso-v2-port` (legacy ISAS appendix)
@@ -98,6 +98,11 @@ srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
 
 # L3 mask-native smoke train (2 epochs)
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l3_smoke.json
+
+# Stratified eval (needs trained checkpoint paired with its cache)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 eval_stratified.py \
+  -c config_argo_l3_smoke.json -r saved/smoke_argo_l3/checkpoint-epoch2.pth \
+  --split test --out saved/eval_stratified_l3_smoke.json --md-out saved/eval_stratified_l3_smoke.md
 ```
 
 ---
@@ -116,6 +121,7 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l
 | `preproc/l4_augment.py` | L4 mask/noise augment scaffold (Phase 4) |
 | `config_argo_l3_smoke.json` | L3 patch smoke (15-ch, chronological) |
 | `config_argo_chrono_dates.json` | Explicit date split alternative |
+| `eval_stratified.py` | Stratified RMSE/bias by L3 coverage, track distance, census subsets |
 
 ---
 
@@ -154,11 +160,10 @@ cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project-phase3-co
 
 ## Next coding tasks (priority order)
 
-1. **Phase 6 — stratified eval** — RMSE/bias by L3 `coverage_fraction`, `nearest_track_km`, and census subsets (2020 high-obs vs 2015–2018 sparse).
-2. **`diagnostics/readiness.py`** — static-stability readiness from predicted profiles.
-3. **Phase 4 full path** — apply real L3 mask libraries to L4 fields; wire `io.l4.enabled` into sample builder with source flags.
-4. Download real SSH + ERA5 for 2020 window; rebuild L3 cache with `--force`; verify non-zero mask cells.
-5. SST L3U / SMAP (post-MVP).
+1. **`diagnostics/readiness.py`** — static-stability readiness from predicted profiles.
+2. **Phase 4 full path** — apply real L3 mask libraries to L4 fields; wire `io.l4.enabled` into sample builder with source flags.
+3. Download real SSH + ERA5 for 2020 window; rebuild L3 cache with `--force`; verify non-zero mask cells.
+4. SST L3U / SMAP (post-MVP).
 
 ---
 

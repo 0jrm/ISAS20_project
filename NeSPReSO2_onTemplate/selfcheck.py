@@ -739,6 +739,72 @@ def test_raw_profile_rmse_decoder_indexing():
     assert abs(rmse["temperature"] - 0.5) < 1e-6
 
 
+def test_stratified_eval_bins_and_aggregate():
+    from eval_stratified import (
+        bin_coverage,
+        bin_track_km,
+        build_strata_masks,
+        pooled_stratum_metrics,
+    )
+
+    assert bin_coverage(0.0) == "zero"
+    assert bin_coverage(0.005) == "trace"
+    assert bin_coverage(0.02) == "low"
+    assert bin_track_km(10.0) == "0-25km"
+    assert bin_track_km(float("nan")) == "missing"
+
+    years = np.array([2015, 2020, 2018], dtype=int)
+    masks = build_strata_masks(
+        years=years,
+        coverage=np.array([0.0, 0.02, 0.0]),
+        track_km=np.array([10.0, 80.0, np.nan]),
+    )
+    assert masks["subset_high_observation_2020"].tolist() == [False, True, False]
+    assert masks["coverage_zero"].tolist() == [True, False, True]
+
+    pred = {"temperature": np.array([[0.0, 1.0], [0.0, 3.0]])}
+    true = {"temperature": np.array([[0.0, 0.0], [0.0, 0.0]])}
+    stats = pooled_stratum_metrics(pred, true, np.array([True, True]))
+    assert abs(stats["rmse"]["temperature"] - np.sqrt((1.0**2 + 3.0**2) / 4)) < 1e-9
+    assert stats["n"] == 2
+
+
+def test_stratified_eval_l3_cache_smoke():
+    """Build tiny L3 cache and verify strata masks + report shape without a checkpoint."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    cfg_path = root / "config_argo_l3_smoke.json"
+    if not cfg_path.is_file():
+        return
+    from playground import read_json
+    from preproc.export_l3_cache import build_argo_l3_train_cache
+
+    from eval_stratified import build_strata_masks, extract_l3_metrics, sample_years
+
+    cfg = read_json(cfg_path)
+    cache_path = build_argo_l3_train_cache(cfg, force=True, max_samples=8)
+    import pickle
+
+    with open(cache_path, "rb") as f:
+        cache = pickle.load(f)
+    indices = list(range(8))
+    l3 = extract_l3_metrics(cache, indices)
+    assert l3["ssh_coverage_fraction"].shape == (8,)
+    years = sample_years(
+        cache,
+        indices,
+        dataset_tag=cfg["io"]["dataset_tag"],
+        v2_src=cfg["io"].get("v2_src"),
+    )
+    masks = build_strata_masks(
+        years=years,
+        coverage=l3["ssh_coverage_fraction"],
+        track_km=l3["nearest_track_km"],
+    )
+    assert masks["all"].sum() == 8
+
+
 def test_results_table_smoke():
     from pathlib import Path
 
@@ -769,6 +835,8 @@ if __name__ == "__main__":
     test_decoder_profile_loss()
     test_decoder_profile_loss_nan_mask()
     test_raw_profile_rmse_decoder_indexing()
+    test_stratified_eval_bins_and_aggregate()
+    test_stratified_eval_l3_cache_smoke()
     test_results_table_smoke()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
