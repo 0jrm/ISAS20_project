@@ -59,15 +59,28 @@ def pca_baseline_rmse(profiles: np.ndarray, mask: np.ndarray, n_comp: int) -> fl
     return float(np.sqrt(np.mean(err[valid])))
 
 
-def build_ae(arch: str, encoding_dim: int, input_dim: int) -> nn.Module:
-    if arch == "Autoencoder":
+def build_ae(arch: str, encoding_dim: int, input_dim: int, *, layer_scale: int = 1) -> tuple[nn.Module, list[int], list[int]]:
+    if arch in ("Autoencoder", "ResAutoencoder"):
         enc = [min(512, max(128, input_dim // 4)), 128, 64]
         dec = [64, 128, min(512, max(128, input_dim // 4))]
-        return module_arch.Autoencoder(
-            encoding_dim, encoder_layers=enc, decoder_layers=dec, input_dim=input_dim
+        if layer_scale != 1:
+            enc = [h * layer_scale for h in enc]
+            dec = [h * layer_scale for h in dec]
+        use_residual = arch == "ResAutoencoder"
+        cls = module_arch.ResAutoencoder if use_residual else module_arch.Autoencoder
+        return (
+            cls(
+                encoding_dim,
+                encoder_layers=enc,
+                decoder_layers=dec,
+                input_dim=input_dim,
+                residual=use_residual,
+            ),
+            enc,
+            dec,
         )
     if arch == "KAN_Autoencoder":
-        return module_arch.KAN_Autoencoder(encoding_dim, input_dim=input_dim)
+        return module_arch.KAN_Autoencoder(encoding_dim, input_dim=input_dim), [], []
     raise ValueError(f"unknown arch {arch!r}")
 
 
@@ -83,6 +96,7 @@ def train_variable(
     lr: float,
     val_frac: float,
     seed: int,
+    layer_scale: int = 1,
 ) -> tuple[nn.Module, dict]:
     n, depth = profiles.shape
     rng = np.random.default_rng(seed)
@@ -101,7 +115,8 @@ def train_variable(
     train_loader = DataLoader(TensorDataset(x_train, m_train), batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(TensorDataset(x_val, m_val), batch_size=batch_size, shuffle=False)
 
-    model = build_ae(arch, encoding_dim, depth).to(device)
+    model, enc_layers, dec_layers = build_ae(arch, encoding_dim, depth, layer_scale=layer_scale)
+    model = model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = MaskedMSELoss()
 
@@ -139,7 +154,16 @@ def train_variable(
         valid = ~mv
         rmse = torch.sqrt(((recon - xv) ** 2 * valid.float()).sum() / valid.float().sum()).item()
 
-    stats = {"val_rmse": rmse, "best_val_loss": best_val, "n_train": len(train_idx), "n_val": n_val, "depth": depth}
+    stats = {
+        "val_rmse": rmse,
+        "best_val_loss": best_val,
+        "n_train": len(train_idx),
+        "n_val": n_val,
+        "depth": depth,
+        "encoder_layers": enc_layers,
+        "decoder_layers": dec_layers,
+        "layer_scale": layer_scale,
+    }
     return model, stats
 
 
@@ -147,8 +171,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Train profile autoencoder (Phase 5 Stage A)")
     parser.add_argument("-c", "--config", required=True, type=str)
     parser.add_argument("--cache", default=None, type=str, help="override cache pickle path")
-    parser.add_argument("--arch", default="Autoencoder", choices=["Autoencoder", "KAN_Autoencoder"])
+    parser.add_argument("--arch", default="Autoencoder", choices=["Autoencoder", "ResAutoencoder", "KAN_Autoencoder"])
     parser.add_argument("--encoding-dim", type=int, default=16)
+    parser.add_argument("--layer-scale", type=int, default=1, help="multiply AE hidden layer widths")
+    parser.add_argument("--arch-tag", default=None, help="subdir under out-dir/TAG/ (default: --arch)")
     parser.add_argument("--variable", default="all", help="temperature | salinity | all")
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -181,12 +207,15 @@ def main() -> int:
     tag = cache.get("dataset_tag", config_dict["io"].get("dataset_tag", "unknown"))
     seed = int(config_dict.get("seed", 42))
 
+    arch_tag = args.arch_tag or args.arch
     summary = {
         "config": str(config_path),
         "cache": cache_path,
         "dataset_tag": tag,
         "arch": args.arch,
+        "arch_tag": arch_tag,
         "encoding_dim": args.encoding_dim,
+        "layer_scale": args.layer_scale,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "variables": {},
     }
@@ -213,11 +242,12 @@ def main() -> int:
             lr=args.lr,
             val_frac=args.val_frac,
             seed=seed,
+            layer_scale=args.layer_scale,
         )
         stats["pca_recon_rmse"] = pca_rmse
         print(f"AE val RMSE: {stats['val_rmse']:.6f}  (PCA baseline: {pca_rmse:.6f})")
 
-        out_dir = Path(args.out_dir) / tag / args.arch / name
+        out_dir = Path(args.out_dir) / tag / arch_tag / name
         out_dir.mkdir(parents=True, exist_ok=True)
         ckpt = {
             "arch": args.arch,
@@ -225,6 +255,10 @@ def main() -> int:
             "input_dim": prof.shape[1],
             "variable": name,
             "dataset_tag": tag,
+            "encoder_layers": stats.get("encoder_layers"),
+            "decoder_layers": stats.get("decoder_layers"),
+            "layer_scale": args.layer_scale,
+            "residual": args.arch == "ResAutoencoder",
             "state_dict": model.state_dict(),
             "stats": stats,
         }
@@ -232,7 +266,7 @@ def main() -> int:
         (out_dir / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
         summary["variables"][name] = {"out_dir": str(out_dir), **stats}
 
-    summary_path = Path(args.out_dir) / tag / args.arch / "summary.json"
+    summary_path = Path(args.out_dir) / tag / arch_tag / "summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")
     print(f"\nWrote {summary_path}")

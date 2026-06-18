@@ -4,6 +4,36 @@ import torch.nn.functional as F
 from base import BaseModel
 import math
 
+
+class ResidualLinearBlock(nn.Module):
+    """Linear block with a projection shortcut when widths differ."""
+
+    def __init__(self, in_dim, out_dim, dropout_prob=0.0):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, out_dim)
+        self.dropout = nn.Dropout(dropout_prob) if dropout_prob > 0 else nn.Identity()
+        self.skip = nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
+
+    def forward(self, x):
+        return F.relu(self.fc(x)) + self.skip(x)
+
+
+class ResidualConvBlock(nn.Module):
+    """Two-layer conv block with a 1x1 shortcut when channels differ."""
+
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+        )
+        self.skip = nn.Identity() if in_ch == out_ch else nn.Conv2d(in_ch, out_ch, kernel_size=1, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        return self.relu(self.conv(x) + self.skip(x))
+
 class FFNN(BaseModel):
     def __init__(self, input_dim=1, layers_config=[512, 256], output_dim=30, dropout_prob = 0.5, activation = nn.ReLU()):
         super(FFNN, self).__init__()
@@ -67,6 +97,7 @@ class PatchConvMLP(BaseModel):
         patch_shape=None,
         n_enc=6,
         n_sat=3,
+        residual=False,
         **kwargs,
     ):
         super().__init__()
@@ -80,6 +111,7 @@ class PatchConvMLP(BaseModel):
         self.n_enc = n_enc
         self.n_sat = n_sat
         self.d_model = d_model
+        self.residual = bool(residual)
         self.patch_shape = tuple(patch_shape) if patch_shape else None
 
         self.enc_proj = nn.Linear(n_enc, d_model)
@@ -95,27 +127,48 @@ class PatchConvMLP(BaseModel):
                 raise ValueError(
                     f"PatchConvMLP input_dim={input_dim} != n_enc({n_enc}) + sat({expected_sat})"
                 )
-            layers = []
-            in_ch = c
-            for out_ch in conv_channels:
-                layers.extend(
-                    [
-                        nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                        nn.ReLU(inplace=True),
-                    ]
-                )
-                in_ch = out_ch
-            layers.append(nn.AdaptiveAvgPool2d(1))
-            self.conv = nn.Sequential(*layers)
+            if self.residual:
+                blocks = []
+                in_ch = c
+                for out_ch in conv_channels:
+                    blocks.append(ResidualConvBlock(in_ch, out_ch))
+                    in_ch = out_ch
+                blocks.append(nn.AdaptiveAvgPool2d(1))
+                self.conv = nn.Sequential(*blocks)
+            else:
+                layers = []
+                in_ch = c
+                for out_ch in conv_channels:
+                    layers.extend(
+                        [
+                            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                            nn.ReLU(inplace=True),
+                        ]
+                    )
+                    in_ch = out_ch
+                layers.append(nn.AdaptiveAvgPool2d(1))
+                self.conv = nn.Sequential(*layers)
             self.sat_proj = nn.Linear(conv_channels[-1], d_model)
 
-        head = []
-        prev = d_model
-        for width in head_layers:
-            head.extend([nn.Linear(prev, width), nn.ReLU(), nn.Dropout(dropout_prob)])
-            prev = width
-        head.append(nn.Linear(prev, output_dim))
-        self.head = nn.Sequential(*head)
+        if self.residual:
+            head_blocks = []
+            prev = d_model
+            for width in head_layers:
+                head_blocks.append(ResidualLinearBlock(prev, width, dropout_prob))
+                prev = width
+            self.head_blocks = nn.ModuleList(head_blocks)
+            self.head_out = nn.Linear(prev, output_dim)
+            self.head = None
+        else:
+            head = []
+            prev = d_model
+            for width in head_layers:
+                head.extend([nn.Linear(prev, width), nn.ReLU(), nn.Dropout(dropout_prob)])
+                prev = width
+            head.append(nn.Linear(prev, output_dim))
+            self.head = nn.Sequential(*head)
+            self.head_blocks = None
+            self.head_out = None
 
     def _encode_sat_point(self, sat_flat):
         return self.sat_proj(sat_flat)
@@ -137,67 +190,116 @@ class PatchConvMLP(BaseModel):
             h = h + self._encode_sat_point(sat_flat)
         else:
             h = h + self._encode_sat_patch(sat_flat)
+        if self.head_blocks is not None:
+            for block in self.head_blocks:
+                h = block(h)
+            return self.head_out(h)
         return self.head(h)
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, encoding_dim, encoder_layers=None, decoder_layers=None, input_dim=187):
+    def __init__(
+        self,
+        encoding_dim,
+        encoder_layers=None,
+        decoder_layers=None,
+        input_dim=187,
+        residual=False,
+        dropout_prob=0.0,
+    ):
         super(Autoencoder, self).__init__()
         self.encoding_dim = encoding_dim
         self.input_dim = input_dim
-        # Default layers if not provided
+        self.residual = bool(residual)
         if encoder_layers is None:
             encoder_layers = [128, 64, 32]
         if decoder_layers is None:
             decoder_layers = [32, 64, 128]
 
-        # Build encoder
-        encoder_modules = []
-        prev_dim = input_dim
-        for h in encoder_layers:
-            encoder_modules.append(nn.Linear(prev_dim, h))
-            encoder_modules.append(nn.ReLU())
-            prev_dim = h
-        encoder_modules.append(nn.Linear(prev_dim, self.encoding_dim))
-        encoder_modules.append(nn.ReLU())
-        self.encoder = nn.Sequential(*encoder_modules)
+        if self.residual:
+            enc_blocks = nn.ModuleList()
+            prev_dim = input_dim
+            for h in encoder_layers:
+                enc_blocks.append(ResidualLinearBlock(prev_dim, h, dropout_prob))
+                prev_dim = h
+            self.enc_blocks = enc_blocks
+            self.enc_out = nn.Linear(prev_dim, self.encoding_dim)
+            self.encoder = None
 
-        # Build decoder
-        decoder_modules = []
-        prev_dim = self.encoding_dim
-        for h in decoder_layers:
-            decoder_modules.append(nn.Linear(prev_dim, h))
-            decoder_modules.append(nn.ReLU())
-            prev_dim = h
-        decoder_modules.append(nn.Linear(prev_dim, input_dim))
-        # No activation at the end
-        self.decoder = nn.Sequential(*decoder_modules)
+            dec_blocks = nn.ModuleList()
+            prev_dim = self.encoding_dim
+            for h in decoder_layers:
+                dec_blocks.append(ResidualLinearBlock(prev_dim, h, dropout_prob))
+                prev_dim = h
+            self.dec_blocks = dec_blocks
+            self.dec_out = nn.Linear(prev_dim, input_dim)
+            self.decoder = None
+        else:
+            encoder_modules = []
+            prev_dim = input_dim
+            for h in encoder_layers:
+                encoder_modules.append(nn.Linear(prev_dim, h))
+                encoder_modules.append(nn.ReLU())
+                prev_dim = h
+            encoder_modules.append(nn.Linear(prev_dim, self.encoding_dim))
+            encoder_modules.append(nn.ReLU())
+            self.encoder = nn.Sequential(*encoder_modules)
+
+            decoder_modules = []
+            prev_dim = self.encoding_dim
+            for h in decoder_layers:
+                decoder_modules.append(nn.Linear(prev_dim, h))
+                decoder_modules.append(nn.ReLU())
+                prev_dim = h
+            decoder_modules.append(nn.Linear(prev_dim, input_dim))
+            self.decoder = nn.Sequential(*decoder_modules)
+            self.enc_blocks = None
+            self.dec_blocks = None
+            self.enc_out = None
+            self.dec_out = None
+
+    def _encode(self, x):
+        if self.encoder is not None:
+            return self.encoder(x)
+        h = x
+        for block in self.enc_blocks:
+            h = block(h)
+        return F.relu(self.enc_out(h))
+
+    def _decode_body(self, encoded):
+        if self.decoder is not None:
+            return self.decoder(encoded)
+        h = encoded
+        for block in self.dec_blocks:
+            h = block(h)
+        return self.dec_out(h)
 
     def forward(self, x, mask=None):
-        # Store original values for masked points
         if mask is not None:
-            # Zero out masked values before encoding
             x_masked = x * (~mask).float()
         else:
             x_masked = x
-        # Encode
-        encoded = self.encoder(x_masked)
-        # Decode
-        decoded = self.decoder(encoded)
-        # Restore original values for masked points
+        encoded = self._encode(x_masked)
+        decoded = self._decode_body(encoded)
         if mask is not None:
             decoded = torch.where(mask, x, decoded)
         return decoded
 
     def encode(self, x, mask=None):
         if mask is not None:
-            x = x * mask.float()
-        return self.encoder(x)
+            x = x * (~mask).float()
+        return self._encode(x)
 
     def decode(self, x, mask=None):
-        decoded = self.decoder(x)
-        return decoded
-    
+        return self._decode_body(x)
+
+
+class ResAutoencoder(Autoencoder):
+    """Profile AE with residual hidden blocks (absolute decode for Stage B)."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["residual"] = True
+        super().__init__(*args, **kwargs)
     
 class KANLinear(nn.Module):
     def __init__(self, in_features, out_features, grid_size=5, spline_order=3, 

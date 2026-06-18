@@ -24,6 +24,8 @@ def validate_config(config):
     from model.loss import VALID_LOSS_MODES
 
     assert mode in VALID_LOSS_MODES, f"loss_config.mode must be one of {VALID_LOSS_MODES}, got {mode!r}"
+    if mode == "decoder":
+        assert loss_cfg.get("decoder_dir"), "decoder mode requires loss_config.decoder_dir"
     if config.get("performance"):
         from playground.performance import get_performance_config
 

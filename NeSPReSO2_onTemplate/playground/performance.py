@@ -75,6 +75,11 @@ BENCHMARK_VARIANTS: dict[str, VariantSpec] = {
         batch_size=0,
         notes="Phase 4b stack: max batch + compile model+loss + pred_profile_cached",
     ),
+    "decoder_loss": VariantSpec(
+        "decoder_loss",
+        loss_mode="decoder",
+        notes="Phase 5: frozen AE decoder profile loss (requires ae_targets + decoder_dir in config)",
+    ),
 }
 
 

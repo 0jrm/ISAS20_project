@@ -122,6 +122,45 @@ def test_patch_conv_mlp_patch_mode():
     assert out.shape == (2, 32)
 
 
+def test_patch_conv_mlp_residual_mode():
+    torch.manual_seed(0)
+    model = PatchConvMLP(
+        input_dim=306,
+        output_dim=64,
+        dropout_prob=0.0,
+        d_model=32,
+        head_layers=[16, 16],
+        patch_shape=[3, 4, 5, 5],
+        n_enc=6,
+        n_sat=3,
+        residual=True,
+    )
+    model.eval()
+    x = torch.randn(2, 306)
+    with torch.no_grad():
+        out = model(x)
+    assert out.shape == (2, 64)
+
+
+def test_res_autoencoder_round_trip():
+    from model.model import ResAutoencoder
+
+    torch.manual_seed(0)
+    n, depth, k = 8, 26, 4
+    x = torch.randn(n, depth)
+    mask = torch.zeros(n, depth, dtype=torch.bool)
+    mask[:, -2:] = True
+    model = ResAutoencoder(k, encoder_layers=[32, 16], decoder_layers=[16, 32], input_dim=depth)
+    model.eval()
+    with torch.no_grad():
+        recon = model(x, mask)
+    assert recon.shape == x.shape
+    assert torch.allclose(recon[mask], x[mask])
+    latent = model.encode(x, mask)
+    decoded = model.decode(latent)
+    assert decoded.shape == (n, depth)
+
+
 def test_prediction_model_v2():
     torch.manual_seed(42)
     model = PredictionModel(input_dim=5, layers_config=[16, 8], output_dim=6, dropout_prob=0.0)
@@ -239,6 +278,88 @@ def test_asymmetric_output_offsets():
     assert full.shape[1] == sum(outputs.values())
     for name, start, end in slices:
         assert end - start == outputs[name]
+
+
+def test_decoder_profile_loss():
+    """Frozen decoder profile loss: grads flow through latent, not decoder weights."""
+    from collections import OrderedDict
+
+    from model.loss import DecoderProfileLoss, _build_profile_ae, make_loss
+
+    torch.manual_seed(0)
+    n, depth, k = 12, 26, 3
+    profiles = torch.randn(n, depth)
+    mask = torch.zeros(n, depth, dtype=torch.bool)
+    mask[:, -2:] = True
+    profiles_masked = profiles.clone()
+    profiles_masked[mask] = 0.0
+
+    ae = _build_profile_ae("Autoencoder", k, depth)
+    with torch.no_grad():
+        x = profiles_masked
+        latent = ae.encoder(x)
+        true_profiles = {name: profiles for name in ("temperature", "salinity")}
+    # ponytail: one shared profile block for both vars in this smoke test
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    device = torch.device("cpu")
+    true_t = {
+        "temperature": profiles,
+        "salinity": profiles,
+    }
+    decoders = {"temperature": ae, "salinity": ae}
+    for model in decoders.values():
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad_(False)
+
+    loss_mod = DecoderProfileLoss(decoders, outputs, device=device, true_profiles=true_t)
+    pcs = torch.cat([latent[:4] + 0.1, latent[:4] - 0.05], dim=1)
+    pcs.requires_grad_(True)
+    indices = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    loss = loss_mod(pcs, pcs, indices)
+    loss.backward()
+    assert pcs.grad is not None and torch.isfinite(pcs.grad).all()
+    assert loss.item() > 0
+
+    # make_loss decoder path (synthetic checkpoint on disk)
+    import tempfile
+    from pathlib import Path
+
+    from sklearn.decomposition import PCA
+
+    pca_temp = PCA(n_components=k).fit(profiles.numpy())
+    pca_sal = PCA(n_components=k).fit(profiles.numpy())
+    pca_models = {"temperature": pca_temp, "salinity": pca_sal}
+    ae_targets = np.hstack([latent.numpy(), latent.numpy()]).astype(np.float32)
+    weights = np.ones(2 * k, dtype=np.float64)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for name in outputs:
+            out = root / name
+            out.mkdir()
+            torch.save(
+                {
+                    "arch": "Autoencoder",
+                    "encoding_dim": k,
+                    "input_dim": depth,
+                    "state_dict": ae.state_dict(),
+                },
+                out / "decoder_best.pth",
+            )
+        combined = make_loss(
+            pca_models=pca_models,
+            outputs=outputs,
+            weights=weights,
+            device=device,
+            loss_config={"mode": "decoder", "decoder_dir": str(root)},
+            targets=ae_targets,
+            true_profiles=true_t,
+            ae_targets=ae_targets,
+        )
+        combined.eval()
+        out_loss = combined(pcs.detach(), pcs.detach(), indices)
+        assert torch.isfinite(out_loss)
 
 
 def test_split_matches_torch_seed():
@@ -374,15 +495,54 @@ def test_cache_schema_keys():
     # ponytail: no rebuilt cache on disk — skip when data absent
 
 
+def test_raw_profile_rmse_decoder_indexing():
+    """Decoder path aligns sample-major preds with depth-major cache profiles."""
+    from collections import OrderedDict
+
+    import torch.nn as nn
+
+    from eval_run import raw_profile_rmse
+
+    depth, n = 4, 8
+    idx = np.array([1, 4], dtype=int)
+    true = {"temperature": np.arange(depth * n, dtype=np.float64).reshape(depth, n)}
+    pred_profiles = true["temperature"][:, idx].T + 0.5
+    outputs = OrderedDict([("temperature", 2)])
+
+    class _StubDecoder(nn.Module):
+        def __init__(self, profiles):
+            super().__init__()
+            self.register_buffer("profiles", torch.tensor(profiles, dtype=torch.float32))
+
+        def decode(self, pcs):
+            return self.profiles[: pcs.shape[0]]
+
+    decoders = {"temperature": _StubDecoder(pred_profiles)}
+    rmse = raw_profile_rmse(
+        np.zeros((len(idx), 2), dtype=np.float32),
+        true,
+        {},
+        outputs,
+        idx,
+        decoders=decoders,
+        device=torch.device("cpu"),
+    )
+    assert abs(rmse["temperature"] - 0.5) < 1e-6
+
+
 if __name__ == "__main__":
     test_cap_batch_size()
     test_resolve_batch_size_fixed()
     test_compute_input_dim()
     test_patch_conv_mlp_point_mode()
     test_patch_conv_mlp_patch_mode()
+    test_patch_conv_mlp_residual_mode()
+    test_res_autoencoder_round_trip()
     test_prediction_model_v2()
     test_combined_pca_loss_v2()
     test_pred_profile_cached_matches_combined()
+    test_decoder_profile_loss()
+    test_raw_profile_rmse_decoder_indexing()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
     test_split_matches_torch_seed()

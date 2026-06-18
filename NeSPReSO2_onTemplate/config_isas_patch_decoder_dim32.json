@@ -1,0 +1,135 @@
+{
+    "name": "NeSPReSO2_ISAS_GoM_patch_decoder_dim32",
+    "n_gpu": 1,
+    "seed": 42,
+    "arch": {
+        "type": "PatchConvMLP",
+        "args": {
+            "input_dim": 306,
+            "output_dim": 64,
+            "dropout_prob": 0.2,
+            "d_model": 256,
+            "head_layers": [
+                2048,
+                2048
+            ],
+            "conv_channels": [
+                64,
+                128
+            ],
+            "patch_shape": [
+                3,
+                4,
+                5,
+                5
+            ],
+            "n_enc": 6,
+            "n_sat": 3
+        }
+    },
+    "input_params": {
+        "timecos": true,
+        "timesin": true,
+        "latcos": true,
+        "latsin": true,
+        "loncos": true,
+        "lonsin": true,
+        "sss": true,
+        "sst": true,
+        "ssh": true,
+        "sat": true
+    },
+    "io": {
+        "dataset_tag": "isas20",
+        "data_path": "../data/NeSPReSO_v2_GoM_sat",
+        "sat_file": "satellite_NeSPReSO_v2_GoM.h5",
+        "prof_file": "profiles_NeSPReSO_v2_GoM.h5",
+        "spatial_pad": 2,
+        "temporal_pad": 3,
+        "BBox": null,
+        "cache_dir": "../data/cache",
+        "groups": {
+            "sss": {
+                "h5_group": "sss",
+                "h5_var": "sos"
+            },
+            "sst": {
+                "h5_group": "ostia",
+                "h5_var": "analysed_sst"
+            },
+            "ssh": {
+                "h5_group": "ssh",
+                "h5_var": "adt"
+            }
+        }
+    },
+    "outputs": {
+        "temperature": 32,
+        "salinity": 32
+    },
+    "loss_scales": {
+        "profile_scales": {
+            "temperature": 6.0308,
+            "salinity": 102.758
+        },
+        "combined_pca_scale": 2.0,
+        "combined_mse_scale": 4.1592
+    },
+    "density": {
+        "enabled": false,
+        "checkpoint": "",
+        "stats_path": "",
+        "stab_weight": 0.0,
+        "smooth_weight": 0.0
+    },
+    "data_loader": {
+        "type": "NeSPReSODataLoader",
+        "args": {
+            "cache_path": "../data/cache/train_ready_e6f936bdc80a.pkl",
+            "batch_size": 0,
+            "batch_size_safety": 0.95,
+            "shuffle": true,
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false,
+            "target_key": "ae_targets_dim32",
+            "weight_key": "ae_weights_dim32"
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": false
+        }
+    },
+    "loss": "combined_pca_loss",
+    "loss_config": {
+        "mode": "decoder",
+        "decoder_dir": "saved/decoders/isas20/Autoencoder_dim32"
+    },
+    "metrics": [
+        "profile_rmse"
+    ],
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": 100000,
+            "gamma": 1.0
+        }
+    },
+    "trainer": {
+        "epochs": 8000,
+        "save_dir": "saved/",
+        "save_period": 1,
+        "log_interval": 10,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": 500,
+        "tensorboard": true
+    }
+}

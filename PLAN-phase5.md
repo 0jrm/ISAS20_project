@@ -1,83 +1,120 @@
 # Phase 5 — Learned Latent (AE / KAN) vs PCA-16
 
 **Branch:** `nespreso-v2-port`  
-**Status:** **paused** — notebook comparison rewrite is current eval surface; Stage B blocked on go/no-go (see [HANDOFF.md](HANDOFF.md))  
-**Gate cleared:** Phase 4 ISAS eval signed off; Phase 4b exhausted (&lt;10% on batch, compile_loss, pred_profile_cached)
+**Status:** **Stage B in flight (ISAS)** — go/no-go **failed** on dim16/dim32 test RMSE; `decoder32_res_ae` last hope  
+**Gate cleared:** Phase 4 ISAS eval signed off; Phase 4b exhausted
 
 ---
 
 ## Goal
 
-Replace sklearn PCA profile inverse in the training loss with a **frozen learned decoder** (16-d latent → full-depth profile), while keeping the surface → latent → profile reconstruction pattern.
+Replace sklearn PCA profile inverse in the training loss with a **frozen learned decoder**, keeping surface → latent → profile reconstruction.
 
-**Speed hypothesis (honest):** A compiled MLP decoder *might* beat four PCA inverses/step on ARGO (1801 levels). KAN splines may be slower. Treat speed as benchmark-gated, not promised.
+**Speed hypothesis (honest):** Might matter on ARGO (1801 levels). ISAS benchmark showed decoder loss ~3% *slower* than PCA at dim16 — **not a win at GoM scale.**
 
-**Science hypothesis:** AE-16 may match or beat PCA-16 profile RMSE when trained mask-aware on NaN salinity (ISAS).
+**Science hypothesis:** AE salinity recon beats PCA at equal bottleneck — **true in Stage A, false in Stage B** so far.
 
 ---
 
-## Two-stage pipeline
+## Pipeline
 
 ```mermaid
 flowchart LR
-  subgraph stageA [Stage A — per tag + variable]
-    Cache["train_ready cache\nprofiles dict"] --> AE["train_profile_ae.py"]
+  subgraph stageA [Stage A]
+    Cache["train_ready cache"] --> AE["train_profile_ae.py"]
     AE --> Dec["saved/decoders/TAG/ARCH/VAR/"]
+    Dec --> Export["export_ae_latents.py"]
+    Export --> Cache
   end
-  subgraph stageB [Stage B — surface model]
-    Surface --> PatchConvMLP --> Latent16
-    Latent16 --> DecoderLoss["DecoderProfileLoss"]
+  subgraph stageB [Stage B]
+    Surface --> PatchConvMLP --> Latent
+    Latent --> DecoderLoss["DecoderProfileLoss"]
     Dec --> DecoderLoss
   end
 ```
 
 | Step | Task | Status |
-|---|---|---|
-| A1 | Train/freeze profile AE per tag × variable (`encoding_dim=16`) | **dim sweep done** — `scripts/train_profile_ae.py`, `scripts/benchmark_profile_ae_dims.py` |
-| A2 | Export AE latent targets into cache (optional; can use `model.encode`) | pending |
-| A3 | `DecoderProfileLoss` in `model/loss.py`; `loss_config.mode: decoder` | pending |
-| A4 | Eval RMSE: PCA-16 vs AE-16 vs KAN-16 (ISAS + ARGO) | pending |
-| A5 | `benchmark_ml_opts.py` full-step — speed win only if ≥10% | pending |
+|------|------|--------|
+| A1 | Profile AE per tag × variable | **done** — Autoencoder, ResAutoencoder, layer-scale |
+| A2 | Export AE latents to cache | **done** — `ae_targets`, `ae_targets_dim32`, `ae_targets_dim32_res` |
+| A3 | `DecoderProfileLoss`; `loss_config.mode: decoder` | **done** |
+| A4 | Eval vs PCA test RMSE | **done (ISAS)** — **all runs fail 5% gate** |
+| A5 | Full-step speed benchmark (ARGO) | **not re-run** |
+| — | Residual / skip connections | **done** — `ResAutoencoder`, `PatchConvMLP(residual=True)` |
+| — | 2× capacity sweep (dim32 MLP + AE) | **done** — val_loss better, test RMSE still bad |
 
-### Stage A AE dimension sweep (GoM, Autoencoder, 200 epochs, dims 16–256)
+---
 
-Compared to **PCA-X** at matching X (fair bottleneck). JSON: `saved/benchmarks/ae_dims_*_Autoencoder.json`.
+## Session results (2026-06-18)
 
-**ISAS (`isas20`, 187 levels)**
+### Stage A — profile recon (ISAS, 187 levels, val split)
 
-| dim | temp PCA | temp AE | sal PCA | sal AE | sal winner |
-|---:|---:|---:|---:|---:|---|
-| 16 | 0.291 | 0.476 | 1.169 | **0.256** | AE |
-| 32 | 0.291 | 0.478 | 1.169 | **0.263** | AE |
-| 64 | 0.291 | 0.493 | 1.169 | **0.433** | AE |
-| 128 | 0.291 | 0.486 | 1.169 | **0.202** | AE (best sal) |
-| 256 | 0.291 | 0.471 | 1.169 | **0.278** | AE |
+| Arch | dim | T recon | S recon | Notes |
+|------|----:|--------:|--------:|-------|
+| PCA-16 | 16 | 0.291 | 1.169 | baseline |
+| Autoencoder | 16 | 0.350 | **0.208** | original Stage A |
+| Autoencoder | 32, 2× layers | 0.327 | 0.207 | more params, marginal |
+| **ResAutoencoder** | 32, 2× layers | **0.202** | **0.181** | **best Stage A** — residual hidden blocks |
 
-**ARGO (`argo_v2`, 1801 levels)** — PCA wins every cell at 200 epochs; AE needs more capacity/training.
+Salinity AE recon is real. Temperature AE still loses to PCA even with residuals.
 
-| dim | temp PCA | temp AE | sal PCA | sal AE |
-|---:|---:|---:|---:|---:|
-| 16 | 0.061 | 0.355 | 0.013 | 0.159 |
-| 256 | 0.061 | 0.400 | 0.013 | 0.161 |
+### Stage B — test `raw_profile_rmse` (758 test profiles, cache `e6f936bdc80a`)
 
-*Note: sweep above used PCA-16 for all dims (config cap). Script now uses PCA-X per dim for fair comparison on re-run.*
+| Run | MLP params | best val_loss | T RMSE | S RMSE | vs PCA |
+|-----|----------:|--------------:|-------:|-------:|--------|
+| PCA-16 prod | 1.24M | — | **1.016** | **5.318** | — |
+| decoder16_ae | 1.24M | 0.566 | 1.314 | 7.078 | **fail** |
+| decoder32_ae | 4.96M | 0.488 | 1.287 | 6.416 | **fail** |
+| decoder32_res_ae | 5.68M | ~0.61 @ ep70 | — | — | **running** |
 
-### Phase 4b combined stack vs baseline (ARGO full step)
+**Brutal take:** Lower val_loss ≠ better profiles. The surface model is not learning AE latents well enough; frozen decoder amplifies latent error. Doubling capacity moved salinity RMSE ~10% toward PCA, not to parity.
 
-| Variant | sec/epoch | vs baseline | batch |
-|---|---:|---:|---:|
-| baseline | 0.0246 | 1.00× | 512 |
-| **combo_phase4b_all** | 0.0272 | **0.90× (~10% slower)** | 2755 |
+### Training curves
 
-Stack: max batch + `pred_profile_cached` + `compile(model+loss)`. **Do not enable combined** on GoM — overhead exceeds savings.
+`saved/plots/decoder16_vs_decoder32_train_curves.png` — dim32 reaches lower val_loss in ~⅓ the epochs of dim16. Generalization gap (val_loss vs test profile RMSE) is large.
+
+### ISAS speed (dim16, full step)
+
+| Mode | sec/epoch | vs PCA |
+|------|----------:|-------:|
+| PCA combined | 0.0306 | 1.00× |
+| Decoder loss | 0.0314 | 0.97× (~3% slower) |
 
 ---
 
 ## Go/no-go criteria
 
-1. **RMSE:** AE-16 test profile RMSE not worse than PCA-16 by &gt;5% on either variable (per tag).
-2. **Speed:** Full training step ≥10% faster than `CombinedPCALoss` + PCA inverse on ARGO.
-3. If either fails, **keep PCA-16** for production; document AE as science appendix.
+1. **RMSE:** test profile RMSE not &gt;5% worse than PCA per variable → **FAILED** (dim16, dim32).
+2. **Speed:** ≥10% faster full step on ARGO → **not demonstrated**; ISAS slightly slower.
+3. **Production call:** **Keep PCA-16** unless `decoder32_res_ae` clears the RMSE gate. Treat AE as science appendix if it fails.
+
+---
+
+## Architecture notes (residual)
+
+- **ResAutoencoder:** residual linear blocks in encoder/decoder; **no** delta-decode (`x + f(z)`) — breaks Stage B where only `z` is available.
+- **PatchConvMLP `residual=True`:** ResNet conv trunk + residual MLP head; enc+sat additive fusion unchanged.
+- Checkpoints store `residual`, `encoder_layers`, `decoder_layers`, `layer_scale`.
+
+---
+
+## Known issues
+
+| Issue | Workaround |
+|-------|------------|
+| `eval_run.py` `loss: NaN` in decoder mode | Use `raw_profile_rmse` only |
+| Config hash creates new cache pickle | Pin `cache_path` in decoder configs |
+| `latent_target_rmse` meaningless across dims | Compare within same `outputs` dict only |
+| Raw salinity NaNs in cache profiles | Training loss uses `true_profiles_numpy()` (PCA recon), not raw profiles |
+
+---
+
+## Recommendations
+
+1. Finish `decoder32_res_ae`; eval at convergence. If fail → **close Phase 5 for ISAS**.
+2. Before more ISAS tuning: diagnose **latent prediction quality** (AE-latent RMSE on test, per-variable) — is the bottleneck surface→latent or decoder?
+3. ARGO: only tag worth a speed benchmark; only if still pursuing decoder for perf, not science.
+4. Optional experiment: train surface head on **PCA latents**, eval profile RMSE via **AE decode** — separates latent-target choice from surface training.
 
 ---
 
@@ -86,25 +123,27 @@ Stack: max batch + `pred_profile_cached` + `compile(model+loss)`. **Do not enabl
 ```bash
 cd NeSPReSO2_onTemplate
 
-# Stage A — train decoders (mask-aware MSE)
+# ResAutoencoder Stage A
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 scripts/train_profile_ae.py -c config_argo.json --arch Autoencoder
+  python3 scripts/train_profile_ae.py -c config_isas_patch.json \
+  --arch ResAutoencoder --encoding-dim 32 --layer-scale 2 \
+  --arch-tag ResAutoencoder_dim32
+
+# Export + Stage B
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
+  python3 scripts/export_ae_latents.py \
+  -c config_isas_patch_decoder_dim32_res.json \
+  --cache ../data/cache/train_ready_e6f936bdc80a.pkl \
+  --decoder-dir saved/decoders/isas20/ResAutoencoder_dim32 \
+  --target-key ae_targets_dim32_res --weight-key ae_weights_dim32_res
 
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 scripts/train_profile_ae.py -c config_isas_patch.json --arch Autoencoder
-
-# Compare AE recon RMSE vs PCA on held-out profiles (printed at end of train_profile_ae.py)
-
-# Stage A — sweep encoding dims 16–256 vs PCA-X (fair bottleneck)
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 scripts/benchmark_profile_ae_dims.py -c config_isas_patch.json --arch Autoencoder
+  python3 train.py -c config_isas_patch_decoder_dim32_res.json -id decoder32_res_ae
 
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 scripts/benchmark_profile_ae_dims.py -c config_argo.json --arch Autoencoder
-
-# Phase 4b combined stack vs baseline (ARGO full step)
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 scripts/benchmark_ml_opts.py -c config_argo.json --variant combo_phase4b_all
+  python3 eval_run.py -c config_isas_patch_decoder_dim32.json \
+  -r saved/models/NeSPReSO2_ISAS_GoM_patch_decoder_dim32/decoder32_ae/model_best.pth \
+  --out saved/eval_isas_decoder32_test.json
 ```
 
 ---
@@ -112,6 +151,6 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
 ## Related
 
 | Doc | Purpose |
-|---|---|
-| [PLAN-patch-arch-handoff.md](PLAN-patch-arch-handoff.md) | Phases 1–4b complete |
-| [NeSPReSO2_onTemplate/playground/test_autoencoders.py](NeSPReSO2_onTemplate/playground/test_autoencoders.py) | Prior AE experiments (ISAS-oriented) |
+|-----|---------|
+| [HANDOFF.md](HANDOFF.md) | Live status, active runs |
+| [PLAN-patch-arch-handoff.md](PLAN-patch-arch-handoff.md) | Phases 1–4b |

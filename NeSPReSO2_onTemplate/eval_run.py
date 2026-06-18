@@ -13,7 +13,7 @@ import torch
 
 import data_loader.data_loaders as module_data
 import model.model as module_arch
-from model.loss import make_loss, sklearn_inverse_transform_pcs
+from model.loss import decode_latent_profiles, load_decoders_from_dir, make_loss, sklearn_inverse_transform_pcs
 from model.metric import per_variable_rmse
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device, read_json
@@ -40,11 +40,31 @@ def _resolve_eval_batch_size(dl_args: dict, split: str) -> None:
     dl_args["batch_size"] = max(1, split_lens[split])
 
 
-def raw_profile_rmse(pred_pcs, true_profiles, pca_models, outputs, indices):
+def _latent_block_rmse(pred, tgt, outputs):
+    out = {}
+    start = 0
+    for name, k in outputs.items():
+        block = pred[:, start : start + k] - tgt[:, start : start + k]
+        out[name] = float(np.sqrt(np.mean(block**2)))
+        start += k
+    return out
+
+
+def raw_profile_rmse(pred_pcs, true_profiles, pca_models, outputs, indices, *, decoders=None, device=None):
     """RMSE in physical space vs cache ``profiles`` (not PCA-reconstructed targets)."""
+    idx = np.asarray(indices, dtype=int)
+    if decoders is not None:
+        pred_t = torch.tensor(pred_pcs, dtype=torch.float32, device=device)
+        pred = decode_latent_profiles(pred_t, decoders, outputs)
+        out = {}
+        for name in outputs:
+            # decode_latent_profiles is (N, n_depth); cache profiles are (n_depth, N).
+            diff = pred[name].detach().cpu().numpy() - true_profiles[name][:, idx].T
+            out[name] = float(np.sqrt(np.nanmean(diff ** 2)))
+        return out
+
     pred = sklearn_inverse_transform_pcs(pred_pcs, pca_models, outputs)
     out = {}
-    idx = np.asarray(indices, dtype=int)
     for name in outputs:
         diff = pred[name] - true_profiles[name][:, idx]
         out[name] = float(np.sqrt(np.nanmean(diff ** 2)))
@@ -56,6 +76,9 @@ def main(config, checkpoint_path: str, split: str = "test"):
     ensure_cache(config)
 
     dl_args = dict(config["data_loader"]["args"])
+    target_key = dl_args.get("target_key", "targets")
+    weight_key = dl_args.get("weight_key", "weights")
+    loss_outputs = OrderedDict(config["outputs"])
     dl_args["split"] = split
     dl_args["shuffle"] = False
     _resolve_eval_batch_size(dl_args, split)
@@ -73,9 +96,24 @@ def main(config, checkpoint_path: str, split: str = "test"):
     model.eval()
 
     pca_models = ckpt.get("pca_models", data_loader.pca_models)
-    outputs = OrderedDict(ckpt.get("outputs", dict(data_loader.outputs)))
+    outputs = OrderedDict(ckpt.get("outputs", dict(loss_outputs)))
 
     from types import SimpleNamespace
+
+    loss_cfg = config.config.get("loss_config") or {}
+    decoders = None
+    if loss_cfg.get("mode") == "decoder":
+        decoders = load_decoders_from_dir(loss_cfg["decoder_dir"], outputs, device)
+
+    true_profiles = data_loader.cache.get("true_profiles")
+    if true_profiles is None and data_loader.profiles:
+        n = data_loader.cache["inputs"].shape[0]
+        true_profiles = {}
+        for name in outputs:
+            arr = np.asarray(data_loader.profiles[name], dtype=np.float32)
+            if arr.shape[1] == n:
+                arr = arr.T
+            true_profiles[name] = arr
 
     loss_fn = make_loss(
         pca_models=pca_models,
@@ -91,9 +129,11 @@ def main(config, checkpoint_path: str, split: str = "test"):
             max_depth=data_loader.max_depth,
         ),
         loss_scales=config.config.get("loss_scales"),
-        loss_config=config.config.get("loss_config"),
+        loss_config=loss_cfg,
         targets=data_loader.cache["targets"],
-        true_profiles=data_loader.cache.get("true_profiles"),
+        true_profiles=true_profiles,
+        ae_targets=data_loader.cache.get(target_key),
+        ae_weights=data_loader.cache.get(weight_key),
     )
 
     total_loss = 0.0
@@ -111,7 +151,15 @@ def main(config, checkpoint_path: str, split: str = "test"):
     n = len(data_loader.dataset)
     pcs = np.vstack(pcs_list)
     indices = np.concatenate(idx_list)
-    tgt_pcs = data_loader.cache["targets"][indices].astype(np.float64)
+    tgt_pcs = data_loader.cache[target_key][indices].astype(np.float64)
+    pca_tgt = data_loader.cache.get("pca_targets")
+    if pca_tgt is not None:
+        pca_tgt = pca_tgt[indices].astype(np.float64)
+
+    if loss_cfg.get("mode") == "decoder":
+        latent_rmse = _latent_block_rmse(pcs, tgt_pcs, outputs)
+    else:
+        latent_rmse = per_variable_rmse(pcs, tgt_pcs, pca_models, outputs)
 
     report = {
         "checkpoint": str(checkpoint_path),
@@ -120,9 +168,22 @@ def main(config, checkpoint_path: str, split: str = "test"):
         "split": split,
         "n_samples": int(n),
         "loss": total_loss / n,
-        "pca_target_rmse": per_variable_rmse(pcs, tgt_pcs, pca_models, outputs),
-        "raw_profile_rmse": raw_profile_rmse(pcs, data_loader.profiles, pca_models, outputs, indices),
+        "latent_target_rmse": latent_rmse,
+        "raw_profile_rmse": raw_profile_rmse(
+            pcs,
+            data_loader.profiles,
+            pca_models,
+            outputs,
+            indices,
+            decoders=decoders,
+            device=device,
+        ),
     }
+    if loss_cfg.get("mode") != "decoder" and pca_tgt is not None:
+        pca_outputs = OrderedDict(data_loader.cache["outputs"])
+        report["pca_target_rmse"] = per_variable_rmse(pcs, pca_tgt, pca_models, pca_outputs)
+    elif loss_cfg.get("mode") != "decoder":
+        report["pca_target_rmse"] = report["latent_target_rmse"]
     text = json.dumps(report, indent=2)
     print(text)
     return report

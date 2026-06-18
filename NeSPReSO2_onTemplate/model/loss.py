@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
 import torch.nn as nn
 
+import model.model as module_arch
 from model.density import DensityConstraint
 
 # ponytail: GoM temp/sal-specific scales; re-derive for new outputs or regions
@@ -18,7 +20,7 @@ DEFAULT_COMBINED_MSE_SCALE = 0.0255
 
 OUTPUT_H5_VARS = {"temperature": "TEMP", "salinity": "PSAL"}
 
-VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only")
+VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder")
 
 
 def output_slices(outputs: Mapping[str, int]) -> list[tuple[str, int, int]]:
@@ -93,6 +95,100 @@ def get_pca_weights(pca_models, pcs_by_name, output_order):
         pcs = pcs_by_name[name]
         parts.append(pca.explained_variance_ratio_ / pcs.var(axis=1))
     return np.concatenate(parts)
+
+
+def ae_weights_numpy(ae_targets: np.ndarray, outputs: Mapping[str, int]) -> np.ndarray:
+    """Per-dim 1/var weights for AE latent targets (sample-major)."""
+    parts = []
+    start = 0
+    for k in outputs.values():
+        block = np.asarray(ae_targets[:, start : start + k], dtype=np.float64)
+        var = block.var(axis=0)
+        var = np.maximum(var, 1e-12)
+        parts.append(1.0 / var)
+        start += k
+    return np.concatenate(parts)
+
+
+def _build_profile_ae(
+    arch: str,
+    encoding_dim: int,
+    input_dim: int,
+    *,
+    encoder_layers: list[int] | None = None,
+    decoder_layers: list[int] | None = None,
+    layer_scale: int = 1,
+    residual: bool = False,
+) -> nn.Module:
+    """Match ``scripts/train_profile_ae.py`` layer layout."""
+    if arch in ("Autoencoder", "ResAutoencoder"):
+        use_residual = residual or arch == "ResAutoencoder"
+        if encoder_layers is None or decoder_layers is None:
+            enc = [min(512, max(128, input_dim // 4)), 128, 64]
+            dec = [64, 128, min(512, max(128, input_dim // 4))]
+            if layer_scale != 1:
+                enc = [h * layer_scale for h in enc]
+                dec = [h * layer_scale for h in dec]
+        else:
+            enc, dec = encoder_layers, decoder_layers
+        cls = module_arch.ResAutoencoder if use_residual else module_arch.Autoencoder
+        return cls(
+            encoding_dim,
+            encoder_layers=enc,
+            decoder_layers=dec,
+            input_dim=input_dim,
+            residual=use_residual,
+        )
+    if arch == "KAN_Autoencoder":
+        return module_arch.KAN_Autoencoder(encoding_dim, input_dim=input_dim)
+    raise ValueError(f"unknown profile AE arch {arch!r}")
+
+
+def resolve_decoder_dir(decoder_dir: str | Path) -> Path:
+    path = Path(decoder_dir)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[1] / path
+    return path
+
+
+def load_profile_decoder(ckpt_path: str | Path, device: torch.device) -> nn.Module:
+    """Load frozen profile AE (decode path used in training loss)."""
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model = _build_profile_ae(
+        ckpt["arch"],
+        ckpt["encoding_dim"],
+        ckpt["input_dim"],
+        encoder_layers=ckpt.get("encoder_layers"),
+        decoder_layers=ckpt.get("decoder_layers"),
+        layer_scale=int(ckpt.get("layer_scale", 1)),
+        residual=bool(ckpt.get("residual", ckpt["arch"] == "ResAutoencoder")),
+    )
+    model.load_state_dict(ckpt["state_dict"])
+    model.eval()
+    for param in model.parameters():
+        param.requires_grad_(False)
+    return model.to(device)
+
+
+def load_decoders_from_dir(decoder_dir: str | Path, outputs: Mapping[str, int], device: torch.device) -> dict[str, nn.Module]:
+    root = resolve_decoder_dir(decoder_dir)
+    decoders = {}
+    for name in outputs:
+        ckpt = root / name / "decoder_best.pth"
+        if not ckpt.is_file():
+            raise FileNotFoundError(f"missing decoder checkpoint for {name!r}: {ckpt}")
+        decoders[name] = load_profile_decoder(ckpt, device)
+    return decoders
+
+
+def decode_latent_profiles(pcs: torch.Tensor, decoders: Mapping[str, nn.Module], outputs: Mapping[str, int]) -> dict[str, torch.Tensor]:
+    """Batch-major profiles from concatenated latent slices."""
+    recon = {}
+    start = 0
+    for name, k in outputs.items():
+        recon[name] = decoders[name].decode(pcs[:, start : start + k])
+        start += k
+    return recon
 
 
 class WeightedMSELoss(nn.Module):
@@ -186,6 +282,49 @@ class PCALoss(nn.Module):
         return total
 
 
+class DecoderProfileLoss(nn.Module):
+    """Profile MSE via frozen learned decoders (Phase 5 Stage B)."""
+
+    def __init__(
+        self,
+        decoders: Mapping[str, nn.Module],
+        outputs,
+        profile_scales=None,
+        device=None,
+        *,
+        true_profiles: Mapping[str, torch.Tensor] | None = None,
+    ):
+        super().__init__()
+        self.outputs = OrderedDict(outputs)
+        self.output_order = list(outputs.keys())
+        self.slices = output_slices(outputs)
+        self.profile_scales = dict(DEFAULT_PROFILE_SCALES)
+        if profile_scales:
+            self.profile_scales.update(profile_scales)
+        self.decoders = nn.ModuleDict({name: decoders[name] for name in self.output_order})
+        if true_profiles is None:
+            raise ValueError("DecoderProfileLoss requires true_profiles")
+        for name in self.output_order:
+            if name not in true_profiles:
+                raise ValueError(f"DecoderProfileLoss missing true_profiles[{name!r}]")
+            self.register_buffer(f"{name}_true_profiles", true_profiles[name])
+
+    def _true_profiles(self, name):
+        return getattr(self, f"{name}_true_profiles")
+
+    def forward(self, pcs, targets, indices=None):
+        if indices is None:
+            raise ValueError("DecoderProfileLoss requires batch indices")
+        total = pcs.new_tensor(0.0)
+        for name, start, end in self.slices:
+            pred_profiles = self.decoders[name].decode(pcs[:, start:end])
+            true_profiles = self._true_profiles(name)[indices]
+            mse = nn.functional.mse_loss(pred_profiles, true_profiles)
+            scale = self.profile_scales.get(name, 1.0)
+            total = total + mse / scale
+        return total
+
+
 class CombinedPCALoss(nn.Module):
     def __init__(
         self,
@@ -201,6 +340,7 @@ class CombinedPCALoss(nn.Module):
         *,
         mode: str = "combined",
         true_profiles: Mapping[str, torch.Tensor] | None = None,
+        decoders: Mapping[str, nn.Module] | None = None,
     ):
         super().__init__()
         if mode not in VALID_LOSS_MODES:
@@ -212,33 +352,60 @@ class CombinedPCALoss(nn.Module):
         self.combined_pca_scale = combined_pca_scale or DEFAULT_COMBINED_PCA_SCALE
         self.combined_mse_scale = combined_mse_scale or DEFAULT_COMBINED_MSE_SCALE
 
-        pca_mode = mode if mode == "pred_profile_cached" else "combined"
-        self.pca_loss = PCALoss(
-            pca_models,
-            outputs,
-            profile_scales,
-            device,
-            mode=pca_mode,
-            true_profiles=true_profiles,
-        )
+        if mode == "decoder":
+            if decoders is None:
+                raise ValueError("decoder mode requires decoders")
+            cached_profiles = true_profiles
+            if cached_profiles is None:
+                raise ValueError("decoder mode requires true_profiles")
+            self.pca_loss = None
+            self.decoder_loss = DecoderProfileLoss(
+                decoders,
+                outputs,
+                profile_scales,
+                device,
+                true_profiles=cached_profiles,
+            )
+            pca_mode = "combined"
+        else:
+            self.decoder_loss = None
+            pca_mode = mode if mode == "pred_profile_cached" else "combined"
+            self.pca_loss = PCALoss(
+                pca_models,
+                outputs,
+                profile_scales,
+                device,
+                mode=pca_mode,
+                true_profiles=true_profiles,
+            )
+
         self.weighted_mse_loss = genWeightedMSELoss(weights, device)
 
-        for name in self.output_order:
-            pca = pca_models[name]
-            self.register_buffer(
-                f"{name}_components",
-                torch.tensor(pca.components_, dtype=torch.float32, device=device),
-            )
-            self.register_buffer(
-                f"{name}_mean",
-                torch.tensor(pca.mean_, dtype=torch.float32, device=device).unsqueeze(0),
-            )
+        if mode != "decoder":
+            for name in self.output_order:
+                pca = pca_models[name]
+                self.register_buffer(
+                    f"{name}_components",
+                    torch.tensor(pca.components_, dtype=torch.float32, device=device),
+                )
+                self.register_buffer(
+                    f"{name}_mean",
+                    torch.tensor(pca.mean_, dtype=torch.float32, device=device).unsqueeze(0),
+                )
 
         self.density_helper = None
         if density_config and density_config.get("enabled", False):
             self.density_helper = DensityConstraint(dataset=density_meta, device=device, config=density_config)
 
     def _reconstruct_profiles(self, pcs):
+        if self.mode == "decoder":
+            recon = decode_latent_profiles(pcs, self.decoder_loss.decoders, self.outputs)
+            temp_name = self.output_order[0]
+            sal_name = self.output_order[1] if len(self.output_order) > 1 else None
+            if sal_name is not None:
+                return recon[temp_name], recon[sal_name]
+            return recon
+
         temp_name = self.output_order[0]
         sal_name = self.output_order[1] if len(self.output_order) > 1 else None
         recon = {}
@@ -254,6 +421,9 @@ class CombinedPCALoss(nn.Module):
         weighted_mse_loss = self.weighted_mse_loss(pcs, targets)
         if self.mode == "pc_mse_only":
             combined_loss = weighted_mse_loss / self.combined_mse_scale
+        elif self.mode == "decoder":
+            profile_loss = self.decoder_loss(pcs, targets, indices)
+            combined_loss = (profile_loss / self.combined_pca_scale + weighted_mse_loss / self.combined_mse_scale) / 2
         else:
             pca_loss = self.pca_loss(pcs, targets, indices)
             combined_loss = (pca_loss / self.combined_pca_scale + weighted_mse_loss / self.combined_mse_scale) / 2
@@ -282,6 +452,8 @@ def make_loss(
     loss_config: dict[str, Any] | None = None,
     targets=None,
     true_profiles=None,
+    ae_targets=None,
+    ae_weights=None,
     **kwargs,
 ) -> CombinedPCALoss:
     scales = loss_scales or {}
@@ -291,7 +463,7 @@ def make_loss(
         raise ValueError(f"unknown loss_config.mode {mode!r}; expected one of {VALID_LOSS_MODES}")
 
     cached_profiles = None
-    if mode == "pred_profile_cached":
+    if mode in ("pred_profile_cached", "decoder"):
         cached_profiles = compute_true_profiles(
             targets,
             pca_models,
@@ -300,10 +472,24 @@ def make_loss(
             cached=true_profiles,
         )
 
+    decoders = None
+    latent_weights = weights
+    if mode == "decoder":
+        decoder_dir = cfg.get("decoder_dir")
+        if not decoder_dir:
+            raise ValueError("loss_config.decoder_dir required when mode='decoder'")
+        decoder_path = resolve_decoder_dir(decoder_dir)
+        if ae_targets is None:
+            raise ValueError(
+                "decoder mode requires ae_targets in cache; run scripts/export_ae_latents.py first"
+            )
+        decoders = load_decoders_from_dir(decoder_path, outputs, device)
+        latent_weights = ae_weights if ae_weights is not None else ae_weights_numpy(np.asarray(ae_targets), outputs)
+
     return CombinedPCALoss(
         pca_models=pca_models,
         outputs=outputs,
-        weights=weights,
+        weights=latent_weights,
         device=device,
         density_config=density_config,
         density_meta=density_meta,
@@ -312,5 +498,6 @@ def make_loss(
         combined_mse_scale=scales.get("combined_mse_scale"),
         mode=mode,
         true_profiles=cached_profiles,
+        decoders=decoders,
         **kwargs,
     )

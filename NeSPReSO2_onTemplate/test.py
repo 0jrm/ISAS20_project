@@ -58,6 +58,8 @@ def main(config):
         loss_config=config.config.get("loss_config"),
         targets=data_loader.cache["targets"],
         true_profiles=data_loader.cache.get("true_profiles"),
+        ae_targets=data_loader.cache.get("ae_targets"),
+        ae_weights=data_loader.cache.get("ae_weights"),
     )
 
     total_loss = 0.0

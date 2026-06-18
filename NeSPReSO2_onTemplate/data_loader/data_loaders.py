@@ -49,17 +49,26 @@ class NeSPReSODataLoader(DataLoader):
         split="train",
         num_workers=0,
         pin_memory=False,
+        target_key="targets",
+        weight_key="weights",
         **kwargs,
     ):
         kwargs.pop("validation_split", None)
         kwargs.pop("training", None)
         kwargs.pop("batch_size_safety", None)
+        target_key = kwargs.pop("target_key", target_key)
+        weight_key = kwargs.pop("weight_key", weight_key)
 
         with open(cache_path, "rb") as f:
             self.cache = pickle.load(f)
 
+        if target_key not in self.cache:
+            raise KeyError(f"cache missing {target_key!r}; run scripts/export_ae_latents.py for decoder training")
+        if weight_key not in self.cache:
+            weight_key = "weights"
+
         inputs = torch.tensor(self.cache["inputs"], dtype=torch.float32)
-        targets = torch.tensor(self.cache["targets"], dtype=torch.float32)
+        targets = torch.tensor(self.cache[target_key], dtype=torch.float32)
         full_ds = NeSPReSODataset(inputs, targets)
 
         n = len(full_ds)
@@ -85,7 +94,7 @@ class NeSPReSODataLoader(DataLoader):
         self.cache_path = cache_path
         self.pca_models = self.cache["pca_models"]
         self.outputs = OrderedDict(self.cache["outputs"])
-        self.weights = self.cache["weights"]
+        self.weights = self.cache[weight_key]
         self.LAT = self.cache["LAT"]
         self.LON = self.cache["LON"]
         self.PRES = self.cache.get("PRES")

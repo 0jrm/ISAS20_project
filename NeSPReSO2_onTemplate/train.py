@@ -9,7 +9,7 @@ import torch
 import data_loader.data_loaders as module_data
 import model.metric as module_metric
 import model.model as module_arch
-from model.loss import make_loss
+from model.loss import make_loss, true_profiles_numpy
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device
 from playground.batch_size import resolve_batch_size, train_samples_from_cache
@@ -39,6 +39,7 @@ def set_seed(seed, performance=None):
 def ensure_cache(config):
     """Build or locate train-ready pickle; wire cache_path into data_loader args."""
     validate_config(config.config)
+    pinned = config.config["data_loader"]["args"].get("cache_path") or None
     io_cfg = config.config.get("io", {})
     if io_cfg.get("dataset_tag", "isas20") == "argo_v2":
         from preproc.export_v2_cache import build_argo_cache
@@ -46,6 +47,8 @@ def ensure_cache(config):
         cache_path = build_argo_cache(config.config)
     else:
         cache_path = build_train_cache(config.config)
+    if pinned:
+        cache_path = pinned
     config.config["data_loader"]["args"]["cache_path"] = cache_path
     spatial_pad = int(io_cfg.get("spatial_pad", 0))
     temporal_pad = int(io_cfg.get("temporal_pad", 0))
@@ -150,6 +153,18 @@ def main(config):
         model = torch.nn.DataParallel(model, device_ids=device_ids)
 
     cache, _, _ = _load_cache_tensors(cache_path)
+    dl_args = config.config["data_loader"]["args"]
+    target_key = dl_args.get("target_key", "targets")
+    weight_key = dl_args.get("weight_key", "weights")
+    loss_outputs = collections.OrderedDict(config["outputs"])
+    loss_cfg = config.config.get("loss_config") or {}
+    ae_targets = cache.get(target_key) if loss_cfg.get("mode") == "decoder" else cache.get("ae_targets")
+    ae_weights = cache.get(weight_key) if loss_cfg.get("mode") == "decoder" else cache.get("ae_weights")
+    true_profiles = cache.get("true_profiles")
+    if true_profiles is None and loss_cfg.get("mode") == "decoder":
+        true_profiles = true_profiles_numpy(
+            cache["targets"], cache["pca_models"], collections.OrderedDict(cache["outputs"])
+        )
     density_meta = SimpleNamespace(
         LAT=cache["LAT"],
         LON=cache["LON"],
@@ -159,15 +174,17 @@ def main(config):
     )
     criterion = make_loss(
         pca_models=cache["pca_models"],
-        outputs=cache["outputs"],
-        weights=cache["weights"],
+        outputs=loss_outputs,
+        weights=cache.get(weight_key, cache["weights"]),
         device=device,
         density_config=config.config.get("density"),
         density_meta=density_meta,
         loss_scales=config.config.get("loss_scales"),
-        loss_config=config.config.get("loss_config"),
+        loss_config=loss_cfg,
         targets=cache["targets"],
-        true_profiles=cache.get("true_profiles"),
+        true_profiles=true_profiles,
+        ae_targets=ae_targets,
+        ae_weights=ae_weights,
     )
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)
@@ -192,7 +209,7 @@ def main(config):
     checkpoint_extra = {
         "pca_models": data_loader.pca_models,
         "input_params": data_loader.input_params,
-        "outputs": dict(data_loader.outputs),
+        "outputs": dict(loss_outputs),
     }
 
     trainer = Trainer(

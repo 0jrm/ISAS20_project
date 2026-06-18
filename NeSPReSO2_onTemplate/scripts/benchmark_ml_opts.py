@@ -162,6 +162,8 @@ def build_stack(
             loss_config=config.config.get("loss_config"),
             targets=cache["targets"],
             true_profiles=cache.get("true_profiles"),
+            ae_targets=cache.get("ae_targets"),
+            ae_weights=cache.get("ae_weights"),
         )
         resolve_dataloader_batch_size(
             config, model, criterion, cache_path, device, logging.getLogger("benchmark_ml_opts")
