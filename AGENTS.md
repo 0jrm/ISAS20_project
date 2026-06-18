@@ -60,6 +60,7 @@ GPU training: add `--gres=gpu:1`. See [`NeSPReSO2_onTemplate/README.md`](NeSPReS
 | [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md) | What changed, how to run census/splits/L3 |
 | [`HANDOFF.md`](HANDOFF.md) | Session handoff (read first) |
 | [`context.txt`](context.txt) | L3 product IDs and download patterns |
+| [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md) | L3 rasterization close-out |
 
 ## Dissertation phases (summary)
 
@@ -68,7 +69,9 @@ GPU training: add `--gres=gpu:1`. See [`NeSPReSO2_onTemplate/README.md`](NeSPReS
 | 0 | Data census + split design | Done (`scripts/data_census.py`) |
 | 1 | Chronological split | Done (`base/split_utils.py`) |
 | 2 | ARGO-first path | Done (configs + eval) |
-| 3 | L3/masked-input pipeline | Scaffolded (downloaders only) |
+| 3 | L3/masked-input pipeline | Done (`l3_rasterize.py`, `export_l3_cache.py`) |
 | 4–10 | Augmentation, model channels, eval, diagnostics | Pending |
+
+Legacy ISAS Phase 5/6 docs (`PLAN-phase5.md`, `PLAN-phase6.md`) live on `nespreso-v2-port` only. This branch merged their **code** (`gom_diagnostics.py`, `results_table.py`, decoder `nanmean` loss) for ISAS appendix use.
 
 Do not skip to architecture experiments before split and L3 data validity are established.

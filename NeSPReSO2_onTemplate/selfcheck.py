@@ -365,6 +365,31 @@ def test_decoder_profile_loss():
         assert torch.isfinite(out_loss)
 
 
+def test_decoder_profile_loss_nan_mask():
+    """NaN depths in true profiles must not poison decoder profile loss."""
+    from collections import OrderedDict
+
+    from model.loss import DecoderProfileLoss, _build_profile_ae
+
+    torch.manual_seed(1)
+    n, depth, k = 8, 20, 2
+    profiles = torch.randn(n, depth)
+    profiles[:, 10:] = float("nan")
+    ae = _build_profile_ae("Autoencoder", k, depth)
+    ae.eval()
+    for p in ae.parameters():
+        p.requires_grad_(False)
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    true_t = {"temperature": profiles, "salinity": profiles}
+    decoders = {"temperature": ae, "salinity": ae}
+    loss_mod = DecoderProfileLoss(decoders, outputs, device=torch.device("cpu"), true_profiles=true_t)
+    with torch.no_grad():
+        z = ae.encoder(torch.nan_to_num(profiles, nan=0.0))
+    pcs = torch.cat([z, z], dim=1)
+    loss_val = loss_mod(pcs, torch.zeros_like(pcs), indices=torch.arange(n))
+    assert torch.isfinite(loss_val)
+
+
 def test_split_matches_torch_seed():
     """ponytail: same lengths + seed as v2 ``random_split`` after ``manual_seed``."""
     from torch.utils.data import Dataset, random_split
@@ -714,6 +739,22 @@ def test_raw_profile_rmse_decoder_indexing():
     assert abs(rmse["temperature"] - 0.5) < 1e-6
 
 
+def test_results_table_smoke():
+    from pathlib import Path
+
+    from scripts.results_table import build_table, collect_eval_rows
+
+    root = Path(__file__).resolve().parent
+    saved = root / "saved"
+    if not any(saved.glob("eval_*.json")):
+        return
+    rows = collect_eval_rows(saved)
+    report = build_table(rows)
+    assert report["n_files"] >= 1
+    prod = [r for r in report["rows"] if "prod" in r["label"].lower()]
+    assert prod or len(report["rows"]) >= 1
+
+
 if __name__ == "__main__":
     test_cap_batch_size()
     test_resolve_batch_size_fixed()
@@ -726,7 +767,9 @@ if __name__ == "__main__":
     test_combined_pca_loss_v2()
     test_pred_profile_cached_matches_combined()
     test_decoder_profile_loss()
+    test_decoder_profile_loss_nan_mask()
     test_raw_profile_rmse_decoder_indexing()
+    test_results_table_smoke()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
     test_split_matches_torch_seed()

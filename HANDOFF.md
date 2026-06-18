@@ -1,7 +1,7 @@
 # Session handoff — dissertation data foundation
 
-**Branch:** `phase3-l3-rasterization` (`b332666`, pushed)  
-**Base:** `nespreso-v2-port` @ `897fd24` (legacy ISAS Phase 5 production — unchanged)  
+**Branch:** `phase3-l3-rasterization` (merged `nespreso-v2-port` @ `38191d7`)  
+**Base:** legacy ISAS production on `nespreso-v2-port` — not replaced by dissertation work  
 **Updated:** 2026-06-18  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)
 
@@ -29,6 +29,16 @@ GoM dissertation NeSPReSO: **ARGO/CORA subsurface targets**, **mask-native L3 su
 | 5 L3 model channels | 11 | **Done** | `l3_input.py`, `train.py` L3 cache branch, PatchConvMLP 15-ch patches |
 | 6 Stratified eval | 12 | **Pending** | — |
 | 7+ Diagnostics / physics / ensemble | 13–15 | **Pending** | — |
+
+### Merged from `nespreso-v2-port` (legacy ISAS appendix)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| GoM ML diagnostics | **done** | `scripts/gom_diagnostics.py` — ISAS + ARGO prod checkpoints |
+| Results table | **done** | `scripts/results_table.py` — aggregates `saved/eval_*.json` |
+| Decoder eval `loss: NaN` | **done** | `DecoderProfileLoss` uses `nanmean` on profile MSE |
+
+ISAS production baseline (`patch16_scales`): T **1.016** / S **5.318**. Not the dissertation primary path.
 
 ---
 
@@ -125,23 +135,19 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l
 - L4 augmentation scaffold only — not wired into training loop.
 - Full-dataset L3 cache build without raw files is correct but **zero coverage** everywhere.
 - `config_argo_l3_smoke.json` sets `input_params.sss/sst/ssh/sat: false` — encodings only; sat block comes from L3 tensors.
-- ISAS configs on `nespreso-v2-port` still use random split (legacy parity).
-- Main workspace checkout may still be on `nespreso-v2-port` without dissertation code — **merge or checkout `phase3-l3-rasterization`**.
+- ISAS configs still use random split (legacy parity).
 
 ---
 
 ## Git / worktree
 
-| Location | Branch | Commit |
-|----------|--------|--------|
-| `ISAS20_project/` | `nespreso-v2-port` | `897fd24` (no dissertation code) |
-| `ISAS20_project-phase3-commit/` | `phase3-l3-rasterization` | `b332666` (latest) |
+| Location | Branch | Notes |
+|----------|--------|-------|
+| `ISAS20_project-phase3-commit/` | `phase3-l3-rasterization` | **active** — dissertation + merged ISAS appendix code |
+| `ISAS20_project/` | `nespreso-v2-port` | legacy ISAS-only checkout (optional) |
 
 ```bash
-git fetch origin
-git checkout phase3-l3-rasterization   # or merge into nespreso-v2-port
-# optional cleanup:
-# git worktree remove ../ISAS20_project-phase3-commit
+cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project-phase3-commit
 ```
 
 ---
@@ -162,3 +168,4 @@ git checkout phase3-l3-rasterization   # or merge into nespreso-v2-port
 |--------|---------|
 | `bb82a89` | Phases 0–3: census, chronological split, L3 rasterization |
 | `b332666` | Phases 4–5 scaffold + L3 batch loading + PatchConvMLP 15-ch forward |
+| `b03504e` | HANDOFF update for end of Phase 3–5 session |
