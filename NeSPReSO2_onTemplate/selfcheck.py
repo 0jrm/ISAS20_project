@@ -805,6 +805,82 @@ def test_stratified_eval_l3_cache_smoke():
     assert masks["all"].sum() == 8
 
 
+def test_static_stability_readiness_synthetic():
+    from diagnostics.readiness import static_stability_diagnostic
+
+    n_depth = 5
+    p = np.linspace(0.0, 100.0, n_depth)
+    t_stable = np.linspace(25.0, 10.0, n_depth)[:, None] * np.ones((1, 2))
+    s = 36.0 * np.ones((n_depth, 2))
+    lat = np.array([25.0, 25.0])
+    lon = np.array([-90.0, -90.0])
+
+    stable = static_stability_diagnostic(t_stable, s, p, lat, lon)
+    assert stable["violation_rate"] == 0.0
+    assert stable["profile_flags"] == [0, 0]
+    assert stable["method"] == "gsw_torch.sigma0_inversion"
+
+    t_bad = t_stable.copy()
+    t_bad[2, 0] = 30.0
+    mixed = static_stability_diagnostic(t_bad, s, p, lat, lon)
+    assert mixed["profile_flags"][0] == 1
+    assert mixed["profile_flags"][1] == 0
+    assert mixed["total_violations"] >= 1
+
+
+def test_gsw_torch_matches_gsw_reference():
+    """gsw_torch signatures match gsw; vectorized σ₀ within ~1e-5 kg/m³ of reference gsw."""
+    import gsw as gsw_ref
+    import gsw_torch as gt
+
+    from diagnostics.readiness import _GSW_REF_ATOL_KGM3, static_stability_diagnostic
+
+    n_depth, n_samples = 6, 4
+    p = np.linspace(0.0, 200.0, n_depth)
+    temp = np.linspace(26.0, 8.0, n_depth)[:, None] * np.ones((1, n_samples))
+    temp[2, 1] = 29.0  # one inversion
+    sal = (36.0 + 0.1 * np.linspace(0.0, 1.0, n_depth))[:, None] * np.ones((1, n_samples))
+    lat = np.linspace(24.0, 27.0, n_samples)
+    lon = np.linspace(-92.0, -88.0, n_samples)
+
+    report = static_stability_diagnostic(temp, sal, p, lat, lon)
+
+    # Per-profile reference via vanilla gsw
+    flags_ref = []
+    for j in range(n_samples):
+        sa = gsw_ref.SA_from_SP(sal[:, j], p, lon[j], lat[j])
+        ct = gsw_ref.CT_from_t(sa, temp[:, j], p)
+        sig = gsw_ref.sigma0(sa, ct)
+        delta = np.diff(sig)
+        ok = np.isfinite(temp[:, j]) & np.isfinite(sal[:, j])
+        valid = ok[:-1] & ok[1:]
+        flags_ref.append(bool(np.any(valid & (delta < -0.01))))
+    assert report["profile_flags"] == [int(v) for v in flags_ref]
+
+    # Vectorized gsw_torch sigma0 matches gsw on all finite points
+    pres = p[:, None] * np.ones((1, n_samples))
+    sa_t = gt.SA_from_SP(sal, pres, lon, lat)
+    ct_t = gt.CT_from_t(sa_t, temp, pres)
+    sig_t = np.asarray(gt.sigma0(sa_t, ct_t))
+    for j in range(n_samples):
+        sa = gsw_ref.SA_from_SP(sal[:, j], p, lon[j], lat[j])
+        ct = gsw_ref.CT_from_t(sa, temp[:, j], p)
+        sig = gsw_ref.sigma0(sa, ct)
+        assert np.nanmax(np.abs(sig - sig_t[:, j])) < _GSW_REF_ATOL_KGM3
+
+
+def test_readiness_report_requires_lat_lon():
+    from diagnostics.readiness import readiness_report
+
+    t = np.ones((3, 2))
+    s = np.ones((3, 2))
+    try:
+        readiness_report(t, s)
+        raise AssertionError("expected ValueError for missing lat/lon")
+    except ValueError as exc:
+        assert "latitude" in str(exc)
+
+
 def test_results_table_smoke():
     from pathlib import Path
 
@@ -837,6 +913,9 @@ if __name__ == "__main__":
     test_raw_profile_rmse_decoder_indexing()
     test_stratified_eval_bins_and_aggregate()
     test_stratified_eval_l3_cache_smoke()
+    test_static_stability_readiness_synthetic()
+    test_gsw_torch_matches_gsw_reference()
+    test_readiness_report_requires_lat_lon()
     test_results_table_smoke()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
