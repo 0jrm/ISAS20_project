@@ -122,6 +122,9 @@ class NeSPReSODataLoader(DataLoader):
         self.profiles = self.cache.get("profiles")
         self.input_params = self.cache.get("input_params", {})
         self.dataset_tag = self.cache.get("dataset_tag", "unknown")
+        self.l3_enabled = bool(self.cache.get("l3_enabled", False))
+        self.l3_channel_metadata = self.cache.get("l3_channel_metadata")
+        self.sat_patch_shape = self.cache.get("sat_patch_shape")
         self.min_depth = self.cache.get("min_depth", 0)
         self.max_depth = self.cache.get("max_depth", targets.shape[1] - 1)
         self.batch_size = batch_size

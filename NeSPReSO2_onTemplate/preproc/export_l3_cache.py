@@ -28,7 +28,8 @@ from preproc.l3_rasterize import (
     rasterize_era5_wind_for_target,
     rasterize_ssh_for_target,
 )
-from preproc.preproc_isas_sat import config_hash, write_train_cache
+from preproc.l3_input import build_l3_input_rows, l3_channel_metadata
+from preproc.preproc_isas_sat import config_hash, count_encoding_dims, write_train_cache
 
 
 def _git_commit() -> str | None:
@@ -100,6 +101,24 @@ def build_l3_sample(
     step = float(l3_cfg["grid_step_deg"])
     target = build_target_from_cache(cache, idx, dataset_tag=dataset_tag, v2_src=v2_src)
     grid = patch_grid(target.lat, target.lon, half, step)
+
+    if not raw_root.is_dir():
+        # ponytail: no raw products on disk — explicit empty bundles
+        from preproc.l3_rasterize import coverage_metrics, empty_bundle
+
+        t, h, w = len(windows), grid.height, grid.width
+        empty = empty_bundle(t, h, w)
+        cov = coverage_metrics(empty, target=target)
+        return {
+            "target_idx": int(idx),
+            "split": split,
+            "target": {"lat": target.lat, "lon": target.lon, "time": target.time.isoformat()},
+            "ssh": empty,
+            "wind_u": empty.copy(),
+            "wind_v": empty.copy(),
+            "coverage": {"ssh": cov, "wind_u": cov, "wind_v": cov},
+            "sources": {"ssh_files": [], "era5_files": []},
+        }
 
     ssh_paths = collect_ssh_paths(raw_root, target.time, windows)
     era5_paths = collect_era5_paths(raw_root, target.time, windows)
@@ -209,23 +228,26 @@ def build_l3_processed_batch(
 
 
 def export_l3_train_cache(config: dict, processed_path: str | Path, force: bool = False) -> str:
-    """Attach l3_tensors to ARGO train cache (legacy inputs unchanged)."""
+    """Build train-ready cache with L3-flattened ``inputs`` and ``l3_tensors``."""
     io = config["io"]
+    l3_cfg = io["l3"]
     cache_dir = _resolve_path(_ROOT, io.get("cache_dir", "../data/cache"))
     chash = config_hash(config)
-    cache_path = cache_dir / f"train_ready_{chash}.pkl"
-    l3_cache_path = cache_dir / f"train_ready_l3_{chash}_{l3_config_hash(io['l3'])}.pkl"
+    lhash = l3_config_hash(l3_cfg)
+    cache_tag = f"l3_{chash}_{lhash}"
+    l3_cache_path = cache_dir / f"train_ready_{cache_tag}.pkl"
     if l3_cache_path.is_file() and not force:
         return str(l3_cache_path)
 
-    with open(cache_path, "rb") as f:
+    with open(cache_dir / f"train_ready_{chash}.pkl", "rb") as f:
         base = pickle.load(f)
     with open(processed_path, "rb") as f:
         processed = pickle.load(f)
 
     l3_by_idx = {s["target_idx"]: s for s in processed["samples"]}
+    n = len(base["inputs"])
     l3_tensors = []
-    for i in range(len(base["inputs"])):
+    for i in range(n):
         s = l3_by_idx.get(i)
         if s is None:
             l3_tensors.append(None)
@@ -239,10 +261,37 @@ def export_l3_train_cache(config: dict, processed_path: str | Path, force: bool 
                 }
             )
 
+    n_enc = count_encoding_dims(config.get("input_params", {}))
+    inputs = build_l3_input_rows(base["inputs"], l3_tensors, l3_cfg, n_enc=n_enc)
+    spatial_pad, temporal_pad, grid_size = l3_geometry(l3_cfg)
+    from preproc.l3_input import l3_sat_patch_shape
+
+    c, t, h, w = l3_sat_patch_shape(l3_cfg)
     payload = dict(base)
+    payload["inputs"] = inputs
     payload["l3_tensors"] = l3_tensors
-    payload["l3_geometry"] = processed["geometry"]
-    payload["l3_features"] = processed["features"]
+    payload["l3_geometry"] = processed.get("geometry") or {
+        "spatial_pad": spatial_pad,
+        "temporal_pad": temporal_pad,
+        "grid_size": grid_size,
+    }
+    payload["l3_features"] = processed.get("features", list(FEATURE_NAMES))
+    payload["l3_channel_metadata"] = l3_channel_metadata(l3_cfg)
+    payload["spatial_pad"] = spatial_pad
+    payload["temporal_pad"] = temporal_pad
+    payload["sat_patch_shape"] = [c, t, h, w]
+    payload["l3_enabled"] = True
     payload["dataset_tag"] = io.get("dataset_tag", "argo_v2") + "_l3"
     payload["l3_processed_path"] = str(processed_path)
-    return write_train_cache(payload, str(cache_dir), f"l3_{chash}_{l3_config_hash(io['l3'])}")
+    return write_train_cache(payload, str(cache_dir), cache_tag)
+
+
+def build_argo_l3_train_cache(config: dict, force: bool = False, max_samples: int | None = None) -> str:
+    """Rasterize L3 (or empty bundles), flatten inputs, write ``train_ready_l3_*.pkl``."""
+    processed_path = build_l3_processed_batch(
+        config,
+        max_samples=max_samples,
+        anchor_date=None if max_samples is None else "2020-01-15",
+        force=force,
+    )
+    return export_l3_train_cache(config, processed_path, force=force)

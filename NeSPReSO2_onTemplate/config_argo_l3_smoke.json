@@ -24,10 +24,10 @@
         "latsin": true,
         "loncos": true,
         "lonsin": true,
-        "sss": true,
-        "sst": true,
-        "ssh": true,
-        "sat": true
+        "sss": false,
+        "sst": false,
+        "ssh": false,
+        "sat": false
     },
 
     "io": {
@@ -52,6 +52,12 @@
                 "wind_v": {"product": "era5_wind", "component": "v", "raw_subdir": "era5"}
             },
             "features": ["value", "mask", "age", "uncertainty", "count"]
+        },
+        "l4": {
+            "enabled": false,
+            "noise_scale": 1.0,
+            "mission_dropout_prob": 0.0,
+            "time_window_dropout_prob": 0.0
         }
     },
 

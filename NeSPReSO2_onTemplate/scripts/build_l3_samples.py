@@ -13,7 +13,7 @@ if str(_ROOT) not in sys.path:
 
 from parse_config import validate_config
 from playground import read_json
-from preproc.export_l3_cache import build_l3_processed_batch, export_l3_train_cache
+from preproc.export_l3_cache import build_argo_l3_train_cache, build_l3_processed_batch
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,7 +40,11 @@ def main(argv: list[str] | None = None) -> int:
         force=args.force,
     )
     if args.export_train_cache:
-        export_l3_train_cache(cfg, processed, force=args.force)
+        build_argo_l3_train_cache(
+            cfg,
+            force=args.force,
+            max_samples=args.max_samples,
+        )
     print(processed)
     return 0
 

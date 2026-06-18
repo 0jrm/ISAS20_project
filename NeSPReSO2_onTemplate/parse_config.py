@@ -51,6 +51,9 @@ def validate_config(config):
         assert int(config["io"]["temporal_pad"]) == pad_t, (
             f"io.temporal_pad ({config['io']['temporal_pad']}) must match l3 geometry ({pad_t})"
         )
+    l4 = config.get("io", {}).get("l4")
+    if l4 and l4.get("enabled"):
+        assert float(l4.get("noise_scale", 1.0)) >= 0, "io.l4.noise_scale must be >= 0"
 
 
 class ConfigParser:

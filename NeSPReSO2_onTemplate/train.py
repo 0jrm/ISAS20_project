@@ -41,19 +41,34 @@ def ensure_cache(config):
     validate_config(config.config)
     pinned = config.config["data_loader"]["args"].get("cache_path") or None
     io_cfg = config.config.get("io", {})
-    if io_cfg.get("dataset_tag", "isas20") == "argo_v2":
+    l3_cfg = io_cfg.get("l3") or {}
+    input_params = config["input_params"]
+
+    if l3_cfg.get("enabled"):
+        from preproc.export_l3_cache import build_argo_l3_train_cache
+        from preproc.l3_input import compute_l3_input_dim, l3_n_channels, l3_sat_patch_shape
+
+        cache_path = build_argo_l3_train_cache(config.config)
+        spatial_pad = int(io_cfg.get("spatial_pad", 0))
+        temporal_pad = int(io_cfg.get("temporal_pad", 0))
+        expected_dim = compute_l3_input_dim(input_params, l3_cfg)
+    elif io_cfg.get("dataset_tag", "isas20") == "argo_v2":
         from preproc.export_v2_cache import build_argo_cache
 
         cache_path = build_argo_cache(config.config)
+        spatial_pad = int(io_cfg.get("spatial_pad", 0))
+        temporal_pad = int(io_cfg.get("temporal_pad", 0))
+        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
     else:
         cache_path = build_train_cache(config.config)
+        spatial_pad = int(io_cfg.get("spatial_pad", 0))
+        temporal_pad = int(io_cfg.get("temporal_pad", 0))
+        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
+
     if pinned:
         cache_path = pinned
     config.config["data_loader"]["args"]["cache_path"] = cache_path
-    spatial_pad = int(io_cfg.get("spatial_pad", 0))
-    temporal_pad = int(io_cfg.get("temporal_pad", 0))
-    input_params = config["input_params"]
-    expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
+
     if config["arch"]["args"].get("input_dim") != expected_dim:
         config.config["arch"]["args"]["input_dim"] = expected_dim
 
@@ -63,12 +78,17 @@ def ensure_cache(config):
 
     arch_type = config["arch"]["type"]
     if arch_type == "PatchConvMLP":
-        n_sat = count_sat_vars(input_params)
-        patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
         arch_args = config.config["arch"]["args"]
         arch_args["n_enc"] = count_encoding_dims(input_params)
-        arch_args["n_sat"] = n_sat
-        arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
+        if l3_cfg.get("enabled"):
+            patch_shape = l3_sat_patch_shape(l3_cfg)
+            arch_args["n_sat"] = l3_n_channels(l3_cfg)
+            arch_args["patch_shape"] = list(patch_shape)
+        else:
+            n_sat = count_sat_vars(input_params)
+            patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
+            arch_args["n_sat"] = n_sat
+            arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
 
     import pickle as _pickle
 
@@ -77,7 +97,7 @@ def ensure_cache(config):
     if cache_dim != expected_dim:
         raise ValueError(
             f"cache input dim {cache_dim} != expected {expected_dim} "
-            f"(spatial_pad={spatial_pad}, temporal_pad={temporal_pad})"
+            f"(spatial_pad={spatial_pad}, temporal_pad={temporal_pad}, l3={l3_cfg.get('enabled')})"
         )
 
     split_seed = config.config.get("seed", 42)

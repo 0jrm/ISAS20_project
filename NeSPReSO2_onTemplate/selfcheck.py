@@ -585,9 +585,98 @@ def test_l3_processed_batch_smoke():
     for key in ("ssh", "wind_u", "wind_v"):
         arr = s0[key]
         assert arr.shape[0] == 5
-        assert arr.ndim == 4
+        assert arr.shape[1:] == (5, 25, 25)
     assert "split" in s0
     assert "coverage" in s0
+
+
+def test_l3_input_dim_and_flatten():
+    from preproc.l3_input import compute_l3_input_dim, flatten_l3_tensors, l3_sat_patch_shape
+
+    l3_cfg = {
+        "patch_half_deg": 3.0,
+        "grid_step_deg": 0.25,
+        "time_windows_hours": [0, 24, 72, 168, 336],
+        "variables": {"ssh": {}, "wind_u": {}, "wind_v": {}},
+        "features": ["value", "mask", "age", "uncertainty", "count"],
+    }
+    flags = {k: True for k in ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")}
+    dim = compute_l3_input_dim(flags, l3_cfg)
+    c, t, h, w = l3_sat_patch_shape(l3_cfg)
+    assert dim == 6 + c * t * h * w
+    flat = flatten_l3_tensors(None, l3_cfg)
+    assert flat.shape == (c * t * h * w,)
+
+
+def test_patch_conv_mlp_l3_forward():
+    from preproc.l3_input import compute_l3_input_dim, l3_n_channels, l3_sat_patch_shape
+
+    l3_cfg = {
+        "patch_half_deg": 3.0,
+        "grid_step_deg": 0.25,
+        "time_windows_hours": [0, 24, 72, 168, 336],
+        "variables": {"ssh": {}, "wind_u": {}, "wind_v": {}},
+        "features": ["value", "mask", "age", "uncertainty", "count"],
+    }
+    flags = {k: True for k in ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")}
+    c, t, h, w = l3_sat_patch_shape(l3_cfg)
+    dim = compute_l3_input_dim(flags, l3_cfg)
+    model = PatchConvMLP(
+        input_dim=dim,
+        output_dim=4,
+        n_enc=6,
+        n_sat=l3_n_channels(l3_cfg),
+        patch_shape=[c, t, h, w],
+        head_layers=[32],
+        conv_channels=[8, 16],
+    )
+    x = torch.randn(2, dim)
+    y = model(x)
+    assert y.shape == (2, 4)
+
+
+def test_l4_mask_augment():
+    from preproc.l4_augment import SOURCE_SYNTH_L4_MASKED, apply_l4_mask_augment
+
+    field = np.ones((3, 3), dtype=np.float32)
+    mask = np.zeros((3, 3), dtype=np.float32)
+    mask[1, 1] = 1.0
+    values, out_mask, flag = apply_l4_mask_augment(field, mask, noise_scale=0.0, rng=np.random.default_rng(0))
+    assert flag == SOURCE_SYNTH_L4_MASKED
+    assert out_mask[1, 1] == 1.0
+    assert values[1, 1] == 1.0
+    assert values[0, 0] == 0.0
+
+
+def test_l3_dataloader_batch():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    cfg_path = root / "config_argo_l3_smoke.json"
+    if not cfg_path.is_file():
+        return
+    from playground import read_json
+    from preproc.export_l3_cache import build_argo_l3_train_cache
+
+    cfg = read_json(cfg_path)
+    cache_path = build_argo_l3_train_cache(cfg, force=True, max_samples=16)
+    from preproc.l3_input import compute_l3_input_dim
+
+    enc_flags = {k: bool(v) for k, v in cfg["input_params"].items()}
+    expected_dim = compute_l3_input_dim(enc_flags, cfg["io"]["l3"])
+    import data_loader.data_loaders as dlmod
+
+    loader = dlmod.NeSPReSODataLoader(
+        cache_path=cache_path,
+        batch_size=4,
+        split="train",
+        split_mode="chronological",
+        v2_src=cfg["io"].get("v2_src"),
+    )
+    assert loader.l3_enabled
+    inputs, targets, idx = next(iter(loader))
+    assert inputs.shape[1] == expected_dim
+    assert targets.ndim == 2
 
 
 def test_raw_profile_rmse_decoder_indexing():
@@ -645,6 +734,10 @@ if __name__ == "__main__":
     test_l3_bin_observations_synthetic()
     test_l3_rasterize_missing_is_explicit()
     test_l3_processed_batch_smoke()
+    test_l3_input_dim_and_flatten()
+    test_patch_conv_mlp_l3_forward()
+    test_l4_mask_augment()
+    test_l3_dataloader_batch()
     test_train_monitor_once()
     test_overlap_pairs()
     test_cache_schema_keys()

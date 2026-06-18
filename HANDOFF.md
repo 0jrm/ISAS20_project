@@ -11,8 +11,10 @@
 | 0 Data census | **Done** | `scripts/data_census.py` → `reports/data_census.*`, `reports/split_design.*` |
 | 1 Chronological split | **Done** | `base/split_utils.py`; `split_mode: chronological` in ARGO configs |
 | 2 ARGO-first path | **Done** | Existing v2 export + eval; smoke config updated |
-| 3 L3 pipeline | **Partial** | Rasterization + processed samples (`preproc/l3_rasterize.py`, `scripts/build_l3_samples.py`); model channels still Phase 5 |
-| 4–9 | **Pending** | L4 augmentation, model channels, stratified eval, diagnostics, physics/ensemble hooks |
+| 3 L3 pipeline | **Done** | Rasterization, L3 train cache, batch loading, PatchConvMLP forward (SSH + ERA5 wind MVP) |
+| 4 L4 augmentation | **Scaffolded** | `preproc/l4_augment.py`; config `io.l4` (disabled by default) |
+| 5 Model L3 channels | **Done** | `preproc/l3_input.py`; `train.py` L3 cache path; 15-ch patch mode |
+| 6–9 | **Pending** | Stratified eval, diagnostics, physics/ensemble hooks |
 
 ## Key finding
 
@@ -37,8 +39,11 @@ python3 scripts/download_l3_products.py --product all_scaffold
 python3 scripts/download_l3_products.py --product ssh_l3_historical --date 2020-01-15
 python3 scripts/download_l3_products.py --product era5_wind --year 2020 --month 1
 
-# L3 rasterization smoke (works without raw files — empty masks)
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config_argo_l3_smoke.json --max-samples 20
+# L3 train cache + batch smoke
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config_argo_l3_smoke.json --max-samples 20 --export-train-cache --force
+
+# L3 smoke train (2 epochs, mask-native patches)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l3_smoke.json
 ```
 
 ## Eval rules (unchanged)
@@ -50,9 +55,9 @@ srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config_
 
 ## Next coding tasks
 
-1. PatchConvMLP channel expansion for mask-native L3 bundles (Phase 5).
-2. Stratified eval reports by coverage regime.
-3. Readiness diagnostics module (`diagnostics/readiness.py`).
+1. Stratified eval reports by L3 coverage regime (Phase 6).
+2. Readiness diagnostics module (`diagnostics/readiness.py`).
+3. Full L4 masked-augmentation pipeline (apply real masks to L4 fields).
 
 ## Known limitations
 
