@@ -12,9 +12,9 @@
       "encoding_dim": 16,
       "split": "test",
       "n_profiles": 758,
-      "pca_recon_rmse": 0.2928746682766794,
-      "ae_recon_rmse": NaN,
-      "ae_over_pca": NaN,
+      "pca_recon_rmse": 0.29287428786559455,
+      "ae_recon_rmse": 2.895831346511841,
+      "ae_over_pca": 9.887625737363438,
       "config_key": "isas_patch"
     },
     {
@@ -22,9 +22,9 @@
       "encoding_dim": 16,
       "split": "test",
       "n_profiles": 758,
-      "pca_recon_rmse": 1.100087200502104,
-      "ae_recon_rmse": NaN,
-      "ae_over_pca": NaN,
+      "pca_recon_rmse": 1.1000881854007551,
+      "ae_recon_rmse": 6.389281272888184,
+      "ae_over_pca": 5.807971904143856,
       "config_key": "isas_patch"
     },
     {
@@ -32,9 +32,9 @@
       "encoding_dim": 16,
       "split": "test",
       "n_profiles": 623,
-      "pca_recon_rmse": 0.060155177026167114,
-      "ae_recon_rmse": 1.5011540651321411,
-      "ae_over_pca": 24.954694497518457,
+      "pca_recon_rmse": 0.06015517702676072,
+      "ae_recon_rmse": 1.3639754056930542,
+      "ae_over_pca": 22.674281302277176,
       "config_key": "argo_point"
     },
     {
@@ -42,9 +42,9 @@
       "encoding_dim": 16,
       "split": "test",
       "n_profiles": 623,
-      "pca_recon_rmse": 0.012711571660015325,
-      "ae_recon_rmse": 2.5203499794006348,
-      "ae_over_pca": 198.27209780270368,
+      "pca_recon_rmse": 0.012711571660907243,
+      "ae_recon_rmse": 2.781388282775879,
+      "ae_over_pca": 218.80758390637646,
       "config_key": "argo_point"
     }
   ],

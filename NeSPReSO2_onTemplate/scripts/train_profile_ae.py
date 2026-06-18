@@ -151,6 +151,11 @@ def train_variable(
         layout.setdefault("n_enc", count_encoding_dims(layout.get("input_params", {})))
         return surface_residual_from_features(feat, variable, **layout).to(device)
 
+    def forward_model(xb, mb, fb=None):
+        if use_surface:
+            return model(xb, mb, surface_residual=surface_batch(fb))
+        return model(xb, mb)
+
     best_val = float("inf")
     best_state = None
     for epoch in range(1, epochs + 1):
@@ -164,7 +169,7 @@ def train_variable(
                 fb = None
             xb, mb = xb.to(device), mb.to(device)
             opt.zero_grad(set_to_none=True)
-            pred = model(xb, mb, surface_residual=surface_batch(fb))
+            pred = forward_model(xb, mb, fb)
             loss = criterion(pred, xb, mb)
             loss.backward()
             opt.step()
@@ -180,7 +185,7 @@ def train_variable(
                     xb, mb = batch
                     fb = None
                 xb, mb = xb.to(device), mb.to(device)
-                pred = model(xb, mb, surface_residual=surface_batch(fb))
+                pred = forward_model(xb, mb, fb)
                 val_losses.append(criterion(pred, xb, mb).item())
         val_loss = float(np.mean(val_losses))
         if val_loss < best_val:
@@ -194,7 +199,7 @@ def train_variable(
     with torch.no_grad():
         xv, mv = x_val.to(device), m_val.to(device)
         fv = f_val.to(device) if use_surface else None
-        recon = model(xv, mv, surface_residual=surface_batch(fv))
+        recon = forward_model(xv, mv, fv)
         valid = ~mv
         rmse = torch.sqrt(((recon - xv) ** 2 * valid.float()).sum() / valid.float().sum()).item()
 

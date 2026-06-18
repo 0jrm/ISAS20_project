@@ -327,6 +327,37 @@ def assert_matches_eval_run(
             )
 
 
+def bin_map_scalar_rmse(
+    lon: np.ndarray,
+    lat: np.ndarray,
+    pred_c: np.ndarray,
+    true_c: np.ndarray,
+    *,
+    lon_step: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """1° bin mean of per-profile scalar RMSE on the common grid."""
+    prof_rmse = np.sqrt(np.nanmean((pred_c - true_c) ** 2, axis=0))
+    lon = np.floor(lon) + 0.5
+    lat = np.floor(lat) + 0.5
+    lon_bins = np.arange(np.floor(lon.min()) - 0.5, np.ceil(lon.max()) + 0.5 + lon_step, lon_step)
+    lat_bins = np.arange(np.floor(lat.min()) - 0.5, np.ceil(lat.max()) + 0.5 + lon_step, lon_step)
+    grid = np.full((len(lat_bins) - 1, len(lon_bins) - 1), np.nan)
+    nprof = np.zeros_like(grid)
+    for i in range(len(lon_bins) - 1):
+        for j in range(len(lat_bins) - 1):
+            in_bin = (
+                (lon >= lon_bins[i])
+                & (lon < lon_bins[i + 1])
+                & (lat >= lat_bins[j])
+                & (lat < lat_bins[j + 1])
+            )
+            if not np.any(in_bin):
+                continue
+            nprof[j, i] = float(np.sum(in_bin))
+            grid[j, i] = float(np.nanmean(prof_rmse[in_bin]))
+    return lon_bins, lat_bins, grid, nprof
+
+
 def v2_checkpoint_dims(ckpt: dict) -> tuple[int, list[int], int]:
     """Return (input_dim, layers_config, output_dim) from a v2 ``model_state_dict``."""
     sd = ckpt.get("model_state_dict", ckpt)
@@ -361,6 +392,7 @@ def ae_recon_rmse(
     profiles: np.ndarray,
     mask: np.ndarray,
     *,
+    variable: str,
     arch: str = "Autoencoder",
     encoding_dim: int = 16,
     device: torch.device,
@@ -379,8 +411,11 @@ def ae_recon_rmse(
     from train_profile_ae import train_variable
 
     _, stats = train_variable(
-        profiles=profiles,
+        profiles=np.nan_to_num(profiles, nan=0.0),
         mask=mask,
+        features=None,
+        surface_layout=None,
+        variable=variable,
         arch=arch,
         encoding_dim=encoding_dim,
         device=device,
@@ -412,6 +447,7 @@ def representation_metrics_on_split(
         ae_rmse, ae_stats = ae_recon_rmse(
             prof,
             mask,
+            variable=name,
             encoding_dim=encoding_dim,
             device=device,
             epochs=ae_epochs,

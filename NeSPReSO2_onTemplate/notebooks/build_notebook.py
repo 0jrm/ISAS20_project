@@ -309,30 +309,27 @@ else:
     ),
     code(
         """# Spatial maps (1° bins) on common-grid depth-integrated residuals
-if summary_rows and (checkpoints.get(key)):
+if summary_rows:
     sys.path.insert(0, str(V2_REPO / "src"))
-    from nespreso.viz.maps import calculate_average_in_bin, plot_bin_map
+    from nespreso.viz.maps import plot_bin_map
+    from nb_metrics import bin_map_scalar_rmse
 
-    idx = inf["indices"]
-    lat = inf["cache"]["LAT"][idx]
-    lon = inf["cache"]["LON"][idx]
-    lat = np.floor(lat) + 0.5
-    lon = np.floor(lon) + 0.5
-    lon_bins = np.arange(np.floor(lon.min()) - 0.5, np.ceil(lon.max()) + 1.5, 1.0)
-    lat_bins = np.arange(np.floor(lat.min()) - 0.5, np.ceil(lat.max()) + 1.5, 1.0)
-    lon_c = lon_bins + 0.5
-    lat_c = lat_bins + 0.5
+    for row in summary_rows:
+        key = row["config"]
+        cfg = CONFIGS[key]
+        ckpt = checkpoints[key]
+        inf = nb_metrics.run_inference(cfg, str(ckpt), split=EVAL_SPLIT, device=DEVICE)
+        m = nb_metrics.profile_metrics_from_pcs(
+            inf["pcs"], inf["indices"], inf["cache"], inf["pca_models"], inf["outputs"]
+        )
+        idx = inf["indices"]
+        lon = inf["cache"]["LON"][idx]
+        lat = inf["cache"]["LAT"][idx]
+        pred_c = align_profiles_to_depth(m["pred_profiles"]["temperature"], m["z_native"])[common_depth_mask()]
+        true_c = align_profiles_to_depth(m["true_profiles"]["temperature"], m["z_native"])[common_depth_mask()]
 
-    pred = m["pred_profiles"]["temperature"]
-    true = m["true_profiles"]["temperature"]
-    z_native = m["z_native"]
-    pred_c = align_profiles_to_depth(pred, z_native)[common_depth_mask()]
-    true_c = align_profiles_to_depth(true, z_native)[common_depth_mask()]
-    res_T = pred_c - true_c
-    dpt_idx = np.arange(res_T.shape[0])
-
-    grid_rmse, nprof = calculate_average_in_bin(lon_c, lat_c, lon, lat, res_T, dpt_idx, True)
-    plot_bin_map(lon_bins, lat_bins, grid_rmse, nprof, f"{key} temperature", "RMSE (common grid)")"""
+        lon_bins, lat_bins, grid_rmse, nprof = bin_map_scalar_rmse(lon, lat, pred_c, true_c)
+        plot_bin_map(lon_bins, lat_bins, grid_rmse, nprof, "Temperature", "RMSE (common grid)")"""
     ),
     md(
         """## Section 8 — v2 appendix (forward parity)
