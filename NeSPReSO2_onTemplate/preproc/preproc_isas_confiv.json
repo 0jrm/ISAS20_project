@@ -1,5 +1,5 @@
 {
-    "data_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/utils/NeSPReSO_v1_global_sat",
+    "data_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/NeSPReSO_v1_global_sat",
     "BBox": None,
     "input_params": {
         "bathymetry": ["elevation"],

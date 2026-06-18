@@ -1,7 +1,7 @@
 # Phase 6 — Diagnostics, global regional notebook, results narrative
 
 **Branch:** `nespreso-v2-port`  
-**Status:** **PLANNED** — engineering on GoM is mature; shift to exploration + communication  
+**Status:** **IN PROGRESS** — Tier A EDA + regional config landed; Tier B blocked on global profiles HDF5  
 **Gate cleared:** Phase 5 closed (PCA-16 production); Phase 4b exhausted on GoM
 
 ---
@@ -85,14 +85,14 @@ Reuse: [`nb_metrics.py`](NeSPReSO2_onTemplate/notebooks/nb_metrics.py), [`run_co
 
 | # | Task | Priority | Notes |
 |---|------|----------|-------|
-| 6.1 | Add `config_isas_global_*.json` with `io.data_path` + **BBox** (GoM or ~10° box first) | **P0** | Same sat groups as GoM if possible (`ostia`, `sss`, `ssh`); verify HDF5 |
-| 6.2 | **Tier A** notebook: station density, SST/SSS coverage, profile stats — no ML | **P0** | Fast sanity on global HDF5 |
-| 6.3 | Regional `build_train_cache` + holdout split | **P1** | ~5K stations if GoM BBox; pin `cache_path` |
-| 6.4 | **Tier B**: `nb_metrics` inference with `patch16_scales` on regional test split | **P1** | `raw_profile_rmse_common`, `depth_rmse`, `bin_map_rmse` |
+| 6.1 | Add `config_isas_global_*.json` with `io.data_path` + **BBox** (GoM or ~10° box first) | **done** | `config_isas_global_gom.json` — point mode, GoM BBox |
+| 6.2 | **Tier A** notebook: station density, SST/SSS coverage, profile stats — no ML | **done** | `scripts/global_eda.py` (headless); notebook optional |
+| 6.3 | Regional `build_train_cache` + holdout split | **blocked** | `profiles_NeSPReSO_v1_global.h5` corrupt on host |
+| 6.4 | **Tier B**: `nb_metrics` inference with `patch16_scales` on regional test split | **interim** | `scripts/phase6_diagnostics.py` — v2 GoM depth/bin maps; global blocked |
 | 6.5 | Extend `nb_configs.py` with `isas_global_regional` smoke key (optional 2-epoch) | **P2** | Mirror `isas_patch` pattern |
-| 6.6 | Results section: table from existing `saved/eval_*_test.json` + Phase 5 close-out | **P1** | Notebook section or short doc |
+| 6.6 | Results section: table from existing `saved/eval_*_test.json` + Phase 5 close-out | **done** | `scripts/results_table.py` → `saved/results/eval_table.md` |
 | 6.7 | Fix `eval_run.py` `loss: NaN` in decoder mode (appendix only) | **P3** | Mask-aware or skip combined loss in decoder mode |
-| 6.8 | Fix `preproc_isas_confiv.json` path → `data/NeSPReSO_v1_global_sat` | **P2** | When touching global preproc |
+| 6.8 | Fix `preproc_isas_confiv.json` path → `data/NeSPReSO_v1_global_sat` | **done** | |
 | 6.9 | **Phase 4c** full global train + DDP | **Deferred** | Only after 6.1–6.4 answer “do we need global predictions?” |
 
 ---
@@ -146,6 +146,10 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
 
 # Notebook metrics (headless compare pattern)
 srun --ntasks=1 --cpus-per-task=8 python3 notebooks/run_compare.py
+
+# Phase 6 full pipeline (Tier A + Tier B interim + results table)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 scripts/phase6_diagnostics.py
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/results_table.py
 ```
 
 ---

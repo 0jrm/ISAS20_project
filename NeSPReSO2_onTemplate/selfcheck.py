@@ -533,6 +533,50 @@ def test_raw_profile_rmse_decoder_indexing():
     assert abs(rmse["temperature"] - 0.5) < 1e-6
 
 
+def test_global_config_validates():
+    from pathlib import Path
+
+    from parse_config import validate_config
+    from playground import read_json
+
+    cfg = read_json(Path(__file__).resolve().parent / "config_isas_global_gom.json")
+    assert cfg["io"]["BBox"] is not None
+    assert cfg["arch"]["args"]["patch_shape"] is None
+    validate_config(cfg)
+
+
+def test_global_eda_smoke():
+    from pathlib import Path
+
+    from scripts.global_eda import run_eda
+
+    root = Path(__file__).resolve().parent
+    cfg = root / "config_isas_global_gom.json"
+    sat = (root / "../data/NeSPReSO_v1_global_sat/satellite_NeSPReSO_v1_global.h5").resolve()
+    if not sat.is_file():
+        return
+    out = root / "saved" / "plots" / "_selfcheck_global_eda"
+    summary = run_eda(cfg, out)
+    assert summary["n_stations_region"] > 1000
+    assert summary["fields"]["sst"]["frac_finite"] > 0.5
+
+
+def test_results_table_smoke():
+    from pathlib import Path
+
+    from scripts.results_table import build_table, collect_eval_rows
+
+    root = Path(__file__).resolve().parent
+    saved = root / "saved"
+    if not any(saved.glob("eval_*.json")):
+        return
+    rows = collect_eval_rows(saved)
+    report = build_table(rows)
+    assert report["n_files"] >= 1
+    prod = [r for r in report["rows"] if "prod" in r["label"].lower()]
+    assert prod or len(report["rows"]) >= 1
+
+
 if __name__ == "__main__":
     test_cap_batch_size()
     test_resolve_batch_size_fixed()
@@ -546,6 +590,9 @@ if __name__ == "__main__":
     test_pred_profile_cached_matches_combined()
     test_decoder_profile_loss()
     test_raw_profile_rmse_decoder_indexing()
+    test_global_config_validates()
+    test_global_eda_smoke()
+    test_results_table_smoke()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
     test_split_matches_torch_seed()
