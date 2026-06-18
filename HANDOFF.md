@@ -27,29 +27,18 @@ Test `raw_profile_rmse`: **T 1.016 / S 5.318**
 
 Phase 5 learned-decoder pipeline is **closed for ISAS production** (science appendix only — see [`PLAN-phase5.md`](PLAN-phase5.md)).
 
-**Next:** Phase 6 — regional global notebook + results narrative ([`PLAN-phase6.md`](PLAN-phase6.md)).
+**Next:** Phase 6 — GoM diagnostics + results narrative ([`PLAN-phase6.md`](PLAN-phase6.md)). **Global model dropped.**
 
-### Phase 6 in progress (Jun 18)
+### Phase 6 (GoM-only)
 
 | Task | Status | Artifact |
 |------|--------|----------|
-| 6.1 Regional global config | **done** | `config_isas_global_gom.json` — v1 global path, GoM BBox, point-mode `PatchConvMLP` |
-| 6.2 Tier A EDA (no ML) | **done** | `scripts/global_eda.py` → `saved/plots/global_eda/` |
-| 6.4 Tier B ML diagnostics | **interim** | `scripts/phase6_diagnostics.py` — v2 GoM depth/bin maps (global cache blocked) |
-| 6.6 Results table | **done** | `scripts/results_table.py` → `saved/results/eval_table.md` |
-| 6.8 `preproc_isas_confiv.json` path | **done** | → `data/NeSPReSO_v1_global_sat` |
-| 6.3 Regional cache build | **blocked** | `profiles_NeSPReSO_v1_global.h5` unreadable on this host (HDF5 addr overflow) |
-| 6.4 global transfer eval | **blocked** | v1 global sat is `(N,1,1,1)` point scalars — not v2 patches |
-
-**Global data caveats (this host):**
-- `profiles_NeSPReSO_v1_global.h5` — corrupt metadata (`eoa=2048`); `build_train_cache` fails.
-- `satellite_NeSPReSO_v1_global.h5` — ostia/ssh 881766 rows; `sss/sos` only 876262 (GoM BBox indices exceed SSS length).
-- Tier A EDA uses satellite HDF5 only (~5043 GoM BBox stations).
+| GoM ML diagnostics | **done** | `scripts/gom_diagnostics.py` → `saved/gom_diagnostics/` |
+| Results table | **done** | `scripts/results_table.py` → `saved/results/eval_table.md` |
+| Decoder eval `loss: NaN` | **done** | `DecoderProfileLoss` uses `nanmean` on profile MSE |
 
 ```bash
-# Phase 6 pipeline
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 scripts/phase6_diagnostics.py
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/global_eda.py -c config_isas_global_gom.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 scripts/gom_diagnostics.py
 srun --ntasks=1 --cpus-per-task=8 python3 scripts/results_table.py
 ```
 
@@ -172,7 +161,7 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
 
 | Doc | Purpose |
 |-----|---------|
-| [`PLAN-phase6.md`](PLAN-phase6.md) | Diagnostics, global regional notebook, results |
+| [`PLAN-phase6.md`](PLAN-phase6.md) | GoM diagnostics and results |
 | [`PLAN-phase5.md`](PLAN-phase5.md) | Phase 5 close-out + results |
 | [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md) | Phases 1–4b |
 | [`AGENTS.md`](AGENTS.md) | Agent + ponytail rules |

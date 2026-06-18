@@ -362,7 +362,8 @@ class DecoderProfileLoss(nn.Module):
             else:
                 pred_profiles = self.decoders[name].decode(z)
             true_profiles = self._true_profiles(name)[indices]
-            mse = nn.functional.mse_loss(pred_profiles, true_profiles)
+            diff = pred_profiles - true_profiles
+            mse = torch.nanmean(diff ** 2)
             scale = self.profile_scales.get(name, 1.0)
             total = total + mse / scale
         return total

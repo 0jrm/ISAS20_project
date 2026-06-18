@@ -27,7 +27,7 @@
 
 - [ ] **Phase 5 Stage A:** deeper/wider ARGO AE or longer training; KAN smoke on ISAS sal; fair PCA-X re-run
 - [ ] **Phase 5 Stage B:** `DecoderProfileLoss` + latent cache export
-- [ ] **Phase 4c (optional):** ISAS global scale-up + DDP
+- [x] ~~**Phase 4c (optional):** ISAS global scale-up + DDP~~ **Dropped** (Jun 2026) — GoM-only production; see [`PLAN-phase6.md`](PLAN-phase6.md)
 
 ### Training status (GoM, 16-PC + scales)
 
@@ -437,10 +437,9 @@ See **Phase 4b — Loss-speed roadmap** at top of this doc. Summary:
 | 3 | Cheaper loss (`cached true profiles`, `loss.mode`) | Medium–high | Best quality/speed trade via (d) |
 | 6 | AE/KAN learned latent (Phase 5) | High | Science bet; speed not guaranteed |
 
-### Phase 4c — Optional global throughput scale-up
+### Phase 4c — ~~Optional global throughput scale-up~~ **DROPPED**
 
-- Add `config_isas_global.json` pointing at v1 global HDF5 + legacy richer `input_params` (wind, bathymetry) when data is available on host
-- Train with DDP + `performance` block enabled; compare wall-clock to dual GoM runs
+Global / full-planet training is out of scope. GoM `patch16_scales` remains production. Legacy v1 global preproc (`preproc_isas_confiv.json`) may exist on disk but is not an active track.
 
 ### Phase 5 — Learned latent spaces (Suggestion 6; science + speed go/no-go)
 

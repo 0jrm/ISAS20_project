@@ -54,5 +54,5 @@ GPU training: add `--gres=gpu:1`. See [`NeSPReSO2_onTemplate/README.md`](NeSPReS
 |-----|---------|
 | [`HANDOFF.md`](HANDOFF.md) | Session handoff (read first) |
 | [`PLAN-phase5.md`](PLAN-phase5.md) | AE decoder roadmap (closed) |
-| [`PLAN-phase6.md`](PLAN-phase6.md) | Diagnostics, global regional notebook |
+| [`PLAN-phase6.md`](PLAN-phase6.md) | GoM diagnostics and results narrative |
 | [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md) | Phases 1–4b detail |

@@ -365,6 +365,31 @@ def test_decoder_profile_loss():
         assert torch.isfinite(out_loss)
 
 
+def test_decoder_profile_loss_nan_mask():
+    """NaN depths in true profiles must not poison decoder profile loss."""
+    from collections import OrderedDict
+
+    from model.loss import DecoderProfileLoss, _build_profile_ae
+
+    torch.manual_seed(1)
+    n, depth, k = 8, 20, 2
+    profiles = torch.randn(n, depth)
+    profiles[:, 10:] = float("nan")
+    ae = _build_profile_ae("Autoencoder", k, depth)
+    ae.eval()
+    for p in ae.parameters():
+        p.requires_grad_(False)
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    true_t = {"temperature": profiles, "salinity": profiles}
+    decoders = {"temperature": ae, "salinity": ae}
+    loss_mod = DecoderProfileLoss(decoders, outputs, device=torch.device("cpu"), true_profiles=true_t)
+    with torch.no_grad():
+        z = ae.encoder(torch.nan_to_num(profiles, nan=0.0))
+    pcs = torch.cat([z, z], dim=1)
+    loss_val = loss_mod(pcs, torch.zeros_like(pcs), indices=torch.arange(n))
+    assert torch.isfinite(loss_val)
+
+
 def test_split_matches_torch_seed():
     """ponytail: same lengths + seed as v2 ``random_split`` after ``manual_seed``."""
     from torch.utils.data import Dataset, random_split
@@ -533,34 +558,6 @@ def test_raw_profile_rmse_decoder_indexing():
     assert abs(rmse["temperature"] - 0.5) < 1e-6
 
 
-def test_global_config_validates():
-    from pathlib import Path
-
-    from parse_config import validate_config
-    from playground import read_json
-
-    cfg = read_json(Path(__file__).resolve().parent / "config_isas_global_gom.json")
-    assert cfg["io"]["BBox"] is not None
-    assert cfg["arch"]["args"]["patch_shape"] is None
-    validate_config(cfg)
-
-
-def test_global_eda_smoke():
-    from pathlib import Path
-
-    from scripts.global_eda import run_eda
-
-    root = Path(__file__).resolve().parent
-    cfg = root / "config_isas_global_gom.json"
-    sat = (root / "../data/NeSPReSO_v1_global_sat/satellite_NeSPReSO_v1_global.h5").resolve()
-    if not sat.is_file():
-        return
-    out = root / "saved" / "plots" / "_selfcheck_global_eda"
-    summary = run_eda(cfg, out)
-    assert summary["n_stations_region"] > 1000
-    assert summary["fields"]["sst"]["frac_finite"] > 0.5
-
-
 def test_results_table_smoke():
     from pathlib import Path
 
@@ -589,9 +586,8 @@ if __name__ == "__main__":
     test_combined_pca_loss_v2()
     test_pred_profile_cached_matches_combined()
     test_decoder_profile_loss()
+    test_decoder_profile_loss_nan_mask()
     test_raw_profile_rmse_decoder_indexing()
-    test_global_config_validates()
-    test_global_eda_smoke()
     test_results_table_smoke()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
