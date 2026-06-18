@@ -4,7 +4,7 @@
 **Updated:** 2026-06-18  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)
 
-Read this first. Detailed history: [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md), [`PLAN-phase5.md`](PLAN-phase5.md), [`PLAN.md`](PLAN.md).
+Read this first. Detailed history: [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md), [`PLAN-phase5.md`](PLAN-phase5.md), [`PLAN-phase6.md`](PLAN-phase6.md), [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -26,6 +26,8 @@ Offline **PyTorch batch training** for NeSPReSO v2 (surface → latent → T/S p
 Test `raw_profile_rmse`: **T 1.016 / S 5.318**
 
 Phase 5 learned-decoder pipeline is **closed for ISAS production** (science appendix only — see [`PLAN-phase5.md`](PLAN-phase5.md)).
+
+**Next:** Phase 6 — regional global notebook + results narrative ([`PLAN-phase6.md`](PLAN-phase6.md)).
 
 ---
 
@@ -146,6 +148,7 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
 
 | Doc | Purpose |
 |-----|---------|
+| [`PLAN-phase6.md`](PLAN-phase6.md) | Diagnostics, global regional notebook, results |
 | [`PLAN-phase5.md`](PLAN-phase5.md) | Phase 5 close-out + results |
 | [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md) | Phases 1–4b |
 | [`AGENTS.md`](AGENTS.md) | Agent + ponytail rules |
