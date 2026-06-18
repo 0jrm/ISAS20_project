@@ -12,7 +12,7 @@ import model.model as module_arch
 from model.loss import make_loss, true_profiles_numpy
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device
-from playground.batch_size import resolve_batch_size, train_samples_from_cache
+from playground.batch_size import resolve_batch_size
 from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model, maybe_compile_module
 from preproc.preproc_isas_sat import (
     build_train_cache,
@@ -82,6 +82,8 @@ def ensure_cache(config):
 
     split_seed = config.config.get("seed", 42)
     config.config["data_loader"]["args"]["split_seed"] = split_seed
+    if io_cfg.get("v2_src") and not config.config["data_loader"]["args"].get("v2_src"):
+        config.config["data_loader"]["args"]["v2_src"] = io_cfg["v2_src"]
     return cache_path
 
 
@@ -99,13 +101,21 @@ def resolve_dataloader_batch_size(config, model, criterion, cache_path, device, 
     """Resolve ``batch_size``; ``0`` probes the largest value that fits (VRAM and train set)."""
     dl_args = config.config["data_loader"]["args"]
     configured = int(dl_args.get("batch_size", 512))
-    train_frac = float(dl_args.get("train_frac", 0.7))
     safety = float(dl_args.get("batch_size_safety", 0.95))
 
     target_key = dl_args.get("target_key", "targets")
 
-    _, inputs, targets = _load_cache_tensors(cache_path, target_key)
-    n_train = train_samples_from_cache(inputs.shape[0], train_frac)
+    cache, inputs, targets = _load_cache_tensors(cache_path, target_key)
+    from base.split_utils import build_split_indices
+
+    split_indices = build_split_indices(
+        inputs.shape[0],
+        cache.get("JULD"),
+        dl_args,
+        dataset_tag=cache.get("dataset_tag", "unknown"),
+        v2_src=dl_args.get("v2_src"),
+    )
+    n_train = max(1, len(split_indices["train"]))
 
     optimizer_factory = lambda: build_optimizer(
         config.config,

@@ -30,7 +30,7 @@ srun --ntasks=1 --cpus-per-task=8 python3 eval_run.py -c config_isas.json -r sav
 | `config_isas.json` | `isas20` | ISAS HDF5 | 187 levels |
 | `config_argo.json` | `argo_v2` | v2 pickle | 1801 m (0–1800) |
 
-Both use `seed=42`, `70/15/15` split, v2-matched trainer settings (`early_stop=500`). Batch size defaults vary by config — see **Batch size** below.
+Both use `seed=42`, **chronological split** (ARGO default; ISAS still random legacy), v2-matched trainer settings (`early_stop=500`). Batch size defaults vary by config — see **Batch size** below.
 
 ## Batch size
 
@@ -76,7 +76,9 @@ Edit paths in `config_argo.json` (`v2_pickle`, `v2_src`) for your machine.
 | `io.dataset_tag` | `isas20` or `argo_v2` — selects cache builder in `train.py` |
 | `io.spatial_pad`, `io.temporal_pad` | `0,0` = center-pixel SST/SSS/SSH (v2 point inputs) |
 | `outputs` | Ordered map `{name: n_components}`; `output_dim = sum(values)` |
-| `data_loader.train_frac` / `val_frac` / `test_frac` | `torch.random_split` fractions (default 0.7/0.15/0.15) |
+| `data_loader.train_frac` / `val_frac` / `test_frac` | Split fractions (default 0.7/0.15/0.15) |
+| `data_loader.split_mode` | `chronological` (dissertation default for ARGO) or `random` (legacy) |
+| `data_loader.split_config` | Optional explicit date ranges per split |
 
 ## v2 equivalence
 
@@ -205,6 +207,20 @@ Optional faster loss (same objective as profile MSE branch):
 **Phase 5 (in progress):** learned profile decoders — see [PLAN-phase5.md](../PLAN-phase5.md). Stage A: `scripts/train_profile_ae.py`; dim sweep: `scripts/benchmark_profile_ae_dims.py` (dims 16–256 vs PCA-X). ISAS salinity AE beats PCA at every dim (best 0.202 @ dim 128); ARGO still PCA-dominant at 200 epochs.
 
 **DDP (2 GPU, ISAS smoke, 20 timed epochs):** `0.0184 s/epoch` vs `0.0256` 1-GPU baseline — **~1.39× faster** per epoch (each rank processes half the batches).
+
+## Dissertation data foundation
+
+See [`../PLAN-dissertation-data-foundation.md`](../PLAN-dissertation-data-foundation.md) and [`../HANDOFF.md`](../HANDOFF.md).
+
+```bash
+# Data census + split design (writes ../reports/)
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
+
+# L3 download scaffolding (requires copernicusmarine / podaac / cdsapi credentials)
+python3 scripts/download_l3_products.py --product all_scaffold
+```
+
+ARGO configs use `split_mode: chronological`. Explicit date ranges: `config_argo_chrono_dates.json`.
 
 ## Comparison notebook
 

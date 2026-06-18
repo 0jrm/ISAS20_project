@@ -1,5 +1,5 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM_smoke",
+    "name": "NeSPReSO2_ARGO_L3_smoke",
     "n_gpu": 1,
     "seed": 42,
 
@@ -33,12 +33,26 @@
     "io": {
         "dataset_tag": "argo_v2",
         "cache_dir": "../data/cache",
-        "spatial_pad": 0,
-        "temporal_pad": 0,
+        "spatial_pad": 12,
+        "temporal_pad": 4,
         "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
         "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
         "v2_reload": false,
-        "refit_pca": true
+        "refit_pca": true,
+        "l3": {
+            "enabled": true,
+            "raw_root": "../data/raw",
+            "processed_root": "../data/processed",
+            "patch_half_deg": 3.0,
+            "grid_step_deg": 0.25,
+            "time_windows_hours": [0, 24, 72, 168, 336],
+            "variables": {
+                "ssh": {"product": "ssh_l3_historical", "raw_subdir": "altimetry_l3"},
+                "wind_u": {"product": "era5_wind", "component": "u", "raw_subdir": "era5"},
+                "wind_v": {"product": "era5_wind", "component": "v", "raw_subdir": "era5"}
+            },
+            "features": ["value", "mask", "age", "uncertainty", "count"]
+        }
     },
 
     "outputs": {
@@ -64,7 +78,7 @@
         "type": "NeSPReSODataLoader",
         "args": {
             "cache_path": "",
-            "batch_size": 512,
+            "batch_size": 32,
             "shuffle": true,
             "split_mode": "chronological",
             "train_frac": 0.7,
@@ -78,11 +92,7 @@
 
     "optimizer": {
         "type": "Adam",
-        "args": {
-            "lr": 0.001,
-            "weight_decay": 0,
-            "amsgrad": false
-        }
+        "args": {"lr": 0.001, "weight_decay": 0, "amsgrad": false}
     },
 
     "loss": "combined_pca_loss",
@@ -90,15 +100,12 @@
 
     "lr_scheduler": {
         "type": "StepLR",
-        "args": {
-            "step_size": 100000,
-            "gamma": 1.0
-        }
+        "args": {"step_size": 100000, "gamma": 1.0}
     },
 
     "trainer": {
         "epochs": 2,
-        "save_dir": "saved/smoke_argo/",
+        "save_dir": "saved/smoke_argo_l3/",
         "save_period": 2,
         "log_interval": 1,
         "verbosity": 2,

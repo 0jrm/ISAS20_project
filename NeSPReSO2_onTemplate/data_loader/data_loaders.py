@@ -3,9 +3,10 @@ from collections import OrderedDict
 import numpy as np
 import pickle
 import torch
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 
 from base.base_data_loader import BaseDataLoader
+from base.split_utils import build_split_indices, subsets_from_indices
 
 
 def _collate_with_index(batch):
@@ -35,7 +36,7 @@ def _split_lengths(n: int, train_frac: float, val_frac: float, test_frac: float)
 
 
 class NeSPReSODataLoader(DataLoader):
-    """Loads train-ready pickle; 70/15/15 split via ``torch.random_split`` + seed."""
+    """Loads train-ready pickle; split via ``split_mode`` (chronological default for thesis)."""
 
     def __init__(
         self,
@@ -46,6 +47,10 @@ class NeSPReSODataLoader(DataLoader):
         val_frac=0.15,
         test_frac=0.15,
         split_seed=42,
+        split_mode="random",
+        split_config=None,
+        unassigned="exclude",
+        v2_src=None,
         split="train",
         num_workers=0,
         pin_memory=False,
@@ -58,6 +63,10 @@ class NeSPReSODataLoader(DataLoader):
         kwargs.pop("batch_size_safety", None)
         target_key = kwargs.pop("target_key", target_key)
         weight_key = kwargs.pop("weight_key", weight_key)
+        split_mode = kwargs.pop("split_mode", split_mode)
+        split_config = kwargs.pop("split_config", split_config)
+        unassigned = kwargs.pop("unassigned", unassigned)
+        v2_src = kwargs.pop("v2_src", v2_src)
 
         with open(cache_path, "rb") as f:
             self.cache = pickle.load(f)
@@ -72,19 +81,31 @@ class NeSPReSODataLoader(DataLoader):
         full_ds = NeSPReSODataset(inputs, targets)
 
         n = len(full_ds)
-        train_len, val_len, test_len = _split_lengths(n, train_frac, val_frac, test_frac)
-        g = torch.Generator().manual_seed(int(split_seed))
-        train_sub, val_sub, test_sub = random_split(
-            full_ds, [train_len, val_len, test_len], generator=g
+        dataset_tag = self.cache.get("dataset_tag", "unknown")
+        dl_cfg = {
+            "split_mode": split_mode,
+            "split_config": split_config,
+            "train_frac": train_frac,
+            "val_frac": val_frac,
+            "test_frac": test_frac,
+            "split_seed": split_seed,
+            "unassigned": unassigned,
+        }
+        split_indices = build_split_indices(
+            n,
+            self.cache.get("JULD"),
+            dl_cfg,
+            dataset_tag=dataset_tag,
+            v2_src=v2_src or self.cache.get("v2_src"),
         )
+        subsets = subsets_from_indices(full_ds, split_indices)
+        train_sub, val_sub, test_sub = subsets["train"], subsets["val"], subsets["test"]
         self.train_subset = train_sub
         self.val_subset = val_sub
         self.test_subset = test_sub
-        self.split_indices = {
-            "train": list(train_sub.indices),
-            "val": list(val_sub.indices),
-            "test": list(test_sub.indices),
-        }
+        self.split_indices = split_indices
+        self.split_mode = split_mode
+        self.split_config = split_config
 
         subsets = {"train": train_sub, "val": val_sub, "test": test_sub}
         if split not in subsets:

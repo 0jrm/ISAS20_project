@@ -26,10 +26,31 @@ def validate_config(config):
     assert mode in VALID_LOSS_MODES, f"loss_config.mode must be one of {VALID_LOSS_MODES}, got {mode!r}"
     if mode == "decoder":
         assert loss_cfg.get("decoder_dir"), "decoder mode requires loss_config.decoder_dir"
+    dl = config.get("data_loader", {}).get("args", {})
+    split_mode = dl.get("split_mode", "random")
+    assert split_mode in ("random", "chronological"), f"split_mode must be random|chronological, got {split_mode!r}"
+    if split_mode == "chronological" and dl.get("split_config"):
+        for split in ("train", "val", "test"):
+            sc = dl["split_config"].get(split, {})
+            assert sc.get("start") and sc.get("end"), f"split_config.{split} needs start/end dates"
     if config.get("performance"):
         from playground.performance import get_performance_config
 
         validate_performance_config(get_performance_config(config))
+    l3 = config.get("io", {}).get("l3")
+    if l3 and l3.get("enabled"):
+        for key in ("raw_root", "processed_root", "patch_half_deg", "grid_step_deg", "time_windows_hours"):
+            assert key in l3, f"io.l3.enabled requires io.l3.{key}"
+        assert len(l3["time_windows_hours"]) >= 1, "io.l3.time_windows_hours must be non-empty"
+        from preproc.l3_rasterize import l3_geometry
+
+        pad_s, pad_t, _ = l3_geometry(l3)
+        assert int(config["io"]["spatial_pad"]) == pad_s, (
+            f"io.spatial_pad ({config['io']['spatial_pad']}) must match l3 geometry ({pad_s})"
+        )
+        assert int(config["io"]["temporal_pad"]) == pad_t, (
+            f"io.temporal_pad ({config['io']['temporal_pad']}) must match l3 geometry ({pad_t})"
+        )
 
 
 class ConfigParser:

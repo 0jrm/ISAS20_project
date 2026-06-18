@@ -1,0 +1,426 @@
+**Do not replace “ARGO target” with “L3 target.”**
+Replace **L4 gridded satellite inputs** with **L3/L2-like observational inputs**, while keeping **ARGO/CORA/profile observations as the subsurface target**. L4 should become a teacher, auxiliary context, or augmentation source — not the thing the model is implicitly learning to trust as reality.
+
+The attached response’s “smoothed-of-smoothed” critique is real: if ISAS20 is already an objective analysis of sparse profiles, and the surface inputs are also L4 optimal-interpolation products, the model can become a map-to-map smoother rather than a surface-observation-to-subsurface operator.  Copernicus explicitly describes its global L4 sea-level product as SLA estimated by optimal interpolation after merging L3 along-track altimetry, which is exactly the kind of smoothing chain you want to avoid making central. ([Copernicus Marine Data Store][1])
+
+## My recommendation
+
+The strongest dissertation design is:
+
+> **Train a mask-native NeSPReSO variant that predicts ARGO/CORA subsurface profiles from sparse, irregular, quality-controlled surface observations: L3 along-track SSH, L3/L2P/L3U SST, 10 m wind history, optional SSS, and optional L4 context/augmentation with uncertainty-aware noise.**
+
+This gives you a much better scientific claim than “I used cleaner gridded satellite maps.” The claim becomes: **the method remains useful under the observation geometry an operational system actually sees.**
+
+---
+
+## Alternative data stack
+
+| Role                             | Best source                                                                                                         | Why it matters                                                                                                                                                                                               | Caution                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| Primary SSH input                | **Copernicus Marine Global Ocean Along Track L3 Sea Surface Heights Reprocessed**: `SEALEVEL_GLO_PHY_L3_MY_008_062` | Historical L3 along-track altimetry, global, netCDF, instantaneous, 1 Hz / ~7 km sampling, built for assimilation-style use. ([Copernicus Marine Data Store][2])                                             | Sparse tracks. Not a complete image. That is the point.                                                        |
+| Recent / operational SSH input   | **Copernicus Marine Global Ocean Along Track L3 NRT**: `SEALEVEL_GLO_PHY_L3_NRT_008_044`                            | NRT version includes 1 Hz / ~7 km and 5 Hz / ~1 km sampling from current altimeter missions. ([Copernicus Marine Data Store][3])                                                                             | Starts in 2022 in the current product metadata, so it is not your full historical training backbone.           |
+| High-resolution experimental SSH | **SWOT L3/L2 KaRIn SSH**                                                                                            | SWOT gives 2D swath SSH. AVISO’s L3 product includes KaRIn swaths, nadir altimeter data, 2 km products, and an unsmoothed 250 m KaRIn-grid product. ([aviso.altimetry.fr][4])                                | Post-2022/2023 era only. Use for modern validation or future extension, not the core 2002–2020 training split. |
+| SST input                        | **GHRSST L3U / L3C**, especially NOAA STAR / ACSPO VIIRS L3U                                                        | GHRSST explicitly separates swath-coordinate L2P, gridded L3, and gap-free L4 SST. ([GHRSST][5]) VIIRS L3U files are 10-minute netCDF granules and are far more observation-like than MUR L4. ([PO.DAAC][6]) | Cloud masks are brutal. This is where mask-native modeling becomes mandatory.                                  |
+| Optional SSS input               | **SMAP RSS L3 SSS**, 8-day or monthly                                                                               | SMAP SSS V6 includes L2C swath data plus L3 8-day and monthly products; global coverage is roughly 3 days with 8-day repeat. ([Remote Sensing Systems][7])                                                   | Coarse, noisy near coasts, starts 2015. Use as optional channel, not a central dependency.                     |
+| Wind history                     | **ERA5 hourly single levels**, `10m_u_component_of_wind`, `10m_v_component_of_wind`                                 | ERA5 hourly single-level data are available from 1940 onward; Copernicus describes ERA5 as hourly atmospheric/land/sea-state reanalysis, generally on 0.25° grids. ([cds.climate.copernicus.eu][8])          | It is a reanalysis, not satellite L3. But for wind history, this is acceptable and practical.                  |
+| L4 auxiliary / teacher           | **DUACS L4 SSH**, MUR L4 SST, Copernicus L4 SSS/density                                                             | Useful for pretraining, augmentation, mask simulation, and controlled ablations. DUACS L4 includes formal mapping error variables such as `err_sla`. ([documentation.marine.copernicus.eu][9])               | Never let L4 become the hidden truth target. Treat it as uncertain context.                                    |
+
+---
+
+## Programmatic download instructions
+
+### 1. Copernicus Marine L3 along-track altimetry
+
+Install and authenticate:
+
+```bash
+pip install copernicusmarine
+copernicusmarine login
+```
+
+Discover all dataset IDs under the L3 historical product and download by date:
+
+```python
+import datetime as dt
+import copernicusmarine
+
+PRODUCT_ID = "SEALEVEL_GLO_PHY_L3_MY_008_062"
+DATE = dt.date(2020, 1, 1)
+
+datasets = [
+    d.dataset_id
+    for d in copernicusmarine.describe(product_id=PRODUCT_ID).products[0].datasets
+]
+
+date_filter = f"*/{DATE.strftime('%Y/%m')}/*_{DATE.strftime('%Y%m%d')}*.nc"
+
+for dataset_id in datasets:
+    print("Downloading", dataset_id)
+    copernicusmarine.get(
+        dataset_id=dataset_id,
+        filter=date_filter,
+        output_directory="./data/raw/altimetry_l3",
+        no_directories=True,
+        skip_existing=True,
+    )
+```
+
+Copernicus’ own toolbox documentation uses this exact pattern: describe the product, list dataset identifiers, then call `copernicusmarine.get()` with a date filter for `SEALEVEL_GLO_PHY_L3_MY_008_062`. ([help.marine.copernicus.eu][10])
+
+For NRT:
+
+```python
+PRODUCT_ID = "SEALEVEL_GLO_PHY_L3_NRT_008_044"
+```
+
+For L4 SSH auxiliary / augmentation:
+
+```python
+PRODUCT_ID = "SEALEVEL_GLO_PHY_L4_MY_008_047"
+```
+
+Use L4 variables like `sla`, `adt`, `ugos`, `vgos`, and, where available, formal errors such as `err_sla`, `err_ugosa`, `err_vgosa`. The product manual describes `err_sla` as a formal mapping error tied to constellation sampling and the spatial/temporal scales resolved by the mapping procedure, not as a perfect observational-error estimate. ([documentation.marine.copernicus.eu][9])
+
+---
+
+### 2. SWOT SSH
+
+For NASA PO.DAAC SWOT L2:
+
+```bash
+pip install podaac-data-subscriber
+podaac-data-subscriber \
+  -c SWOT_L2_LR_SSH_BASIC_2.0 \
+  -d ./data/raw/swot_l2_basic \
+  --start-date 2023-08-01T00:00:00Z \
+  --end-date 2023-08-08T00:00:00Z
+```
+
+PO.DAAC lists `podaac-data-subscriber` as the recommended bulk-download tool for SWOT datasets and gives this style of command directly. ([PO.DAAC][11])
+
+For your thesis, I would **not** make SWOT central unless your committee wants a very modern extension. It is excellent for a 2023+ validation chapter or future paper, but it does not solve your 2002–2020 historical training problem.
+
+---
+
+### 3. GHRSST / VIIRS L3U SST
+
+For PO.DAAC VIIRS L3U:
+
+```bash
+pip install podaac-data-subscriber
+
+podaac-data-subscriber \
+  -c VIIRS_N20-STAR-L3U-v2.80 \
+  -d ./data/raw/sst_viirs_n20_l3u \
+  --start-date 2020-01-01T00:00:00Z \
+  --end-date 2020-01-08T00:00:00Z
+```
+
+Also check:
+
+```bash
+VIIRS_NPP-STAR-L3U-v2.80
+```
+
+NOAA/ACSPO VIIRS L3U products are 10-minute granules in netCDF4, with invalid pixels filled, which is exactly what you need for realistic cloud/missingness training. ([CoastWatch][12])
+
+---
+
+### 4. SMAP SSS
+
+For optional surface salinity:
+
+```bash
+pip install podaac-data-subscriber
+
+podaac-data-downloader \
+  -c SMAP_RSS_L3_SSS_SMI_8DAY-RUNNINGMEAN_V5 \
+  -d ./data/raw/smap_sss_l3_8day \
+  --start-date 2018-01-01T00:00:00Z \
+  --end-date 2018-02-01T00:00:00Z \
+  -b="-100,15,-75,35" \
+  -e .nc
+```
+
+PO.DAAC provides this product through its downloader/subscriber tooling. ([PO.DAAC][13]) If you use SMAP, record this as an optional predictor because its resolution and coastal behavior are not comparable to SST/SSH.
+
+---
+
+### 5. ERA5 10 m wind history
+
+Install and configure the CDS API:
+
+```bash
+pip install cdsapi
+```
+
+Example request:
+
+```python
+import cdsapi
+
+client = cdsapi.Client()
+
+client.retrieve(
+    "reanalysis-era5-single-levels",
+    {
+        "product_type": ["reanalysis"],
+        "variable": [
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+        ],
+        "year": ["2020"],
+        "month": ["01"],
+        "day": [f"{d:02d}" for d in range(1, 32)],
+        "time": [f"{h:02d}:00" for h in range(24)],
+        "area": [35, -100, 15, -75],  # North, West, South, East
+        "format": "netcdf",
+    },
+    "./data/raw/era5/era5_u10_v10_202001_gom.nc",
+)
+```
+
+For model input, derive:
+
+```python
+wind_speed = (u10**2 + v10**2) ** 0.5
+wind_stress_proxy = wind_speed * wind_speed
+curl_tau_proxy = dv_dx - du_dy  # if using wind vector derivatives
+```
+
+I would include history windows such as **0–24 h, 24–72 h, 3–7 days, and 7–14 days**, because the subsurface response is not instantaneous.
+
+---
+
+## The key modeling change: make the model mask-native
+
+Do **not** interpolate L3 into a fake complete L4-like image and feed that to the old model. That destroys the scientific point.
+
+Instead, every surface variable should become a bundle:
+
+| Channel type  | Meaning                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `value`       | Standardized observed value, filled with zero only after normalization.                       |
+| `mask`        | 1 if observed, 0 if missing.                                                                  |
+| `age`         | Hours since nearest observation for that cell/time bin.                                       |
+| `uncertainty` | Sensor uncertainty, formal mapping error, retrieval uncertainty, or proxy.                    |
+| `count`       | Number of observations aggregated into the grid cell.                                         |
+| `source_id`   | Mission/platform identity if feasible: Jason, Sentinel-3A/B, SWOT, VIIRS-N20, VIIRS-NPP, etc. |
+
+For your existing PatchConvMLP design, the minimal viable adaptation is:
+
+```text
+old input:
+  [variable, time, y, x]
+
+new input:
+  [variable × feature, time, y, x]
+
+where feature = value, mask, age, uncertainty, count
+```
+
+Then the first convolution sees not just “SSH is zero here,” but “SSH is missing here.” That distinction is existential.
+
+---
+
+## How to build samples
+
+For each ARGO/CORA target profile at `(lat, lon, time)`:
+
+1. Define a local patch, for example **±3° or ±5°** around the profile.
+2. Define history bins, for example:
+
+   * same day,
+   * previous 1 day,
+   * previous 3 days,
+   * previous 7 days,
+   * previous 14 days.
+3. Rasterize all L3 observations into the local patch.
+4. Aggregate observations per grid cell/time bin using inverse-variance weighting where uncertainty exists:
+
+```python
+weighted_value = sum(value_i / sigma_i**2) / sum(1 / sigma_i**2)
+effective_sigma = sqrt(1 / sum(1 / sigma_i**2))
+count = number_of_observations
+age = target_time - observation_time
+mask = count > 0
+```
+
+5. Store the tensor plus profile target.
+
+The important design choice: **the raster grid is only a container for sparse observations; it is not an interpolated map.**
+
+---
+
+## L4 augmentation protocol
+
+This is where your idea about using L4 uncertainty is useful, but it must be disciplined.
+
+### Good use of L4
+
+Use L4 to create **synthetic sparse observations**:
+
+```text
+L4 field → add noise using L4 uncertainty → apply real L3 mask geometry → train model to survive sparse/missing inputs
+```
+
+For SSH:
+
+```python
+x_aug = x_l4 + epsilon
+epsilon ~ N(0, alpha * err_sla)
+```
+
+But do not use independent pixel noise only. Add spatially correlated perturbations too:
+
+```text
+epsilon = local_correlated_noise + iid_noise
+```
+
+because altimetry mapping errors are not pixelwise independent.
+
+### Best augmentation set
+
+| Augmentation               | Purpose                                                   |
+| -------------------------- | --------------------------------------------------------- |
+| Real-track masking         | Make L4 look like L3 observation geometry.                |
+| Cloud-mask replay for SST  | Use real VIIRS/GHRSST missingness patterns.               |
+| Mission dropout            | Remove one altimeter or SST sensor entirely for a sample. |
+| Time-window dropout        | Remove the most recent day to simulate latency.           |
+| Noise from uncertainty     | Teach the model not to overtrust L4/L3 values.            |
+| Spatially correlated noise | Avoid unrealistic white-noise robustness.                 |
+| Storm-aware augmentation   | Increase wind/SST perturbations during high-wind periods. |
+| Coastal mask stress tests  | Test GoM shelf/slope/coast separately.                    |
+
+### Bad use of L4
+
+Avoid:
+
+```text
+L4 input → model → ISAS20 target
+```
+
+as the main training path. That is the smoothing-of-smoothing trap.
+
+Acceptable:
+
+```text
+L4 input → pretraining / teacher / augmentation
+real L3 + winds → ARGO target
+```
+
+---
+
+## Experiments that need to be in the plan
+
+You need an explicit ablation matrix. Otherwise you will not know whether L3 actually helped.
+
+| Experiment                          | Input                                                       | Target       | Purpose                                           |
+| ----------------------------------- | ----------------------------------------------------------- | ------------ | ------------------------------------------------- |
+| A. Current baseline                 | L4 SSH/SST/wind                                             | ARGO or ISAS | Reproduce current model.                          |
+| B. L4 + mask augmentation           | L4 fields with synthetic L3 masks/noise                     | ARGO         | Test whether robustness improves without real L3. |
+| C. Real L3 only                     | L3 SSH + L3 SST + wind                                      | ARGO         | Honest operational-observation model.             |
+| D. Real L3 + L4 context             | L3 observations plus L4 auxiliary channels with uncertainty | ARGO         | Test whether L4 helps without dominating.         |
+| E. No wind history                  | Same as C/D minus wind                                      | ARGO         | Quantify value of 10 m wind history.              |
+| F. No mask/age/uncertainty channels | Same values, no metadata                                    | ARGO         | Prove mask-native design matters.                 |
+| G. L3 SSH only vs L3 SST only       | Separate modalities                                         | ARGO         | Understand what each surface sensor contributes.  |
+
+Evaluation should be stratified by:
+
+| Stratification                      | Why                                                               |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| Distance to nearest altimeter track | Measures sensitivity to SSH sparsity.                             |
+| SST cloud fraction                  | Measures robustness to missing thermal structure.                 |
+| L4 `err_sla` / uncertainty bins     | Tests whether uncertainty-aware training works.                   |
+| Loop Current / eddy regime          | GoM dynamics are regime-dependent.                                |
+| Shelf vs slope vs deep GoM          | Different physics, different observability.                       |
+| Wind-event intensity                | Tests whether wind history helps mixed-layer/subsurface response. |
+| Season                              | Stratification and mixed-layer depth change strongly.             |
+
+---
+
+## What to add to the AI-agent implementation plan
+
+Give your coding agent this mission before changing the architecture:
+
+```text
+Implement an L3/masked-input data pipeline for NeSPReSO.
+
+Do not redesign the model yet. First build the data layer, sample format, masks, uncertainty channels, and reports.
+
+Required outputs:
+
+1. Downloaders:
+   - Copernicus Marine L3 along-track SSH historical product.
+   - Optional Copernicus Marine L3 NRT SSH.
+   - GHRSST/VIIRS L3U SST via PO.DAAC or NOAA CoastWatch.
+   - ERA5 hourly u10/v10 winds.
+   - Optional SMAP L3 SSS.
+   - Optional L4 SSH/SST/SSS auxiliary products for augmentation.
+
+2. Local cache format:
+   - Store raw files unchanged.
+   - Store processed samples separately.
+   - Every processed sample must record source product, product version, variables, timestamp, spatial bounds, and preprocessing code version.
+
+3. Rasterization:
+   - Convert sparse L3 observations into local patch tensors around each ARGO/profile target.
+   - For every variable, produce value, mask, age, uncertainty, and count channels.
+   - Never silently interpolate missing L3 cells into complete maps.
+
+4. L4 augmentation:
+   - Build real L3 mask libraries.
+   - Apply real track/cloud masks to L4 fields.
+   - Add uncertainty-scaled and spatially correlated noise.
+   - Preserve a channel indicating whether a value came from real L3, synthetic L4 augmentation, or L4 auxiliary context.
+
+5. Model input compatibility:
+   - Extend PatchConvMLP input channel count.
+   - Add config fields for enabled variables and mask features.
+   - Add smoke tests proving batches load with missing inputs.
+
+6. Evaluation:
+   - Report metrics by coverage density, nearest-track distance, cloud fraction, season, depth, and region.
+   - Compare L4 baseline, L4 masked augmentation, real L3, and real L3 + L4 context.
+
+7. Guardrails:
+   - ARGO/CORA remains the primary target.
+   - ISAS/L4 products may be used for pretraining, augmentation, or comparison, but not as the main truth target unless explicitly marked.
+   - Missingness must be represented, not hidden.
+```
+
+---
+
+## Brutally honest take
+
+This is probably **more scientifically valuable** than another architecture experiment. It also aligns better with your thesis story: assimilation readiness, uncertainty, missing observations, and operational realism.
+
+But it is also dangerous if you let it sprawl. The minimum viable version should be:
+
+1. **ARGO target.**
+2. **L3 along-track SSH + ERA5 wind history.**
+3. **Mask/age/count/uncertainty channels.**
+4. **L4 SSH uncertainty augmentation.**
+5. **Compare against the current L4-complete baseline.**
+
+Only after that works should you add L3U SST, SMAP SSS, SWOT, or architecture changes.
+
+The core hypothesis is clean:
+
+> A NeSPReSO model trained with sparse, uncertainty-aware, mask-native L3 surface observations will generalize more honestly to operational conditions than one trained primarily on complete L4 gridded analyses.
+
+That is a dissertation-grade claim.
+
+[1]: https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_L4_MY_008_047/description "Global Ocean Gridded L 4 Sea Surface Heights And Derived Variables Reprocessed 1993 Ongoing | Copernicus Marine Service"
+[2]: https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_L3_MY_008_062/description "Global Ocean Along Track L3 Sea Surface Heights Reprocessed 1993 Ongoing Tailored For Data Assimilation | Copernicus Marine Service"
+[3]: https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_L3_NRT_008_044/description "Global Ocean Along Track L3 Sea Surface Heights Nrt | Copernicus Marine Service"
+[4]: https://www.aviso.altimetry.fr/en/data/products/sea-surface-height-products/global/swot-l3-ocean-products.html "SWOT L3 Ocean products"
+[5]: https://ghrsst.org/ghrsst-data-services/for-sst-data-users/products/?utm_source=chatgpt.com "Products"
+[6]: https://podaac.jpl.nasa.gov/dataset/VIIRS_NPP-STAR-L3U-v2.80?utm_source=chatgpt.com "GHRSST Level 3U NOAA STAR SST v2.80 from VIIRS on S ..."
+[7]: https://www.remss.com/missions/smap/salinity/?utm_source=chatgpt.com "SMAP Salinity V6.0 Validated Release"
+[8]: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download&utm_source=chatgpt.com "ERA5 hourly data on single levels from 1940 to present"
+[9]: https://documentation.marine.copernicus.eu/PUM/CMEMS-SL-PUM-008-046-047-060-068.pdf?utm_source=chatgpt.com "PRODUCT USER MANUAL"
+[10]: https://help.marine.copernicus.eu/en/articles/8286883-copernicus-marine-toolbox-api-get-original-files "Copernicus Marine Toolbox API - Get original files | Copernicus Marine Help Center"
+[11]: https://podaac.jpl.nasa.gov/dataset/SWOT_L2_LR_SSH_Basic_2.0 "SWOT Level 2 KaRIn Low Rate Sea Surface Height Data Product - Basic, Version C | PO.DAAC / JPL / NASA"
+[12]: https://coastwatch.noaa.gov/cwn/products/acspo-global-sst-viirs.html?utm_source=chatgpt.com "ACSPO Global SST from VIIRS"
+[13]: https://podaac.jpl.nasa.gov/dataset/SMAP_RSS_L3_SSS_SMI_8DAY-RUNNINGMEAN_V5?utm_source=chatgpt.com "RSS SMAP Level 3 Sea Surface Salinity Standard Mapped ..."

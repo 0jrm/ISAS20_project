@@ -65,6 +65,7 @@
             "cache_path": "",
             "batch_size": 512,
             "shuffle": true,
+            "split_mode": "chronological",
             "train_frac": 0.7,
             "val_frac": 0.15,
             "test_frac": 0.15,

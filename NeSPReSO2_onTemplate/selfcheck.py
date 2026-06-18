@@ -384,6 +384,27 @@ def test_split_matches_torch_seed():
     assert list(b.indices) == list(b2.indices)
 
 
+def test_chronological_split_no_leakage():
+    """Chronological split: train max date <= val min <= test min; no overlap."""
+    from datetime import date
+
+    from base.split_utils import assign_chronological_fraction_indices, sample_dates
+
+    # synthetic JULD as days since 1950
+    epoch_days = np.array([date(2015, 1, 1).toordinal()] * 50 + [date(2020, 6, 1).toordinal()] * 30 + [date(2021, 1, 1).toordinal()] * 20)
+    juld = (epoch_days - date(1950, 1, 1).toordinal()).astype(np.float64)
+    idx = assign_chronological_fraction_indices(
+        juld, dataset_tag="isas20", train_frac=0.7, val_frac=0.15, test_frac=0.15
+    )
+    dates = sample_dates(juld, dataset_tag="isas20")
+    dtrain = [date.fromisoformat(str(dates[i])[:10]) for i in idx["train"]]
+    dval = [date.fromisoformat(str(dates[i])[:10]) for i in idx["val"]]
+    dtest = [date.fromisoformat(str(dates[i])[:10]) for i in idx["test"]]
+    assert max(dtrain) <= min(dval)
+    assert max(dval) <= min(dtest)
+    assert len(set(idx["train"]) & set(idx["test"])) == 0
+
+
 import sys
 
 
@@ -498,6 +519,77 @@ def test_cache_schema_keys():
     # ponytail: no rebuilt cache on disk — skip when data absent
 
 
+def test_l3_bin_observations_synthetic():
+    from datetime import datetime
+
+    from preproc.l3_rasterize import (
+        IDX_AGE,
+        IDX_COUNT,
+        IDX_MASK,
+        IDX_VALUE,
+        bin_observations,
+        patch_grid,
+    )
+
+    target_time = datetime(2020, 1, 15, 12, 0, 0)
+    grid = patch_grid(25.0, -90.0, half_deg=1.0, step_deg=0.5)
+    windows = [0.0, 24.0]
+    obs_time = target_time
+    bundle = bin_observations(
+        np.array([25.0]),
+        np.array([-90.0]),
+        [obs_time],
+        np.array([0.42]),
+        np.array([0.1]),
+        target_time,
+        grid,
+        windows,
+    )
+    cy, cx = grid.center_y, grid.center_x
+    assert bundle[IDX_MASK, 0, cy, cx] == 1.0
+    assert abs(bundle[IDX_VALUE, 0, cy, cx] - 0.42) < 1e-5
+    assert bundle[IDX_COUNT, 0, cy, cx] == 1.0
+    assert bundle[IDX_AGE, 0, cy, cx] == 0.0
+    assert bundle[IDX_MASK, 1, cy, cx] == 0.0
+
+
+def test_l3_rasterize_missing_is_explicit():
+    from datetime import datetime
+
+    from preproc.l3_rasterize import IDX_MASK, IDX_VALUE, empty_bundle
+
+    bundle = empty_bundle(3, 5, 5)
+    assert bundle[IDX_MASK].sum() == 0.0
+    assert bundle[IDX_VALUE].sum() == 0.0
+    assert (bundle[IDX_MASK] == 0).all()
+
+
+def test_l3_processed_batch_smoke():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    cfg_path = root / "config_argo_l3_smoke.json"
+    if not cfg_path.is_file():
+        return
+    from playground import read_json
+    from preproc.export_l3_cache import build_l3_processed_batch
+
+    cfg = read_json(cfg_path)
+    path = build_l3_processed_batch(cfg, max_samples=3, anchor_date="2020-01-15", force=True)
+    import pickle
+
+    with open(path, "rb") as f:
+        payload = pickle.load(f)
+    assert len(payload["samples"]) == 3
+    s0 = payload["samples"][0]
+    for key in ("ssh", "wind_u", "wind_v"):
+        arr = s0[key]
+        assert arr.shape[0] == 5
+        assert arr.ndim == 4
+    assert "split" in s0
+    assert "coverage" in s0
+
+
 def test_raw_profile_rmse_decoder_indexing():
     """Decoder path aligns sample-major preds with depth-major cache profiles."""
     from collections import OrderedDict
@@ -549,6 +641,10 @@ if __name__ == "__main__":
     test_pca_round_trip()
     test_asymmetric_output_offsets()
     test_split_matches_torch_seed()
+    test_chronological_split_no_leakage()
+    test_l3_bin_observations_synthetic()
+    test_l3_rasterize_missing_is_explicit()
+    test_l3_processed_batch_smoke()
     test_train_monitor_once()
     test_overlap_pairs()
     test_cache_schema_keys()

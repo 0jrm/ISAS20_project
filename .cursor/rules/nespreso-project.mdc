@@ -6,11 +6,11 @@ alwaysApply: false
 
 # NeSPReSO project context
 
-Read [`HANDOFF.md`](../../HANDOFF.md) for current status.
+Read [`HANDOFF.md`](../../HANDOFF.md) and [`PLAN-dissertation-data-foundation.md`](../../PLAN-dissertation-data-foundation.md) for current status.
 
 ## What this is
 
-Batch PyTorch training: surface inputs → PCA latent → T/S profiles. Tags: `isas20` (HDF5 patches), `argo_v2` (v2 pickle). No HTTP API, no database.
+Batch PyTorch training: surface inputs → PCA latent → T/S profiles. Tags: `isas20` (HDF5 patches), `argo_v2` (v2 pickle). Dissertation branch adds chronological splits and L3 mask-native inputs (in progress).
 
 ## Trust boundaries
 
@@ -22,6 +22,7 @@ Batch PyTorch training: surface inputs → PCA latent → T/S profiles. Tags: `i
 
 - Within-tag: `eval_run.py` + matching cache/checkpoint.
 - Cross-tag: `eval_matched.py` only — never headline ISAS vs ARGO raw RMSE side by side.
+- Dissertation: use `split_mode: chronological` for ARGO.
 
 ## Bottleneck
 
@@ -29,4 +30,8 @@ Batch PyTorch training: surface inputs → PCA latent → T/S profiles. Tags: `i
 
 ## Checks
 
-After non-trivial changes: `srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py`
+After non-trivial changes:
+```bash
+srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
+```

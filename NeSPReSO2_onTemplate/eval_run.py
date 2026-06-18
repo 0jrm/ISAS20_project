@@ -28,17 +28,27 @@ def _resolve_eval_batch_size(dl_args: dict, split: str) -> None:
     import pickle
 
     with open(dl_args["cache_path"], "rb") as f:
-        n = int(pickle.load(f)["inputs"].shape[0])
-    train_frac = float(dl_args.get("train_frac", 0.7))
-    val_frac = float(dl_args.get("val_frac", 0.15))
-    test_frac = float(dl_args.get("test_frac", 0.15))
-    if abs(train_frac + val_frac + test_frac - 1.0) > 1e-6:
-        raise ValueError("train_frac + val_frac + test_frac must equal 1")
-    train_len = int(n * train_frac)
-    val_len = int(n * val_frac)
-    test_len = n - train_len - val_len
-    split_lens = {"train": train_len, "val": val_len, "test": test_len}
-    dl_args["batch_size"] = max(1, split_lens[split])
+        cache = pickle.load(f)
+    n = int(cache["inputs"].shape[0])
+    from base.split_utils import build_split_indices
+
+    dl_cfg = {
+        "split_mode": dl_args.get("split_mode", "random"),
+        "split_config": dl_args.get("split_config"),
+        "train_frac": float(dl_args.get("train_frac", 0.7)),
+        "val_frac": float(dl_args.get("val_frac", 0.15)),
+        "test_frac": float(dl_args.get("test_frac", 0.15)),
+        "split_seed": int(dl_args.get("split_seed", 42)),
+        "unassigned": dl_args.get("unassigned", "exclude"),
+    }
+    indices = build_split_indices(
+        n,
+        cache.get("JULD"),
+        dl_cfg,
+        dataset_tag=cache.get("dataset_tag", "unknown"),
+        v2_src=dl_args.get("v2_src"),
+    )
+    dl_args["batch_size"] = max(1, len(indices[split]))
 
 
 def _latent_block_rmse(pred, tgt, outputs):

@@ -7,9 +7,10 @@ description: Train, cache-build, eval, and agent-monitor NeSPReSO dual-dataset r
 
 ## Before training
 
-1. Read [`HANDOFF.md`](../../../HANDOFF.md).
+1. Read [`HANDOFF.md`](../../../HANDOFF.md) and [`PLAN-dissertation-data-foundation.md`](../../../PLAN-dissertation-data-foundation.md).
 2. Edit machine paths in config JSON (`io.data_path`, `io.v2_pickle`, `io.v2_src`) — never hardcode in Python.
-3. Build caches if missing:
+3. Run data census if splits are uncertain: `python3 scripts/data_census.py -c config_argo.json`
+4. Build caches if missing:
 
 ```bash
 cd NeSPReSO2_onTemplate
@@ -57,6 +58,7 @@ Cross-tag comparison: `eval_matched.py` — not raw `eval_run.py` across tags.
 
 ## Do not
 
+- Use random split for dissertation results (use `split_mode: chronological`).
 - Enable `combo_phase4b_all` on GoM (slower).
 - Compare ISAS vs ARGO RMSE without `eval_matched.py`.
 - Add W&B/MLflow — JSON + `status.json` is enough.

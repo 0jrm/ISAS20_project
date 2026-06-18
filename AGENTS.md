@@ -1,4 +1,5 @@
 # Agent instructions — ISAS20_project
+Use conda env nespreso to run any python code or install dependencies.
 
 **Start here:** [`HANDOFF.md`](HANDOFF.md) (status, eval rules, next tasks).
 
@@ -8,7 +9,7 @@ This repo is **offline PyTorch batch ML** for NeSPReSO v2 — not a web app. Cod
 
 **Ponytail (lazy senior dev)** is always on — see [`.cursor/rules/ponytail.mdc`](.cursor/rules/ponytail.mdc). YAGNI, stdlib first, deletion over addition, `ponytail:` comments on intentional shortcuts.
 
-**Not lazy about:** trust-boundary validation (`validate_config`), pickle/checkpoint trust, numerical reproducibility (`seed`, split pins), cross-tag eval honesty, anything the user explicitly requested.
+**Not lazy about:** trust-boundary validation (`validate_config`), pickle/checkpoint trust, numerical reproducibility (`seed`, split pins), cross-tag eval honesty, chronological split integrity, anything the user explicitly requested.
 
 ## Engineering principles (load on demand)
 
@@ -35,6 +36,7 @@ Always cap CPU scope:
 ```bash
 cd NeSPReSO2_onTemplate
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo.json
 ```
 
@@ -44,15 +46,29 @@ GPU training: add `--gres=gpu:1`. See [`NeSPReSO2_onTemplate/README.md`](NeSPReS
 
 1. **Never mix checkpoint PCA with a different cache** — pair `-r` checkpoint with the cache it was trained on.
 2. **Do not compare raw `eval_run.py` RMSE across `isas20` vs `argo_v2`** — different depth grids and truths; use `eval_matched.py`.
-3. **Paths in config JSON**, not hardcoded in Python (except test fixtures in `selfcheck.py`).
-4. **GoM perf:** do not enable `combo_phase4b_all`, bf16, or `torch.compile` without benchmark proof ≥10% full-step gain.
-5. **Commits:** only when the user asks. **Push:** only when asked.
+3. **Dissertation splits must be chronological** — `split_mode: chronological` is the ARGO default; random split is legacy/ablation only.
+4. **ARGO/CORA is the primary target** — L4 products are augmentation/baseline, not hidden truth.
+5. **Paths in config JSON**, not hardcoded in Python (except test fixtures in `selfcheck.py`).
+6. **GoM perf:** do not enable `combo_phase4b_all`, bf16, or `torch.compile` without benchmark proof ≥10% full-step gain.
+7. **Commits:** only when the user asks. **Push:** only when asked.
 
 ## Plans
 
 | Doc | Purpose |
 |-----|---------|
+| [`PLAN.md`](PLAN.md) | Dissertation branch roadmap (Phases 0–10) |
+| [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md) | What changed, how to run census/splits/L3 |
 | [`HANDOFF.md`](HANDOFF.md) | Session handoff (read first) |
-| [`PLAN-phase5.md`](PLAN-phase5.md) | AE decoder roadmap (closed) |
-| [`PLAN-phase6.md`](PLAN-phase6.md) | Diagnostics, global regional notebook |
-| [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md) | Phases 1–4b detail |
+| [`context.txt`](context.txt) | L3 product IDs and download patterns |
+
+## Dissertation phases (summary)
+
+| Phase | Focus | Status |
+|-------|-------|--------|
+| 0 | Data census + split design | Done (`scripts/data_census.py`) |
+| 1 | Chronological split | Done (`base/split_utils.py`) |
+| 2 | ARGO-first path | Done (configs + eval) |
+| 3 | L3/masked-input pipeline | Scaffolded (downloaders only) |
+| 4–10 | Augmentation, model channels, eval, diagnostics | Pending |
+
+Do not skip to architecture experiments before split and L3 data validity are established.

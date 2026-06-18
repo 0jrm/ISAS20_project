@@ -1,69 +1,48 @@
 # ISAS20 Project
 
-This repository contains utilities for working with ISAS20 and ARGO data.
+NeSPReSO v2 GoM dissertation branch: ARGO-first subsurface targets, mask-native L3 surface inputs, chronological evaluation.
 
-**NeSPReSO v2 port + next steps:** see [`PLAN.md`](PLAN.md) (port complete), [`PLAN-patch-arch-handoff.md`](PLAN-patch-arch-handoff.md) (session handoff: ML opt benchmarks done, patch-arch roadmap pending), and [`NeSPReSO2_onTemplate/README.md`](NeSPReSO2_onTemplate/README.md) (training ops).
+## Documentation
 
-## Module Structure
+| Doc | Purpose |
+|-----|---------|
+| [`HANDOFF.md`](HANDOFF.md) | Session status and next tasks (**start here**) |
+| [`PLAN.md`](PLAN.md) | Full dissertation roadmap (Phases 0–10) |
+| [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md) | Implementation notes, commands, split rationale |
+| [`NeSPReSO2_onTemplate/README.md`](NeSPReSO2_onTemplate/README.md) | Training ops |
+| [`context.txt`](context.txt) | L3 satellite product IDs and download code |
 
-The repository is organized as a Python package with the following structure:
+## Quick start
+
+```bash
+cd NeSPReSO2_onTemplate
+srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_smoke.json
+```
+
+Reports land in [`reports/`](reports/).
+
+## Data layout
+
+```
+data/
+├── raw/          # unchanged downloaded products
+├── processed/    # rasterized L3 patches (future)
+├── cache/        # train-ready pickles
+└── manifests/    # download_manifest.jsonl
+```
+
+## Module structure
 
 ```
 ISAS20_project/
-├── utils/
-│   ├── __init__.py
-│   └── retrieve_sat.py
-└── README.md
+├── NeSPReSO2_onTemplate/   # training code
+├── utils/retrieve_sat.py     # legacy L4 satellite retrieval
+├── reports/                  # census + split design
+└── data/                     # caches and raw downloads
 ```
 
-## Using the Utility Modules
+## Legacy satellite retrieval
 
-### Satellite Data Retrieval
-
-The `retrieve_sat.py` module provides functions to retrieve and interpolate satellite data for oceanographic applications. 
-
-Example usage:
-
-```python
-from ISAS20_project.utils import retrieve_satellite_data
-
-# Define queries (latitude, longitude, julian_date)
-queries = [
-    (45.0, -30.0, 2459020.5),
-    (45.5, -29.5, 2459020.5)
-]
-
-# Define the satellite products and variables to extract
-products = {
-    "bathymetry": ["elevation"],
-    "ostia": ["analysed_sst"],
-    "sss": ["sos"]
-}
-
-# Set parameters
-spatial_padding = 16  # extract a 33x33 region
-temporal_padding = 0  # No temporal padding
-
-# Retrieve data
-results = retrieve_satellite_data(queries, products, spatial_padding, temporal_padding)
-
-# Access results
-for idx, res in results.items():
-    print(f"\nQuery {idx}: {queries[idx]}")
-    for prod, info in res.items():
-        print(f"  Product: {prod}")
-        for var, data in info["data"].items():
-            if var != "time":
-                print(f"    Variable '{var}': data shape = {data.shape}")
-```
-
-## Available Products
-
-The module supports the following satellite products:
-
-- `bathymetry`: Ocean floor elevation data
-- `ostia`: OSTIA sea surface temperature
-- `remss`: REMSS sea surface temperature
-- `wind`: Wind data (windspeed, u_wind, v_wind)
-- `ssh`: Sea surface height (adt, sla, ugos, vgos)
-- `sss`: Sea surface salinity (sos) 
+See [`utils/retrieve_sat.py`](utils/retrieve_sat.py) for L4 gridded product interpolation. New dissertation work uses L3 observational products via [`NeSPReSO2_onTemplate/scripts/download_l3_products.py`](NeSPReSO2_onTemplate/scripts/download_l3_products.py).
