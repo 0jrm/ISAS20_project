@@ -45,7 +45,10 @@ def _run_train_step(
     target = target.to(device, non_blocking=True)
     indices = indices.to(device, non_blocking=True)
     output = model(data)
-    loss = criterion(output, target, indices)
+    if getattr(criterion, "needs_inputs", False):
+        loss = criterion(output, target, indices, inputs=data)
+    else:
+        loss = criterion(output, target, indices)
     loss.backward()
     optimizer.step()
     if device.type == "cuda":

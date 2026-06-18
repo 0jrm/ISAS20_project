@@ -119,6 +119,8 @@ def _build_profile_ae(
     decoder_layers: list[int] | None = None,
     layer_scale: int = 1,
     residual: bool = False,
+    variable: str = "temperature",
+    surface_residual: bool | None = None,
 ) -> nn.Module:
     """Match ``scripts/train_profile_ae.py`` layer layout."""
     if arch in ("Autoencoder", "ResAutoencoder"):
@@ -132,13 +134,17 @@ def _build_profile_ae(
         else:
             enc, dec = encoder_layers, decoder_layers
         cls = module_arch.ResAutoencoder if use_residual else module_arch.Autoencoder
-        return cls(
-            encoding_dim,
+        kwargs = dict(
+            encoding_dim=encoding_dim,
             encoder_layers=enc,
             decoder_layers=dec,
             input_dim=input_dim,
             residual=use_residual,
         )
+        if use_residual:
+            kwargs["variable"] = variable
+            kwargs["surface_residual"] = True if surface_residual is None else surface_residual
+        return cls(**kwargs)
     if arch == "KAN_Autoencoder":
         return module_arch.KAN_Autoencoder(encoding_dim, input_dim=input_dim)
     raise ValueError(f"unknown profile AE arch {arch!r}")
@@ -162,6 +168,8 @@ def load_profile_decoder(ckpt_path: str | Path, device: torch.device) -> nn.Modu
         decoder_layers=ckpt.get("decoder_layers"),
         layer_scale=int(ckpt.get("layer_scale", 1)),
         residual=bool(ckpt.get("residual", ckpt["arch"] == "ResAutoencoder")),
+        variable=ckpt.get("variable", "temperature"),
+        surface_residual=ckpt.get("surface_residual"),
     )
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
@@ -181,12 +189,32 @@ def load_decoders_from_dir(decoder_dir: str | Path, outputs: Mapping[str, int], 
     return decoders
 
 
-def decode_latent_profiles(pcs: torch.Tensor, decoders: Mapping[str, nn.Module], outputs: Mapping[str, int]) -> dict[str, torch.Tensor]:
+def decode_latent_profiles(
+    pcs: torch.Tensor,
+    decoders: Mapping[str, nn.Module],
+    outputs: Mapping[str, int],
+    *,
+    inputs: torch.Tensor | None = None,
+    surface_residual_layout: Mapping[str, Any] | None = None,
+) -> dict[str, torch.Tensor]:
     """Batch-major profiles from concatenated latent slices."""
+    from preproc.preproc_isas_sat import count_encoding_dims, surface_residual_from_features
+
     recon = {}
     start = 0
     for name, k in outputs.items():
-        recon[name] = decoders[name].decode(pcs[:, start : start + k])
+        z = pcs[:, start : start + k]
+        decoder = decoders[name]
+        surface_residual = None
+        if getattr(decoder, "surface_residual", False):
+            if inputs is None or surface_residual_layout is None:
+                raise ValueError("surface-residual decoder requires inputs and surface_residual_layout")
+            layout = dict(surface_residual_layout)
+            layout.setdefault("n_enc", count_encoding_dims(layout.get("input_params", {})))
+            surface_residual = surface_residual_from_features(inputs, name, **layout)
+            recon[name] = decoder.decode(z, surface_residual=surface_residual)
+        else:
+            recon[name] = decoder.decode(z)
         start += k
     return recon
 
@@ -293,6 +321,7 @@ class DecoderProfileLoss(nn.Module):
         device=None,
         *,
         true_profiles: Mapping[str, torch.Tensor] | None = None,
+        surface_residual_layout: Mapping[str, Any] | None = None,
     ):
         super().__init__()
         self.outputs = OrderedDict(outputs)
@@ -302,6 +331,8 @@ class DecoderProfileLoss(nn.Module):
         if profile_scales:
             self.profile_scales.update(profile_scales)
         self.decoders = nn.ModuleDict({name: decoders[name] for name in self.output_order})
+        self.surface_residual_layout = surface_residual_layout
+        self.needs_inputs = any(getattr(d, "surface_residual", False) for d in self.decoders.values())
         if true_profiles is None:
             raise ValueError("DecoderProfileLoss requires true_profiles")
         for name in self.output_order:
@@ -312,12 +343,24 @@ class DecoderProfileLoss(nn.Module):
     def _true_profiles(self, name):
         return getattr(self, f"{name}_true_profiles")
 
-    def forward(self, pcs, targets, indices=None):
+    def forward(self, pcs, targets, indices=None, inputs=None):
         if indices is None:
             raise ValueError("DecoderProfileLoss requires batch indices")
+        if self.needs_inputs and inputs is None:
+            raise ValueError("DecoderProfileLoss requires inputs for surface-residual decoders")
         total = pcs.new_tensor(0.0)
         for name, start, end in self.slices:
-            pred_profiles = self.decoders[name].decode(pcs[:, start:end])
+            z = pcs[:, start:end]
+            surface_residual = None
+            if getattr(self.decoders[name], "surface_residual", False):
+                from preproc.preproc_isas_sat import count_encoding_dims, surface_residual_from_features
+
+                layout = dict(self.surface_residual_layout or {})
+                layout.setdefault("n_enc", count_encoding_dims(layout.get("input_params", {})))
+                surface_residual = surface_residual_from_features(inputs, name, **layout)
+                pred_profiles = self.decoders[name].decode(z, surface_residual=surface_residual)
+            else:
+                pred_profiles = self.decoders[name].decode(z)
             true_profiles = self._true_profiles(name)[indices]
             mse = nn.functional.mse_loss(pred_profiles, true_profiles)
             scale = self.profile_scales.get(name, 1.0)
@@ -341,6 +384,7 @@ class CombinedPCALoss(nn.Module):
         mode: str = "combined",
         true_profiles: Mapping[str, torch.Tensor] | None = None,
         decoders: Mapping[str, nn.Module] | None = None,
+        surface_residual_layout: Mapping[str, Any] | None = None,
     ):
         super().__init__()
         if mode not in VALID_LOSS_MODES:
@@ -365,6 +409,7 @@ class CombinedPCALoss(nn.Module):
                 profile_scales,
                 device,
                 true_profiles=cached_profiles,
+                surface_residual_layout=surface_residual_layout,
             )
             pca_mode = "combined"
         else:
@@ -393,13 +438,20 @@ class CombinedPCALoss(nn.Module):
                     torch.tensor(pca.mean_, dtype=torch.float32, device=device).unsqueeze(0),
                 )
 
+        self.needs_inputs = bool(self.decoder_loss and self.decoder_loss.needs_inputs)
         self.density_helper = None
         if density_config and density_config.get("enabled", False):
             self.density_helper = DensityConstraint(dataset=density_meta, device=device, config=density_config)
 
-    def _reconstruct_profiles(self, pcs):
+    def _reconstruct_profiles(self, pcs, inputs=None):
         if self.mode == "decoder":
-            recon = decode_latent_profiles(pcs, self.decoder_loss.decoders, self.outputs)
+            recon = decode_latent_profiles(
+                pcs,
+                self.decoder_loss.decoders,
+                self.outputs,
+                inputs=inputs,
+                surface_residual_layout=self.decoder_loss.surface_residual_layout,
+            )
             temp_name = self.output_order[0]
             sal_name = self.output_order[1] if len(self.output_order) > 1 else None
             if sal_name is not None:
@@ -417,12 +469,12 @@ class CombinedPCALoss(nn.Module):
             return recon[temp_name], recon[sal_name]
         return recon
 
-    def forward(self, pcs, targets, indices=None):
+    def forward(self, pcs, targets, indices=None, inputs=None):
         weighted_mse_loss = self.weighted_mse_loss(pcs, targets)
         if self.mode == "pc_mse_only":
             combined_loss = weighted_mse_loss / self.combined_mse_scale
         elif self.mode == "decoder":
-            profile_loss = self.decoder_loss(pcs, targets, indices)
+            profile_loss = self.decoder_loss(pcs, targets, indices, inputs=inputs)
             combined_loss = (profile_loss / self.combined_pca_scale + weighted_mse_loss / self.combined_mse_scale) / 2
         else:
             pca_loss = self.pca_loss(pcs, targets, indices)
@@ -430,7 +482,7 @@ class CombinedPCALoss(nn.Module):
 
         if self.density_helper is not None and indices is not None and len(self.output_order) >= 2:
             temp_name, sal_name = self.output_order[0], self.output_order[1]
-            recon = self._reconstruct_profiles(pcs)
+            recon = self._reconstruct_profiles(pcs, inputs=inputs)
             if isinstance(recon, tuple):
                 temp_profiles, sal_profiles = recon
             else:
@@ -454,6 +506,7 @@ def make_loss(
     true_profiles=None,
     ae_targets=None,
     ae_weights=None,
+    surface_residual_layout: Mapping[str, Any] | None = None,
     **kwargs,
 ) -> CombinedPCALoss:
     scales = loss_scales or {}
@@ -484,6 +537,8 @@ def make_loss(
                 "decoder mode requires ae_targets in cache; run scripts/export_ae_latents.py first"
             )
         decoders = load_decoders_from_dir(decoder_path, outputs, device)
+        if surface_residual_layout is None and any(getattr(d, "surface_residual", False) for d in decoders.values()):
+            raise ValueError("surface-residual decoders require surface_residual_layout (from cache metadata)")
         latent_weights = ae_weights if ae_weights is not None else ae_weights_numpy(np.asarray(ae_targets), outputs)
 
     return CombinedPCALoss(
@@ -499,5 +554,6 @@ def make_loss(
         mode=mode,
         true_profiles=cached_profiles,
         decoders=decoders,
+        surface_residual_layout=surface_residual_layout,
         **kwargs,
     )

@@ -22,6 +22,62 @@ PATCH_ORDER_DOC = "time_major_row_major_lat_lon"
 
 ENCODING_KEYS = ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")
 SAT_KEYS = ("sss", "sst", "ssh")
+SURFACE_RESIDUAL_SAT_KEY = {"temperature": "sst", "salinity": "sss"}
+
+
+def sat_patch_center_index(spatial_pad: int, temporal_pad: int) -> int:
+    """Index of center pixel at latest time within one flattened sat-var block."""
+    per_var = sat_features_per_var(spatial_pad, temporal_pad)
+    if per_var == 1:
+        return 0
+    h = w = 2 * spatial_pad + 1
+    t_win = temporal_pad + 1
+    cy = cx = spatial_pad
+    return (t_win - 1) * (h * w) + cy * w + cx
+
+
+def surface_residual_feature_col(
+    variable: str,
+    *,
+    n_enc: int,
+    spatial_pad: int,
+    temporal_pad: int,
+    input_params: Mapping[str, bool],
+) -> int:
+    """Column index in the feature matrix for scalar SST (T) or SSS (S) residual."""
+    key = SURFACE_RESIDUAL_SAT_KEY[variable]
+    col = n_enc
+    per_var = sat_features_per_var(spatial_pad, temporal_pad)
+    center = sat_patch_center_index(spatial_pad, temporal_pad)
+    for sat_key in SAT_KEYS:
+        if not input_params.get(sat_key):
+            continue
+        if sat_key == key:
+            return col + center
+        col += per_var
+    raise KeyError(f"surface residual sat key {key!r} not enabled in input_params")
+
+
+def surface_residual_from_features(
+    features,
+    variable: str,
+    *,
+    n_enc: int,
+    spatial_pad: int,
+    temporal_pad: int,
+    input_params: Mapping[str, bool],
+):
+    """Scalar SST/SSS per row from cache inputs (center pixel, latest time)."""
+    col = surface_residual_feature_col(
+        variable,
+        n_enc=n_enc,
+        spatial_pad=spatial_pad,
+        temporal_pad=temporal_pad,
+        input_params=input_params,
+    )
+    if hasattr(features, "select"):
+        return features[:, col]
+    return features[:, col]
 
 
 def count_encoding_dims(input_params: Mapping[str, bool]) -> int:

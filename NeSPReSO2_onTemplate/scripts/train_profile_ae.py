@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 import model.model as module_arch
 from parse_config import ConfigParser, validate_config
+from preproc.preproc_isas_sat import count_encoding_dims, surface_residual_from_features
 from train import ensure_cache
 
 
@@ -59,7 +60,14 @@ def pca_baseline_rmse(profiles: np.ndarray, mask: np.ndarray, n_comp: int) -> fl
     return float(np.sqrt(np.mean(err[valid])))
 
 
-def build_ae(arch: str, encoding_dim: int, input_dim: int, *, layer_scale: int = 1) -> tuple[nn.Module, list[int], list[int]]:
+def build_ae(
+    arch: str,
+    encoding_dim: int,
+    input_dim: int,
+    *,
+    layer_scale: int = 1,
+    variable: str = "temperature",
+) -> tuple[nn.Module, list[int], list[int]]:
     if arch in ("Autoencoder", "ResAutoencoder"):
         enc = [min(512, max(128, input_dim // 4)), 128, 64]
         dec = [64, 128, min(512, max(128, input_dim // 4))]
@@ -68,17 +76,17 @@ def build_ae(arch: str, encoding_dim: int, input_dim: int, *, layer_scale: int =
             dec = [h * layer_scale for h in dec]
         use_residual = arch == "ResAutoencoder"
         cls = module_arch.ResAutoencoder if use_residual else module_arch.Autoencoder
-        return (
-            cls(
-                encoding_dim,
-                encoder_layers=enc,
-                decoder_layers=dec,
-                input_dim=input_dim,
-                residual=use_residual,
-            ),
-            enc,
-            dec,
+        kwargs = dict(
+            encoding_dim=encoding_dim,
+            encoder_layers=enc,
+            decoder_layers=dec,
+            input_dim=input_dim,
+            residual=use_residual,
         )
+        if use_residual:
+            kwargs["variable"] = variable
+            kwargs["surface_residual"] = True
+        return cls(**kwargs), enc, dec
     if arch == "KAN_Autoencoder":
         return module_arch.KAN_Autoencoder(encoding_dim, input_dim=input_dim), [], []
     raise ValueError(f"unknown arch {arch!r}")
@@ -88,6 +96,9 @@ def train_variable(
     *,
     profiles: np.ndarray,
     mask: np.ndarray,
+    features: np.ndarray | None,
+    surface_layout: dict | None,
+    variable: str,
     arch: str,
     encoding_dim: int,
     device: torch.device,
@@ -107,27 +118,53 @@ def train_variable(
     def tensors(idxs):
         x = torch.tensor(profiles[idxs], dtype=torch.float32)
         m = torch.tensor(mask[idxs], dtype=torch.bool)
-        return x, m
+        if features is not None:
+            f = torch.tensor(features[idxs], dtype=torch.float32)
+            return x, m, f
+        return x, m, None
 
-    x_train, m_train = tensors(train_idx)
-    x_val, m_val = tensors(val_idx)
+    x_train, m_train, f_train = tensors(train_idx)
+    x_val, m_val, f_val = tensors(val_idx)
 
-    train_loader = DataLoader(TensorDataset(x_train, m_train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(x_val, m_val), batch_size=batch_size, shuffle=False)
+    if f_train is None:
+        train_ds = TensorDataset(x_train, m_train)
+        val_ds = TensorDataset(x_val, m_val)
+    else:
+        train_ds = TensorDataset(x_train, m_train, f_train)
+        val_ds = TensorDataset(x_val, m_val, f_val)
 
-    model, enc_layers, dec_layers = build_ae(arch, encoding_dim, depth, layer_scale=layer_scale)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+
+    model, enc_layers, dec_layers = build_ae(
+        arch, encoding_dim, depth, layer_scale=layer_scale, variable=variable
+    )
     model = model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = MaskedMSELoss()
+    use_surface = arch == "ResAutoencoder" and features is not None and surface_layout is not None
+
+    def surface_batch(feat):
+        if not use_surface:
+            return None
+        layout = dict(surface_layout)
+        layout.setdefault("n_enc", count_encoding_dims(layout.get("input_params", {})))
+        return surface_residual_from_features(feat, variable, **layout).to(device)
 
     best_val = float("inf")
     best_state = None
     for epoch in range(1, epochs + 1):
         model.train()
-        for xb, mb in train_loader:
+        for batch in train_loader:
+            if use_surface:
+                xb, mb, fb = batch
+                fb = fb.to(device)
+            else:
+                xb, mb = batch
+                fb = None
             xb, mb = xb.to(device), mb.to(device)
             opt.zero_grad(set_to_none=True)
-            pred = model(xb, mb)
+            pred = model(xb, mb, surface_residual=surface_batch(fb))
             loss = criterion(pred, xb, mb)
             loss.backward()
             opt.step()
@@ -135,9 +172,15 @@ def train_variable(
         model.eval()
         val_losses = []
         with torch.no_grad():
-            for xb, mb in val_loader:
+            for batch in val_loader:
+                if use_surface:
+                    xb, mb, fb = batch
+                    fb = fb.to(device)
+                else:
+                    xb, mb = batch
+                    fb = None
                 xb, mb = xb.to(device), mb.to(device)
-                pred = model(xb, mb)
+                pred = model(xb, mb, surface_residual=surface_batch(fb))
                 val_losses.append(criterion(pred, xb, mb).item())
         val_loss = float(np.mean(val_losses))
         if val_loss < best_val:
@@ -150,7 +193,8 @@ def train_variable(
     model.eval()
     with torch.no_grad():
         xv, mv = x_val.to(device), m_val.to(device)
-        recon = model(xv, mv)
+        fv = f_val.to(device) if use_surface else None
+        recon = model(xv, mv, surface_residual=surface_batch(fv))
         valid = ~mv
         rmse = torch.sqrt(((recon - xv) ** 2 * valid.float()).sum() / valid.float().sum()).item()
 
@@ -206,6 +250,16 @@ def main() -> int:
     vars_to_run = list(outputs.keys()) if args.variable == "all" else [args.variable]
     tag = cache.get("dataset_tag", config_dict["io"].get("dataset_tag", "unknown"))
     seed = int(config_dict.get("seed", 42))
+    input_params = cache.get("input_params", config_dict.get("input_params", {}))
+    surface_layout = None
+    features = None
+    if args.arch == "ResAutoencoder":
+        features = np.asarray(cache["inputs"], dtype=np.float32)
+        surface_layout = {
+            "spatial_pad": int(cache.get("spatial_pad", config_dict["io"].get("spatial_pad", 0))),
+            "temporal_pad": int(cache.get("temporal_pad", config_dict["io"].get("temporal_pad", 0))),
+            "input_params": input_params,
+        }
 
     arch_tag = args.arch_tag or args.arch
     summary = {
@@ -234,6 +288,9 @@ def main() -> int:
         model, stats = train_variable(
             profiles=prof,
             mask=mask,
+            features=features,
+            surface_layout=surface_layout,
+            variable=name,
             arch=args.arch,
             encoding_dim=args.encoding_dim,
             device=device,
@@ -259,6 +316,7 @@ def main() -> int:
             "decoder_layers": stats.get("decoder_layers"),
             "layer_scale": args.layer_scale,
             "residual": args.arch == "ResAutoencoder",
+            "surface_residual": args.arch == "ResAutoencoder",
             "state_dict": model.state_dict(),
             "stats": stats,
         }

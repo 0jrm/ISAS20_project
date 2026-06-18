@@ -85,11 +85,13 @@ def ensure_cache(config):
     return cache_path
 
 
-def _load_cache_tensors(cache_path: str):
+def _load_cache_tensors(cache_path: str, target_key: str = "targets"):
     with open(cache_path, "rb") as f:
         cache = pickle.load(f)
     inputs = torch.tensor(cache["inputs"], dtype=torch.float32)
-    targets = torch.tensor(cache["targets"], dtype=torch.float32)
+    if target_key not in cache:
+        raise KeyError(f"cache missing {target_key!r}")
+    targets = torch.tensor(cache[target_key], dtype=torch.float32)
     return cache, inputs, targets
 
 
@@ -100,7 +102,9 @@ def resolve_dataloader_batch_size(config, model, criterion, cache_path, device, 
     train_frac = float(dl_args.get("train_frac", 0.7))
     safety = float(dl_args.get("batch_size_safety", 0.95))
 
-    _, inputs, targets = _load_cache_tensors(cache_path)
+    target_key = dl_args.get("target_key", "targets")
+
+    _, inputs, targets = _load_cache_tensors(cache_path, target_key)
     n_train = train_samples_from_cache(inputs.shape[0], train_frac)
 
     optimizer_factory = lambda: build_optimizer(
@@ -131,6 +135,17 @@ def resolve_dataloader_batch_size(config, model, criterion, cache_path, device, 
         )
     config.config["data_loader"]["args"]["batch_size"] = resolved
     return resolved
+
+
+def surface_residual_layout_from_cache(cache: dict) -> dict | None:
+    if not cache.get("input_params"):
+        return None
+    return {
+        "spatial_pad": int(cache.get("spatial_pad", 0)),
+        "temporal_pad": int(cache.get("temporal_pad", 0)),
+        "input_params": cache["input_params"],
+        "n_enc": count_encoding_dims(cache["input_params"]),
+    }
 
 
 def main(config):
@@ -185,6 +200,7 @@ def main(config):
         true_profiles=true_profiles,
         ae_targets=ae_targets,
         ae_weights=ae_weights,
+        surface_residual_layout=surface_residual_layout_from_cache(cache),
     )
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)

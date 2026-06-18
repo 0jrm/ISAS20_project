@@ -150,15 +150,18 @@ def test_res_autoencoder_round_trip():
     x = torch.randn(n, depth)
     mask = torch.zeros(n, depth, dtype=torch.bool)
     mask[:, -2:] = True
-    model = ResAutoencoder(k, encoder_layers=[32, 16], decoder_layers=[16, 32], input_dim=depth)
+    surface = torch.linspace(10.0, 20.0, n)
+    model = ResAutoencoder(k, encoder_layers=[32, 16], decoder_layers=[16, 32], input_dim=depth, variable="temperature")
     model.eval()
     with torch.no_grad():
-        recon = model(x, mask)
+        recon = model(x, mask, surface_residual=surface)
     assert recon.shape == x.shape
     assert torch.allclose(recon[mask], x[mask])
     latent = model.encode(x, mask)
-    decoded = model.decode(latent)
+    decoded = model.decode(latent, surface_residual=surface)
     assert decoded.shape == (n, depth)
+    valid = ~mask
+    assert torch.allclose(decoded[valid], recon[valid], atol=1e-5)
 
 
 def test_prediction_model_v2():

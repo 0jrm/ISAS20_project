@@ -14,6 +14,7 @@ import torch
 import data_loader.data_loaders as module_data
 import model.model as module_arch
 from model.loss import decode_latent_profiles, load_decoders_from_dir, make_loss, sklearn_inverse_transform_pcs
+from train import surface_residual_layout_from_cache
 from model.metric import per_variable_rmse
 from parse_config import ConfigParser, validate_config
 from playground import prepare_device, read_json
@@ -50,12 +51,32 @@ def _latent_block_rmse(pred, tgt, outputs):
     return out
 
 
-def raw_profile_rmse(pred_pcs, true_profiles, pca_models, outputs, indices, *, decoders=None, device=None):
+def raw_profile_rmse(
+    pred_pcs,
+    true_profiles,
+    pca_models,
+    outputs,
+    indices,
+    *,
+    decoders=None,
+    device=None,
+    inputs=None,
+    surface_residual_layout=None,
+):
     """RMSE in physical space vs cache ``profiles`` (not PCA-reconstructed targets)."""
     idx = np.asarray(indices, dtype=int)
     if decoders is not None:
         pred_t = torch.tensor(pred_pcs, dtype=torch.float32, device=device)
-        pred = decode_latent_profiles(pred_t, decoders, outputs)
+        inp_t = None
+        if inputs is not None:
+            inp_t = torch.tensor(inputs, dtype=torch.float32, device=device)
+        pred = decode_latent_profiles(
+            pred_t,
+            decoders,
+            outputs,
+            inputs=inp_t,
+            surface_residual_layout=surface_residual_layout,
+        )
         out = {}
         for name in outputs:
             # decode_latent_profiles is (N, n_depth); cache profiles are (n_depth, N).
@@ -134,6 +155,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
         true_profiles=true_profiles,
         ae_targets=data_loader.cache.get(target_key),
         ae_weights=data_loader.cache.get(weight_key),
+        surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
     )
 
     total_loss = 0.0
@@ -144,7 +166,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
             target = target.to(device)
             indices = indices.to(device)
             output = model(data)
-            total_loss += loss_fn(output, target, indices).item() * data.size(0)
+            total_loss += loss_fn(output, target, indices, inputs=data).item() * data.size(0)
             pcs_list.append(output.cpu().numpy())
             idx_list.append(indices.cpu().numpy())
 
@@ -177,6 +199,8 @@ def main(config, checkpoint_path: str, split: str = "test"):
             indices,
             decoders=decoders,
             device=device,
+            inputs=data_loader.cache["inputs"][indices],
+            surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
         ),
     }
     if loss_cfg.get("mode") != "decoder" and pca_tgt is not None:

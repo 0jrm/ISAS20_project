@@ -295,11 +295,33 @@ class Autoencoder(nn.Module):
 
 
 class ResAutoencoder(Autoencoder):
-    """Profile AE with residual hidden blocks (absolute decode for Stage B)."""
+    """Profile AE with residual hidden blocks and optional surface scalar skip at decode."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, variable="temperature", surface_residual=True, **kwargs):
         kwargs["residual"] = True
         super().__init__(*args, **kwargs)
+        self.variable = variable
+        self.surface_residual = bool(surface_residual)
+
+    def _apply_surface_residual(self, decoded, surface_residual):
+        if not self.surface_residual or surface_residual is None:
+            return decoded
+        return decoded + surface_residual.unsqueeze(-1)
+
+    def forward(self, x, mask=None, surface_residual=None):
+        if mask is not None:
+            x_masked = x * (~mask).float()
+        else:
+            x_masked = x
+        encoded = self._encode(x_masked)
+        decoded = self._apply_surface_residual(self._decode_body(encoded), surface_residual)
+        if mask is not None:
+            decoded = torch.where(mask, x, decoded)
+        return decoded
+
+    def decode(self, x, mask=None, surface_residual=None):
+        decoded = self._decode_body(x)
+        return self._apply_surface_residual(decoded, surface_residual)
     
 class KANLinear(nn.Module):
     def __init__(self, in_features, out_features, grid_size=5, spline_order=3, 

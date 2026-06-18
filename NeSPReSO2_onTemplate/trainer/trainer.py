@@ -119,9 +119,11 @@ class Trainer(BaseTrainer):
             self._emit_sentinel("FAIL", {"tag": payload["tag"], "reason": type(exc).__name__})
             raise
 
-    def _loss(self, output, target, indices):
+    def _loss(self, output, target, indices, inputs=None):
         if indices is None:
             return self.criterion(output, target)
+        if getattr(self.criterion, "needs_inputs", False):
+            return self.criterion(output, target, indices, inputs=inputs)
         return self.criterion(output, target, indices)
 
     def _forward_loss(self, data, target, indices):
@@ -131,7 +133,7 @@ class Trainer(BaseTrainer):
             enabled=self._use_autocast,
         ):
             output = self.model(data)
-            loss = self._loss(output, target, indices)
+            loss = self._loss(output, target, indices, inputs=data)
         return output, loss
 
     def _optimizer_step(self, loss):
