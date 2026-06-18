@@ -1,7 +1,7 @@
 # Phase 5 — Learned Latent (AE / KAN) vs PCA-16
 
 **Branch:** `nespreso-v2-port`  
-**Status:** **in progress** (Stage A started)  
+**Status:** **paused** — notebook comparison rewrite is current eval surface; Stage B blocked on go/no-go (see [HANDOFF.md](HANDOFF.md))  
 **Gate cleared:** Phase 4 ISAS eval signed off; Phase 4b exhausted (&lt;10% on batch, compile_loss, pred_profile_cached)
 
 ---

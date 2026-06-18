@@ -206,6 +206,27 @@ Optional faster loss (same objective as profile MSE branch):
 
 **DDP (2 GPU, ISAS smoke, 20 timed epochs):** `0.0184 s/epoch` vs `0.0256` 1-GPU baseline — **~1.39× faster** per epoch (each rank processes half the batches).
 
+## Comparison notebook
+
+[`notebooks/compare_v2_vs_template.ipynb`](notebooks/compare_v2_vs_template.ipynb) is the interactive comparison surface for:
+
+- **ISAS20** vs **ARGO** (`isas_point`, `isas_patch`, `argo_point` inline configs)
+- **PCA vs AE** profile reconstruction on the test split
+- Smoke **training** (2 epochs) and **inference** via `train.main` / `eval_run.main`
+- Depth curves and spatial maps on a **common 0–1800 m grid** (10 m steps)
+
+All statistics are defined in [`notebooks/nb_metrics.py`](notebooks/nb_metrics.py) (`STATISTICS` contract). Summary tables use `raw_profile_rmse_common`; native-grid RMSE matches `eval_run.py`.
+
+```bash
+cd NeSPReSO2_onTemplate
+jupyter notebook notebooks/compare_v2_vs_template.ipynb
+
+# headless smoke (PCA/AE repr + cache stats; inference if notebook checkpoints exist)
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 notebooks/run_compare.py
+```
+
+Regenerate the notebook from [`notebooks/build_notebook.py`](notebooks/build_notebook.py) after editing cell sources there.
+
 Profiler (ISAS baseline): top CUDA time in `Adam.step` and `aten::mm` (PCA reconstruction), not the MLP forward.
 
 **Recommendation:** keep FP32 defaults. Optional `performance` block in config if you want to experiment:
