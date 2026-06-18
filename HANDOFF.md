@@ -131,3 +131,5 @@ Always wrap CPU work: `srun --ntasks=1 --cpus-per-task=8 ...`
 | [`PLAN-phase5.md`](PLAN-phase5.md) | AE/KAN decoder roadmap |
 | [`PLAN-agent-train-monitor.md`](PLAN-agent-train-monitor.md) | Agent dual-run spec (implemented) |
 | [`NeSPReSO2_onTemplate/README.md`](NeSPReSO2_onTemplate/README.md) | Ops, batch size, ML opt tables |
+| [`AGENTS.md`](AGENTS.md) | Agent + ponytail instructions |
+| [`eng-principles-pack/INDEX.md`](eng-principles-pack/INDEX.md) | On-demand engineering skills |

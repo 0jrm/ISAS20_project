@@ -1,0 +1,32 @@
+---
+description: NeSPReSO v2 on template — dataset tags, eval rules, trust boundaries.
+globs: NeSPReSO2_onTemplate/**/*
+alwaysApply: false
+---
+
+# NeSPReSO project context
+
+Read [`HANDOFF.md`](../../HANDOFF.md) for current status.
+
+## What this is
+
+Batch PyTorch training: surface inputs → PCA latent → T/S profiles. Tags: `isas20` (HDF5 patches), `argo_v2` (v2 pickle). No HTTP API, no database.
+
+## Trust boundaries
+
+- `pickle.load` / `torch.load` on caches and checkpoints — only trusted paths on shared FS.
+- `parse_config.init_obj` + `getattr` — config `type` fields select classes; validate at boundary.
+- `validate_config()` in `parse_config.py` — extend here, don't add parallel config layers.
+
+## Eval
+
+- Within-tag: `eval_run.py` + matching cache/checkpoint.
+- Cross-tag: `eval_matched.py` only — never headline ISAS vs ARGO raw RMSE side by side.
+
+## Bottleneck
+
+`CombinedPCALoss` PCA inverse (`model/loss.py`) dominates ARGO (1801 levels). MLP forward is tiny; GoM GPU opts rarely help.
+
+## Checks
+
+After non-trivial changes: `srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py`
