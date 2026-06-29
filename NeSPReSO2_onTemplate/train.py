@@ -16,10 +16,7 @@ from playground.batch_size import resolve_batch_size
 from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model, maybe_compile_module
 from preproc.preproc_isas_sat import (
     build_train_cache,
-    compute_input_dim,
     count_encoding_dims,
-    count_sat_vars,
-    sat_patch_shape,
 )
 from trainer import Trainer
 
@@ -42,62 +39,38 @@ def ensure_cache(config):
     pinned = config.config["data_loader"]["args"].get("cache_path") or None
     io_cfg = config.config.get("io", {})
     l3_cfg = io_cfg.get("l3") or {}
-    input_params = config["input_params"]
 
     if l3_cfg.get("enabled"):
         from preproc.export_l3_cache import build_argo_l3_train_cache
-        from preproc.l3_input import compute_l3_input_dim, l3_n_channels, l3_sat_patch_shape
 
         cache_path = build_argo_l3_train_cache(config.config)
-        spatial_pad = int(io_cfg.get("spatial_pad", 0))
-        temporal_pad = int(io_cfg.get("temporal_pad", 0))
-        expected_dim = compute_l3_input_dim(input_params, l3_cfg)
     elif io_cfg.get("dataset_tag", "isas20") == "argo_v2":
         from preproc.export_v2_cache import build_argo_cache
 
         cache_path = build_argo_cache(config.config)
-        spatial_pad = int(io_cfg.get("spatial_pad", 0))
-        temporal_pad = int(io_cfg.get("temporal_pad", 0))
-        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
     else:
         cache_path = build_train_cache(config.config)
-        spatial_pad = int(io_cfg.get("spatial_pad", 0))
-        temporal_pad = int(io_cfg.get("temporal_pad", 0))
-        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
 
     if pinned:
         cache_path = pinned
     config.config["data_loader"]["args"]["cache_path"] = cache_path
 
-    if config["arch"]["args"].get("input_dim") != expected_dim:
-        config.config["arch"]["args"]["input_dim"] = expected_dim
+    from preproc.l3_input import sync_arch_with_io, verify_l3_cache_layout
 
-    expected_out = sum(config["outputs"].values())
-    if config["arch"]["args"].get("output_dim") != expected_out:
-        config.config["arch"]["args"]["output_dim"] = expected_out
-
-    arch_type = config["arch"]["type"]
-    if arch_type == "PatchConvMLP":
-        arch_args = config.config["arch"]["args"]
-        arch_args["n_enc"] = count_encoding_dims(input_params)
-        if l3_cfg.get("enabled"):
-            patch_shape = l3_sat_patch_shape(l3_cfg)
-            arch_args["n_sat"] = l3_n_channels(l3_cfg)
-            arch_args["patch_shape"] = list(patch_shape)
-        else:
-            n_sat = count_sat_vars(input_params)
-            patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
-            arch_args["n_sat"] = n_sat
-            arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
+    expected_dim = sync_arch_with_io(config.config)
 
     import pickle as _pickle
 
     with open(cache_path, "rb") as f:
-        cache_dim = _pickle.load(f)["inputs"].shape[1]
+        cache = _pickle.load(f)
+    if l3_cfg.get("enabled"):
+        verify_l3_cache_layout(cache, l3_cfg)
+    cache_dim = cache["inputs"].shape[1]
     if cache_dim != expected_dim:
         raise ValueError(
             f"cache input dim {cache_dim} != expected {expected_dim} "
-            f"(spatial_pad={spatial_pad}, temporal_pad={temporal_pad}, l3={l3_cfg.get('enabled')})"
+            f"(l3={l3_cfg.get('enabled')}, spatial_pad={io_cfg.get('spatial_pad')}, "
+            f"temporal_pad={io_cfg.get('temporal_pad')})"
         )
 
     split_seed = config.config.get("seed", 42)
@@ -257,6 +230,10 @@ def main(config):
         "input_params": data_loader.input_params,
         "outputs": dict(loss_outputs),
     }
+    if data_loader.l3_enabled:
+        checkpoint_extra["l3_enabled"] = True
+        checkpoint_extra["l3_channel_metadata"] = data_loader.l3_channel_metadata
+        checkpoint_extra["sat_patch_shape"] = data_loader.sat_patch_shape
 
     trainer = Trainer(
         model,

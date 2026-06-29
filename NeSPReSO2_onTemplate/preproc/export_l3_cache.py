@@ -29,6 +29,7 @@ from preproc.l3_rasterize import (
     rasterize_ssh_for_target,
 )
 from preproc.l3_input import build_l3_input_rows, l3_channel_metadata
+from preproc.l4_augment import augment_config_summary, apply_l4_to_sample
 from preproc.preproc_isas_sat import config_hash, count_encoding_dims, write_train_cache
 
 
@@ -94,6 +95,8 @@ def build_l3_sample(
     dataset_tag: str,
     v2_src: str | None,
     split: str,
+    l4_cfg: dict[str, Any] | None = None,
+    augment_seed: int = 0,
 ) -> dict[str, Any]:
     raw_root = _resolve_path(_ROOT, l3_cfg["raw_root"])
     windows = list(l3_cfg["time_windows_hours"])
@@ -103,13 +106,12 @@ def build_l3_sample(
     grid = patch_grid(target.lat, target.lon, half, step)
 
     if not raw_root.is_dir():
-        # ponytail: no raw products on disk — explicit empty bundles
         from preproc.l3_rasterize import coverage_metrics, empty_bundle
 
         t, h, w = len(windows), grid.height, grid.width
         empty = empty_bundle(t, h, w)
         cov = coverage_metrics(empty, target=target)
-        return {
+        sample = {
             "target_idx": int(idx),
             "split": split,
             "target": {"lat": target.lat, "lon": target.lon, "time": target.time.isoformat()},
@@ -119,35 +121,48 @@ def build_l3_sample(
             "coverage": {"ssh": cov, "wind_u": cov, "wind_v": cov},
             "sources": {"ssh_files": [], "era5_files": []},
         }
+    else:
+        ssh_paths = collect_ssh_paths(raw_root, target.time, windows)
+        era5_paths = collect_era5_paths(raw_root, target.time, windows)
 
-    ssh_paths = collect_ssh_paths(raw_root, target.time, windows)
-    era5_paths = collect_era5_paths(raw_root, target.time, windows)
+        ssh_bundle, ssh_cov = rasterize_ssh_for_target(ssh_paths, target, grid, windows)
+        wind_u, wind_u_cov = rasterize_era5_wind_for_target(era5_paths, target, grid, windows, "u")
+        wind_v, wind_v_cov = rasterize_era5_wind_for_target(era5_paths, target, grid, windows, "v")
 
-    ssh_bundle, ssh_cov = rasterize_ssh_for_target(ssh_paths, target, grid, windows)
-    wind_u, wind_u_cov = rasterize_era5_wind_for_target(era5_paths, target, grid, windows, "u")
-    wind_v, wind_v_cov = rasterize_era5_wind_for_target(era5_paths, target, grid, windows, "v")
+        sample = {
+            "target_idx": int(idx),
+            "split": split,
+            "target": {
+                "lat": target.lat,
+                "lon": target.lon,
+                "time": target.time.isoformat(),
+            },
+            "ssh": ssh_bundle,
+            "wind_u": wind_u,
+            "wind_v": wind_v,
+            "coverage": {
+                "ssh": ssh_cov,
+                "wind_u": wind_u_cov,
+                "wind_v": wind_v_cov,
+            },
+            "sources": {
+                "ssh_files": [str(p) for p in ssh_paths],
+                "era5_files": [str(p) for p in era5_paths],
+            },
+        }
 
-    return {
-        "target_idx": int(idx),
-        "split": split,
-        "target": {
-            "lat": target.lat,
-            "lon": target.lon,
-            "time": target.time.isoformat(),
-        },
-        "ssh": ssh_bundle,
-        "wind_u": wind_u,
-        "wind_v": wind_v,
-        "coverage": {
-            "ssh": ssh_cov,
-            "wind_u": wind_u_cov,
-            "wind_v": wind_v_cov,
-        },
-        "sources": {
-            "ssh_files": [str(p) for p in ssh_paths],
-            "era5_files": [str(p) for p in era5_paths],
-        },
-    }
+    if l4_cfg and l4_cfg.get("enabled"):
+        rng = np.random.default_rng(int(augment_seed))
+        sample = apply_l4_to_sample(
+            sample,
+            target=target,
+            grid=grid,
+            raw_root=raw_root,
+            windows_hours=windows,
+            l4_cfg=l4_cfg,
+            rng=rng,
+        )
+    return sample
 
 
 def build_l3_processed_batch(
@@ -160,10 +175,11 @@ def build_l3_processed_batch(
 ) -> str:
     io = config["io"]
     l3_cfg = io["l3"]
+    l4_cfg = io.get("l4") or {}
     processed_root = _resolve_path(_ROOT, l3_cfg["processed_root"])
     processed_root.mkdir(parents=True, exist_ok=True)
 
-    lhash = l3_config_hash(l3_cfg)
+    lhash = l3_config_hash(l3_cfg, l4_cfg if l4_cfg.get("enabled") else None)
     out_path = processed_root / f"l3_samples_{lhash}.pkl"
     if out_path.is_file() and not force:
         return str(out_path)
@@ -190,6 +206,7 @@ def build_l3_processed_batch(
             idx_to_split[i] = split_name
 
     spatial_pad, temporal_pad, grid_size = l3_geometry(l3_cfg)
+    seed_base = int(config.get("seed", 42))
     samples = []
     for idx in indices:
         split = idx_to_split.get(idx, "unassigned")
@@ -201,6 +218,8 @@ def build_l3_processed_batch(
                 dataset_tag=tag,
                 v2_src=v2_src,
                 split=split,
+                l4_cfg=l4_cfg if l4_cfg.get("enabled") else None,
+                augment_seed=seed_base + int(idx),
             )
         )
 
@@ -211,6 +230,7 @@ def build_l3_processed_batch(
         "git_commit": _git_commit(),
         "features": list(FEATURE_NAMES),
         "n_features": N_FEATURES,
+        "l4_augment": augment_config_summary(l4_cfg) if l4_cfg.get("enabled") else None,
         "geometry": {
             "spatial_pad": spatial_pad,
             "temporal_pad": temporal_pad,
@@ -231,9 +251,10 @@ def export_l3_train_cache(config: dict, processed_path: str | Path, force: bool 
     """Build train-ready cache with L3-flattened ``inputs`` and ``l3_tensors``."""
     io = config["io"]
     l3_cfg = io["l3"]
+    l4_cfg = io.get("l4") or {}
     cache_dir = _resolve_path(_ROOT, io.get("cache_dir", "../data/cache"))
     chash = config_hash(config)
-    lhash = l3_config_hash(l3_cfg)
+    lhash = l3_config_hash(l3_cfg, l4_cfg if l4_cfg.get("enabled") else None)
     cache_tag = f"l3_{chash}_{lhash}"
     l3_cache_path = cache_dir / f"train_ready_{cache_tag}.pkl"
     if l3_cache_path.is_file() and not force:
@@ -281,6 +302,9 @@ def export_l3_train_cache(config: dict, processed_path: str | Path, force: bool 
     payload["temporal_pad"] = temporal_pad
     payload["sat_patch_shape"] = [c, t, h, w]
     payload["l3_enabled"] = True
+    payload["l4_enabled"] = bool(l4_cfg.get("enabled"))
+    if l4_cfg.get("enabled"):
+        payload["l4_augment"] = augment_config_summary(l4_cfg)
     payload["dataset_tag"] = io.get("dataset_tag", "argo_v2") + "_l3"
     payload["l3_processed_path"] = str(processed_path)
     return write_train_cache(payload, str(cache_dir), cache_tag)

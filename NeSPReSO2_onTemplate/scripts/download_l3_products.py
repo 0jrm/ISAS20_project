@@ -99,7 +99,6 @@ def _download_copernicus_l3(
             dataset_id=dataset_id,
             filter=date_filter,
             output_directory=str(out_dir),
-            no_directories=True,
             skip_existing=not force,
         )
         downloaded.append(dataset_id)

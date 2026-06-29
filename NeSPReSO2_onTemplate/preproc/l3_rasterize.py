@@ -235,6 +235,7 @@ def read_ssh_track(nc_path: str | Path) -> tuple[np.ndarray, np.ndarray, list[da
         times = [_nc_num_to_datetime(t, tunits, tcal) for t in np.asarray(tnums).ravel()]
         lats = np.asarray(lats, dtype=np.float64).ravel()
         lons = np.asarray(lons, dtype=np.float64).ravel()
+        lons = np.vectorize(_normalize_lon_deg)(lons)
         values = np.asarray(values, dtype=np.float64).ravel()
         if sigmas is not None:
             sigmas = np.asarray(sigmas, dtype=np.float64).ravel()
@@ -262,15 +263,29 @@ def read_era5_wind(nc_path: str | Path) -> tuple[np.ndarray, np.ndarray, list[da
         )
 
 
+def _normalize_lon_deg(lon: float) -> float:
+    return ((float(lon) + 180.0) % 360.0) - 180.0
+
+
+def _lon_delta_deg(lon: float, lon0: float) -> float:
+    d = _normalize_lon_deg(lon) - _normalize_lon_deg(lon0)
+    if d > 180.0:
+        d -= 360.0
+    elif d < -180.0:
+        d += 360.0
+    return d
+
+
 def _in_bbox(lat, lon, lat0, lon0, half_deg) -> bool:
-    return abs(lat - lat0) <= half_deg and abs(lon - lon0) <= half_deg
+    return abs(lat - lat0) <= half_deg and abs(_lon_delta_deg(lon, lon0)) <= half_deg
 
 
 def find_raw_files(raw_root: Path, subdir: str, pattern: str) -> list[Path]:
     d = raw_root / subdir
     if not d.is_dir():
         return []
-    return sorted(d.glob(pattern))
+    # ponytail: recursive glob — Copernicus toolbox keeps product subdirs
+    return sorted(d.rglob(pattern))
 
 
 def find_ssh_files_for_day(raw_root: Path, day: datetime) -> list[Path]:
@@ -421,12 +436,15 @@ def build_target_from_cache(cache: dict, idx: int, *, dataset_tag: str, v2_src: 
     return TargetPoint(lat=lat, lon=lon, time=t)
 
 
-def l3_config_hash(l3_cfg: dict[str, Any]) -> str:
+def l3_config_hash(l3_cfg: dict[str, Any], l4_cfg: dict[str, Any] | None = None) -> str:
     import hashlib
     import json
 
-    blob = json.dumps(l3_cfg, sort_keys=True).encode()
-    return hashlib.sha256(blob).hexdigest()[:12]
+    blob: dict[str, Any] = {"l3": l3_cfg}
+    if l4_cfg and l4_cfg.get("enabled"):
+        blob["l4"] = l4_cfg
+    payload = json.dumps(blob, sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()[:12]
 
 
 def center_value_from_bundle(bundle: np.ndarray) -> float:

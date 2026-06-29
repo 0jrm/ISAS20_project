@@ -51,9 +51,22 @@ def validate_config(config):
         assert int(config["io"]["temporal_pad"]) == pad_t, (
             f"io.temporal_pad ({config['io']['temporal_pad']}) must match l3 geometry ({pad_t})"
         )
+        from preproc.l3_rasterize import FEATURE_NAMES
+
+        feats = l3.get("features", list(FEATURE_NAMES))
+        assert feats, "io.l3.features must be non-empty"
+        unknown = [f for f in feats if f not in FEATURE_NAMES]
+        assert not unknown, f"io.l3.features unknown: {unknown}"
+        vars_ = l3.get("variables") or {}
+        assert vars_, "io.l3.variables must be non-empty"
     l4 = config.get("io", {}).get("l4")
     if l4 and l4.get("enabled"):
+        from preproc.l4_augment import VALID_L4_MODES
+
         assert float(l4.get("noise_scale", 1.0)) >= 0, "io.l4.noise_scale must be >= 0"
+        mode = str(l4.get("mode", "mask_augment"))
+        assert mode in VALID_L4_MODES, f"io.l4.mode must be one of {VALID_L4_MODES}, got {mode!r}"
+        assert l3 and l3.get("enabled"), "io.l4.enabled requires io.l3.enabled"
 
 
 class ConfigParser:

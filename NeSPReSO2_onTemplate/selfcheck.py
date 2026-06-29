@@ -578,6 +578,13 @@ def test_l3_bin_observations_synthetic():
     assert bundle[IDX_MASK, 1, cy, cx] == 0.0
 
 
+def test_l3_lon_normalization_gom_bbox():
+    from preproc.l3_rasterize import _in_bbox, _normalize_lon_deg
+
+    assert abs(_normalize_lon_deg(273.3) - (-86.7)) < 0.01
+    assert _in_bbox(26.0, 273.3, 26.0, -86.7, half_deg=3.0)
+
+
 def test_l3_rasterize_missing_is_explicit():
     from datetime import datetime
 
@@ -633,6 +640,66 @@ def test_l3_input_dim_and_flatten():
     assert flat.shape == (c * t * h * w,)
 
 
+def test_l3_feature_subset_dim():
+    from preproc.l3_input import compute_l3_input_dim, l3_n_channels, l3_sat_patch_shape
+
+    base = {
+        "patch_half_deg": 3.0,
+        "grid_step_deg": 0.25,
+        "time_windows_hours": [0, 24],
+        "variables": {"ssh": {}, "wind_u": {}, "wind_v": {}},
+    }
+    full = {**base, "features": ["value", "mask", "age", "uncertainty", "count"]}
+    slim = {**base, "features": ["value", "mask"]}
+    flags = {k: True for k in ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")}
+    assert l3_n_channels(full) == 15
+    assert l3_n_channels(slim) == 6
+    assert compute_l3_input_dim(flags, slim) < compute_l3_input_dim(flags, full)
+    c, t, h, w = l3_sat_patch_shape(slim)
+    assert c == 6 and compute_l3_input_dim(flags, slim) == 6 + c * t * h * w
+
+
+def test_l3_cache_layout_guard():
+    from preproc.l3_input import l3_channel_metadata, verify_l3_cache_layout
+
+    l3_cfg = {
+        "patch_half_deg": 3.0,
+        "grid_step_deg": 0.25,
+        "time_windows_hours": [0, 24],
+        "variables": {"ssh": {}},
+        "features": ["value", "mask"],
+    }
+    cache = {
+        "l3_enabled": True,
+        "input_params": {},
+        "inputs": np.zeros((2, 2 * 2 * 25 * 25), dtype=np.float32),
+        "l3_channel_metadata": l3_channel_metadata(l3_cfg),
+    }
+    verify_l3_cache_layout(cache, l3_cfg)
+    bad = dict(cache)
+    bad["l3_channel_metadata"] = dict(cache["l3_channel_metadata"])
+    bad["l3_channel_metadata"]["features"] = ["mask", "value"]
+    try:
+        verify_l3_cache_layout(bad, l3_cfg)
+        raise AssertionError("expected ValueError for feature order mismatch")
+    except ValueError as exc:
+        assert "features" in str(exc)
+
+
+def test_sync_arch_l3_config():
+    from pathlib import Path
+
+    from playground import read_json
+    from preproc.l3_input import sync_arch_with_io
+
+    root = Path(__file__).resolve().parent
+    cfg = read_json(root / "config_argo_l3_smoke.json")
+    dim = sync_arch_with_io(cfg)
+    assert dim == 46881
+    assert cfg["arch"]["args"]["patch_shape"] == [15, 5, 25, 25]
+    assert cfg["arch"]["args"]["n_sat"] == 15
+
+
 def test_patch_conv_mlp_l3_forward():
     from preproc.l3_input import compute_l3_input_dim, l3_n_channels, l3_sat_patch_shape
 
@@ -671,6 +738,68 @@ def test_l4_mask_augment():
     assert out_mask[1, 1] == 1.0
     assert values[1, 1] == 1.0
     assert values[0, 0] == 0.0
+
+
+def test_l4_augment_bundle_wiring():
+    from datetime import datetime
+    from pathlib import Path
+
+    from preproc.l3_rasterize import IDX_MASK, IDX_VALUE, TargetPoint, empty_bundle, patch_grid
+    from preproc.l4_augment import SOURCE_SYNTH_L4_MASKED, augment_bundle_from_l4, apply_l4_to_sample
+
+    windows = [0, 24]
+    grid = patch_grid(25.0, -90.0, 3.0, 0.25)
+    t, h, w = len(windows), grid.height, grid.width
+    l3 = empty_bundle(t, h, w)
+    l3[IDX_MASK, 0, h // 2, w // 2] = 1.0
+    l3[IDX_VALUE, 0, h // 2, w // 2] = 0.05
+    l4_vals = np.full((t, h, w), 0.2, dtype=np.float64)
+    l4_errs = np.full((t, h, w), 0.01, dtype=np.float64)
+    l4_cfg = {"noise_scale": 0.0, "mission_dropout_prob": 0.0, "time_window_dropout_prob": 0.0}
+    aug, src = augment_bundle_from_l4(l3, l4_vals, l4_errs, l4_cfg, np.random.default_rng(0))
+    assert aug[IDX_MASK, 0, h // 2, w // 2] == 1.0
+    assert abs(float(aug[IDX_VALUE, 0, h // 2, w // 2]) - 0.2) < 1e-5
+    assert src[0, h // 2, w // 2] == SOURCE_SYNTH_L4_MASKED
+
+    sample = {
+        "ssh": l3,
+        "wind_u": empty_bundle(t, h, w),
+        "wind_v": empty_bundle(t, h, w),
+        "sources": {},
+    }
+    target = TargetPoint(25.0, -90.0, datetime(2020, 1, 15))
+    out = apply_l4_to_sample(
+        sample,
+        target=target,
+        grid=grid,
+        raw_root=Path("/nonexistent"),
+        windows_hours=windows,
+        l4_cfg={"enabled": True, "mode": "mask_augment", "apply_to": ["ssh"], **l4_cfg},
+        rng=np.random.default_rng(1),
+    )
+    assert "l4_augment" in out
+    assert out["l4_augment"]["mode"] == "mask_augment"
+    assert "ssh" in out["l4_augment"]["source_flags"]
+
+
+def test_l4_processed_batch_smoke():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    cfg_path = root / "config_argo_l3_l4_smoke.json"
+    if not cfg_path.is_file():
+        return
+    from playground import read_json
+    from preproc.export_l3_cache import build_l3_processed_batch
+
+    cfg = read_json(cfg_path)
+    path = build_l3_processed_batch(cfg, max_samples=4, force=True)
+    import pickle
+
+    with open(path, "rb") as f:
+        batch = pickle.load(f)
+    assert batch.get("l4_augment", {}).get("enabled") is True
+    assert batch["samples"][0].get("l4_augment") is not None
 
 
 def test_l3_dataloader_batch():
@@ -922,11 +1051,17 @@ if __name__ == "__main__":
     test_split_matches_torch_seed()
     test_chronological_split_no_leakage()
     test_l3_bin_observations_synthetic()
+    test_l3_lon_normalization_gom_bbox()
     test_l3_rasterize_missing_is_explicit()
     test_l3_processed_batch_smoke()
     test_l3_input_dim_and_flatten()
+    test_l3_feature_subset_dim()
+    test_l3_cache_layout_guard()
+    test_sync_arch_l3_config()
     test_patch_conv_mlp_l3_forward()
     test_l4_mask_augment()
+    test_l4_augment_bundle_wiring()
+    test_l4_processed_batch_smoke()
     test_l3_dataloader_batch()
     test_train_monitor_once()
     test_overlap_pairs()

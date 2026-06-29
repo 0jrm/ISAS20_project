@@ -100,10 +100,69 @@ def build_l3_input_rows(
 
 
 def l3_channel_metadata(l3_cfg: Mapping[str, Any]) -> dict[str, Any]:
+    vars_ = l3_variable_names(l3_cfg)
+    feats = l3_feature_names(l3_cfg)
+    flat = [f"{var}/{feat}" for var in vars_ for feat in feats]
     return {
         "patch_order": PATCH_ORDER_DOC,
-        "variables": l3_variable_names(l3_cfg),
-        "features": l3_feature_names(l3_cfg),
+        "variables": vars_,
+        "features": feats,
+        "flat_channel_names": flat,
         "patch_shape": list(l3_sat_patch_shape(l3_cfg)),
         "age_scale_hours": AGE_SCALE_HOURS,
     }
+
+
+def verify_l3_cache_layout(cache: Mapping[str, Any], l3_cfg: Mapping[str, Any]) -> None:
+    """Fail fast when cache channel layout disagrees with config (train/eval honesty)."""
+    if not cache.get("l3_enabled"):
+        return
+    meta = cache.get("l3_channel_metadata") or {}
+    expected = l3_channel_metadata(l3_cfg)
+    for key in ("variables", "features", "flat_channel_names", "patch_shape"):
+        if meta.get(key) != expected.get(key):
+            raise ValueError(
+                f"L3 cache layout mismatch on {key!r}: cache={meta.get(key)!r} config={expected.get(key)!r}"
+            )
+    input_params = cache.get("input_params") or {}
+    expected_dim = compute_l3_input_dim(input_params, l3_cfg)
+    actual_dim = int(np.asarray(cache["inputs"]).shape[1])
+    if actual_dim != expected_dim:
+        raise ValueError(f"L3 cache input dim {actual_dim} != expected {expected_dim}")
+
+
+def sync_arch_with_io(config: Mapping[str, Any]) -> int:
+    """Align ``arch.args`` with io path (L3 mask-native or legacy L4/point). Returns expected input dim."""
+    io_cfg = config.get("io", {}) or {}
+    l3_cfg = io_cfg.get("l3") or {}
+    input_params = config.get("input_params", {}) or {}
+    arch = config["arch"]
+    arch_args = arch.setdefault("args", {})
+
+    if l3_cfg.get("enabled"):
+        expected_dim = compute_l3_input_dim(input_params, l3_cfg)
+        arch_args["n_enc"] = count_encoding_dims(input_params)
+        c, t, h, w = l3_sat_patch_shape(l3_cfg)
+        arch_args["n_sat"] = l3_n_channels(l3_cfg)
+        arch_args["patch_shape"] = [c, t, h, w]
+    elif arch.get("type") == "PatchConvMLP":
+        from preproc.preproc_isas_sat import compute_input_dim, count_sat_vars, sat_patch_shape
+
+        spatial_pad = int(io_cfg.get("spatial_pad", 0))
+        temporal_pad = int(io_cfg.get("temporal_pad", 0))
+        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
+        arch_args["n_enc"] = count_encoding_dims(input_params)
+        n_sat = count_sat_vars(input_params)
+        patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
+        arch_args["n_sat"] = n_sat
+        arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
+    else:
+        from preproc.preproc_isas_sat import compute_input_dim
+
+        spatial_pad = int(io_cfg.get("spatial_pad", 0))
+        temporal_pad = int(io_cfg.get("temporal_pad", 0))
+        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
+
+    arch_args["input_dim"] = expected_dim
+    arch_args["output_dim"] = sum(config["outputs"].values())
+    return expected_dim

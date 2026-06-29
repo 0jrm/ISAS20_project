@@ -99,21 +99,28 @@ Explicit date ranges:
 
 ## L4 augmentation
 
-Not yet implemented. When added, it must:
+Enabled via `io.l4` in L3 configs (`config_argo_l3_l4_smoke.json`). Applies real L3 mask geometry to L4 DUACS SSH fields with source-flag metadata. See [`HANDOFF.md`](HANDOFF.md).
 
-- Label synthetic vs real observations with source-flag channels.
-- Never silently replace L3 missingness with L4 fills.
-- Record augmentation settings in result metadata.
+## L3 model inputs (Phase 5)
+
+Mask-native bundles flatten to PatchConvMLP with shape `(C,T,H,W) = (15, 5, 25, 25)` for the default three variables × five features. Config fields:
+
+- `io.l3.variables` — which surface fields (ssh, wind_u, wind_v)
+- `io.l3.features` — which channels per variable (`value`, `mask`, `age`, `uncertainty`, `count`)
+
+`sync_arch_with_io()` aligns `arch.args` with the L3 layout; `verify_l3_cache_layout()` catches channel-order mismatches at train/eval time.
 
 ## Known limitations
 
-- ARGO cache inputs are still L4 gridded (v2 COAPS); L3 pipeline is scaffold-only.
+- SST (VIIRS L3U) and SMAP SSS rasterization **deferred**.
+- L4 augment: SSH only; wind/SST L4 deferred.
+- Value-channel train-split z-score normalization **deferred** (raw values today).
 - ISAS configs retain random split until ISAS temporal census is run.
-- Readiness diagnostics, physics-loss hook, and ensemble aggregation are pending (Phases 7–9).
+- Physics-loss hook and ensemble aggregation are pending (Phases 8–9).
 
 ## Next steps
 
-1. Wire L3 mask-native channels into PatchConvMLP (Phase 5).
-2. Extend model input channels for value/mask/age/uncertainty/count bundles.
-3. Stratified baseline evaluation reports.
-4. Static-stability readiness diagnostic on saved predictions.
+1. Download real L3/L4/ERA5 for 2020; rebuild caches; verify non-zero coverage.
+2. Stratified baseline comparison: L4 point vs L3 vs L4-mask-augment.
+3. Steric SSH (RC-2) and uncertainty calibration (RC-4) in readiness diagnostics.
+4. Physics-loss hook (Phase 8) and ensemble aggregation (Phase 9).

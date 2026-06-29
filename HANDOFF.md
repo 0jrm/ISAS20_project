@@ -5,7 +5,8 @@
 **Updated:** 2026-06-18  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)
 
-**Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).
+**Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).  
+**L3 download homework (user):** [`L3-DOWNLOAD-HOMEWORK.md`](L3-DOWNLOAD-HOMEWORK.md)
 
 **Conda env:** `nespreso` (has `netCDF4`, `copernicusmarine`; use for selfcheck/train).
 
@@ -25,8 +26,8 @@ GoM dissertation NeSPReSO: **ARGO/CORA subsurface targets**, **mask-native L3 su
 | 1 Chronological split | 3–4 | **Done** | `base/split_utils.py`; `split_mode: chronological` in ARGO configs |
 | 2 ARGO-first path | 5–6 | **Done** | `export_v2_cache.py`, `config_argo*.json`, chronological eval path |
 | 3 L3 pipeline | 7–9 | **Done** | `download_l3_products.py`, `l3_rasterize.py`, `export_l3_cache.py`, `build_l3_samples.py` |
-| 4 L4 augmentation | 10 | **Scaffolded** | `preproc/l4_augment.py`, `io.l4` in config (disabled) |
-| 5 L3 model channels | 11 | **Done** | `l3_input.py`, `train.py` L3 cache branch, PatchConvMLP 15-ch patches |
+| 4 L4 augmentation | 10 | **Done** | `preproc/l4_augment.py`, `preproc/l4_rasterize.py`, `io.l4` wired in `export_l3_cache.py` |
+| 5 L3 model channels | 11 | **Done** | `l3_input.sync_arch_with_io`, `verify_l3_cache_layout`, checkpoint L3 metadata |
 | 6 Stratified eval | 12 | **Done** | `eval_stratified.py` — RMSE/bias by L3 coverage, track distance, census year subsets |
 | 7 Readiness diagnostics | 13 | **Done** | `diagnostics/readiness.py` — `gsw_torch` σ₀ static-stability on saved predictions |
 | 8+ Physics / ensemble | 14–15 | **Pending** | — |
@@ -97,6 +98,10 @@ srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
   -c config_argo_l3_smoke.json --max-samples 20 --export-train-cache --force
 # Omit --max-samples for full 4145-profile cache (empty bundles if no raw data)
 
+# L4 mask-augment processed batch (uses real L3 mask geometry on L4 SSH when raw present)
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
+  -c config_argo_l3_l4_smoke.json --max-samples 20 --export-train-cache --force
+
 # L3 mask-native smoke train (2 epochs)
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l3_smoke.json
 
@@ -124,8 +129,10 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 diagnostics/readiness.py 
 | `preproc/l3_rasterize.py` | Sparse obs → mask-native patch tensors |
 | `preproc/l3_input.py` | Flatten bundles → PatchConvMLP sat block |
 | `preproc/export_l3_cache.py` | Processed batch + `build_argo_l3_train_cache()` |
-| `preproc/l4_augment.py` | L4 mask/noise augment scaffold (Phase 4) |
+| `preproc/l4_augment.py` | L4 mask/noise augment + source flags (Phase 4) |
+| `preproc/l4_rasterize.py` | DUACS L4 SSH → patch grid sampling |
 | `config_argo_l3_smoke.json` | L3 patch smoke (15-ch, chronological) |
+| `config_argo_l3_l4_smoke.json` | L3 + L4 mask-augment smoke (`io.l4.enabled`) |
 | `config_argo_chrono_dates.json` | Explicit date split alternative |
 | `eval_stratified.py` | Stratified RMSE/bias by L3 coverage, track distance, census subsets |
 | `diagnostics/readiness.py` | `gsw_torch` σ₀ static-stability readiness on predicted profiles |
@@ -145,7 +152,8 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 diagnostics/readiness.py 
 ## Known limitations
 
 - SST (VIIRS L3U) and SMAP SSS rasterization **deferred**.
-- L4 augmentation scaffold only — not wired into training loop.
+- L4 augment: SSH only (`mask_augment` mode); wind/SST L4 and `auxiliary` merge mode **deferred**.
+- Spatially correlated L4 noise **deferred** (independent pixel noise today).
 - Full-dataset L3 cache build without raw files is correct but **zero coverage** everywhere.
 - `config_argo_l3_smoke.json` sets `input_params.sss/sst/ssh/sat: false` — encodings only; sat block comes from L3 tensors.
 - ISAS configs still use random split (legacy parity).
@@ -167,10 +175,10 @@ cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project-phase3-co
 
 ## Next coding tasks (priority order)
 
-1. **Phase 4 full path** — apply real L3 mask libraries to L4 fields; wire `io.l4.enabled` into sample builder with source flags.
-2. Download real SSH + ERA5 for 2020 window; rebuild L3 cache with `--force`; verify non-zero mask cells.
-3. SST L3U / SMAP (post-MVP).
-4. Steric SSH consistency (RC-2) and uncertainty calibration hook (RC-4) in `diagnostics/readiness.py`.
+1. Download real L3 SSH + L4 DUACS + ERA5 for 2020 window; rebuild caches with `--force`; verify non-zero mask cells.
+2. SST L3U / SMAP (post-MVP).
+3. Steric SSH consistency (RC-2) and uncertainty calibration hook (RC-4) in `diagnostics/readiness.py`.
+4. Physics-loss hook (Phase 8) and ensemble aggregation (Phase 9).
 
 ---
 
