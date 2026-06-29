@@ -164,11 +164,20 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 diagnostics/readiness.py 
 
 | Location | Branch | Notes |
 |----------|--------|-------|
-| `ISAS20_project-phase3-commit/` | `phase3-l3-rasterization` | **active** — dissertation + merged ISAS appendix code |
-| `ISAS20_project/` | `nespreso-v2-port` | legacy ISAS-only checkout (optional) |
+| `ISAS20_project/` | `master` | **active** — dissertation + merged ISAS appendix code |
+| `ISAS20_project-phase3-commit/` | `phase3-l3-rasterization` | **delete** — redundant worktree; remove after confirming below |
+
+`compare_v2_vs_template.ipynb` was executed successfully on **2026-06-29**; outputs saved to `NeSPReSO2_onTemplate/notebooks/_compare_v2_vs_template.ipynb`.
 
 ```bash
-cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project-phase3-commit
+cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project
+```
+
+Remove the old worktree when ready:
+
+```bash
+cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project
+git worktree remove ../ISAS20_project-phase3-commit
 ```
 
 ---
