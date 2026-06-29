@@ -19,6 +19,7 @@ def _load_json(name: str) -> dict[str, Any]:
 
 
 def _notebook_trainer_overrides(save_subdir: str) -> dict[str, Any]:
+    # ponytail: epochs=2 is a smoke default; compare notebook trains to TRAIN_EPOCHS via resolve_or_train
     return {
         "epochs": 2,
         "save_dir": f"saved/notebook_runs/{save_subdir}/",

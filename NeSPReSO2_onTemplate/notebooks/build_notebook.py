@@ -73,13 +73,13 @@ V2_DATASET_PICKLE = Path(
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EVAL_SPLIT = "test"
-TRAIN_EPOCHS_IF_MISSING = 100  # auto-train when no checkpoint discovered
-FORCE_RETRAIN = False          # set True to ignore existing checkpoints
+TRAIN_EPOCHS = 100  # target epochs for surface models (train or resume if undertrained)
+FORCE_RETRAIN = False  # set True to ignore existing checkpoints and train fresh
 AE_EPOCHS = 50
 N_REPEAT = 5
 
 from nb_configs import AE_DEFAULTS, SURFACE_CONFIG_KEYS, make_config_parser
-from nb_checkpoints import discover_checkpoint, resolve_or_train
+from nb_checkpoints import checkpoint_epoch, resolve_or_train
 from nb_metrics import (
     COMMON_DEPTH_M,
     DEPTH_RANGE_M,
@@ -168,31 +168,26 @@ for key, cfg in CONFIGS.items():
 
 Search order: known GoM paths → `saved/models/<exper>/…/model_best.pth` → notebook save dir.
 
-If nothing is found (or `FORCE_RETRAIN=True`), trains up to **`TRAIN_EPOCHS_IF_MISSING`** (100) with `monitor=min val_loss`."""
+Discovers the newest checkpoint; reuses it when it already reached **`TRAIN_EPOCHS`** (100). Otherwise resumes or trains to that target with `monitor=min val_loss` (or when `FORCE_RETRAIN=True`, trains fresh)."""
     ),
     code(
         """checkpoints = {}
 checkpoint_source = {}
 
 for key, cfg in CONFIGS.items():
-    preview = discover_checkpoint(key, cfg, template_root=TEMPLATE_ROOT)
-    if preview and not FORCE_RETRAIN:
-        checkpoints[key] = preview
-        checkpoint_source[key] = "found"
-        print(f"{key}: using {preview}")
-        continue
-
     ckpt, src = resolve_or_train(
         key,
         cfg,
         train_fn=train_main,
-        max_epochs=TRAIN_EPOCHS_IF_MISSING,
+        max_epochs=TRAIN_EPOCHS,
         template_root=TEMPLATE_ROOT,
         force_train=FORCE_RETRAIN,
     )
     checkpoints[key] = ckpt
     checkpoint_source[key] = src
-    print(f"{key}: {src} -> {ckpt}")"""
+    done = checkpoint_epoch(ckpt)
+    epoch_note = f" (epoch {done})" if done is not None else ""
+    print(f"{key}: {src}{epoch_note} -> {ckpt}")"""
     ),
     md(
         """## Section 6 — Inference & scalar metrics

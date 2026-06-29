@@ -76,6 +76,18 @@ def _checkpoint_from_config(cfg: ConfigParser) -> Path | None:
     return epoch_ckpts[-1] if epoch_ckpts else None
 
 
+def checkpoint_epoch(path: Path | str) -> int | None:
+    """Return completed epoch from a ``.pth`` checkpoint, or None if unreadable."""
+    import torch
+
+    try:
+        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+        epoch = ckpt.get("epoch")
+        return int(epoch) if epoch is not None else None
+    except Exception:
+        return None
+
+
 def apply_training_epochs(cfg: ConfigParser, epochs: int, *, monitor: bool = True) -> None:
     """Set trainer epochs (and monitoring) before ``train.main``."""
     t = cfg.config["trainer"]
@@ -86,6 +98,20 @@ def apply_training_epochs(cfg: ConfigParser, epochs: int, *, monitor: bool = Tru
     else:
         t["monitor"] = "off"
         t["early_stop"] = 0
+
+
+def _checkpoint_after_train(
+    key: str,
+    cfg: ConfigParser,
+    *,
+    template_root: Path | None = None,
+) -> Path:
+    ckpt = discover_checkpoint(key, cfg, template_root=template_root)
+    if ckpt is None:
+        ckpt = _checkpoint_from_config(cfg)
+    if ckpt is None or not ckpt.is_file():
+        raise FileNotFoundError(f"{key}: training finished but no checkpoint under {cfg.save_dir}")
+    return ckpt
 
 
 def resolve_or_train(
@@ -99,22 +125,30 @@ def resolve_or_train(
     force_train: bool = False,
 ) -> tuple[Path, str]:
     """
-    Return (checkpoint_path, source) where source is ``found`` or ``trained``.
+    Return (checkpoint_path, source) where source is ``found``, ``resumed``, or ``trained``.
 
-    Trains up to ``max_epochs`` when no checkpoint exists or ``force_train`` is True.
+    Uses an existing checkpoint when it already reached ``max_epochs``. Otherwise trains
+  (resuming from a partial checkpoint when possible) up to ``max_epochs``.
     """
-    if not force_train:
-        found = discover_checkpoint(key, cfg, template_root=template_root, explicit=explicit)
-        if found is not None:
+    target_epochs = int(max_epochs)
+    found = None if force_train else discover_checkpoint(
+        key, cfg, template_root=template_root, explicit=explicit
+    )
+
+    if found is not None and not force_train:
+        done = checkpoint_epoch(found)
+        if done is not None and done >= target_epochs:
             return found, "found"
+        if done is None:
+            return found, "found"
+        cfg.resume = str(found)
+        apply_training_epochs(cfg, target_epochs, monitor=True)
+        print(f"{key}: resuming from epoch {done}, training to {target_epochs} …")
+        train_fn(cfg)
+        return _checkpoint_after_train(key, cfg, template_root=template_root), "resumed"
 
-    apply_training_epochs(cfg, max_epochs, monitor=True)
-    print(f"{key}: training up to {max_epochs} epochs …")
+    cfg.resume = None
+    apply_training_epochs(cfg, target_epochs, monitor=True)
+    print(f"{key}: training up to {target_epochs} epochs …")
     train_fn(cfg)
-
-    ckpt = discover_checkpoint(key, cfg, template_root=template_root)
-    if ckpt is None:
-        ckpt = _checkpoint_from_config(cfg)
-    if ckpt is None or not ckpt.is_file():
-        raise FileNotFoundError(f"{key}: training finished but no checkpoint under {cfg.save_dir}")
-    return ckpt, "trained"
+    return _checkpoint_after_train(key, cfg, template_root=template_root), "trained"
