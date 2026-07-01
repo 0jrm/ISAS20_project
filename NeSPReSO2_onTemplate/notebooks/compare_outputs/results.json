@@ -5,106 +5,241 @@
     0.0,
     1800.0
   ],
-  "statistics_contract": "| Statistic | Units | Definition |\n|---|---|---|\n| `raw_profile_rmse_common` | \u00b0C or PSU | sqrt(nanmean((pred\u2212true)\u00b2)) over all samples in the split and all depth levels on the common grid 0.0\u20131800.0 m (step 10.0 m). Truth = cache['profiles'] (raw, not PCA-reconstructed). Pred = inverse_PCA(model PCs) interpolated to the common grid. |\n| `raw_profile_rmse_native` | \u00b0C or PSU | Same as raw_profile_rmse_common but on each cache's native PRES grid (no interpolation). Matches eval_run.py raw_profile_rmse when the native grid spans 0\u20131800 m. |\n| `depth_rmse` | \u00b0C or PSU | Per-depth sqrt(nanmean over samples of (pred\u2212true)\u00b2) on the common grid within 0.0\u20131800.0 m. |\n| `depth_bias` | \u00b0C or PSU | Per-depth nanmean(pred\u2212true) on the common grid within 0.0\u20131800.0 m. |\n| `bin_map_rmse` | \u00b0C or PSU | Spatial bin mean of per-profile scalar RMSE on the common grid (1\u00b0 bins, GoM validation/test subset). |\n| `profile_recon_rmse` | \u00b0C or PSU | Profile autoencoder / PCA reconstruction RMSE on test-split profiles: sqrt(nanmean((recon\u2212true)\u00b2)) on native depths, NaN-masked. |\n| `pca_target_rmse` | PC units | RMSE in PCA component space vs target PCs (diagnostic only; not physical). |\n| `training_loss` | unitless | Mean CombinedPCALoss on the evaluated split (not comparable across tags). |",
-  "representation": [
+  "statistics_contract": "| Statistic | Units | Definition |\n|---|---|---|\n| `raw_profile_rmse_common` | \u00b0C or PSU | sqrt(nanmean((pred\u2212true)\u00b2)) over all samples in the split and all depth levels on the common grid 0.0\u20131800.0 m (step 10.0 m). Truth = cache['profiles'] (raw, not PCA-reconstructed). Pred = inverse_PCA(model PCs) or frozen-AE decode (decoder mode) interpolated to the common grid. |\n| `raw_profile_rmse_native` | \u00b0C or PSU | Same as raw_profile_rmse_common but on each cache's native PRES grid (no interpolation). Matches eval_run.py raw_profile_rmse when the native grid spans 0\u20131800 m. |\n| `depth_rmse` | \u00b0C or PSU | Per-depth sqrt(nanmean over samples of (pred\u2212true)\u00b2) on the common grid within 0.0\u20131800.0 m. |\n| `depth_bias` | \u00b0C or PSU | Per-depth nanmean(pred\u2212true) on the common grid within 0.0\u20131800.0 m. |\n| `bin_map_rmse` | \u00b0C or PSU | Per 1\u00b0 GoM bin: sqrt(nanmean((pred\u2212true)\u00b2)) over profiles and common-grid depths in that bin (fixed -99..-81\u00b0W, 18..30\u00b0N extent). |\n| `profile_recon_rmse` | \u00b0C or PSU | Profile autoencoder / PCA reconstruction RMSE on test-split profiles: sqrt(nanmean((recon\u2212true)\u00b2)) on native depths, NaN-masked. |\n| `pca_target_rmse` | PC units | RMSE in PCA component space vs target PCs (diagnostic only; not physical). |\n| `training_loss` | unitless | Mean CombinedPCALoss on the evaluated split (not comparable across tags). |",
+  "config_matrix": [
     {
-      "variable": "temperature",
-      "encoding_dim": 16,
-      "split": "test",
-      "n_profiles": 758,
-      "pca_recon_rmse": 0.29287428786559455,
-      "ae_recon_rmse": 2.895831346511841,
-      "ae_over_pca": 9.887625737363438,
-      "config_key": "isas_patch"
+      "key": "isas_pt_pca16",
+      "label": "ISAS-pt-PCA16",
+      "tag": "isas20",
+      "arch": "PredictionModel",
+      "encoding": "pca",
+      "latent_dim": 32,
+      "outputs": {
+        "temperature": 16,
+        "salinity": 16
+      },
+      "epochs": 2000,
+      "group": "isas",
+      "is_decoder": false
     },
     {
-      "variable": "salinity",
-      "encoding_dim": 16,
-      "split": "test",
-      "n_profiles": 758,
-      "pca_recon_rmse": 1.1000881854007551,
-      "ae_recon_rmse": 6.389281272888184,
-      "ae_over_pca": 5.807971904143856,
-      "config_key": "isas_patch"
+      "key": "isas_pch_pca16",
+      "label": "ISAS-pch-PCA16",
+      "tag": "isas20",
+      "arch": "PatchConvMLP",
+      "encoding": "pca",
+      "latent_dim": 32,
+      "outputs": {
+        "temperature": 16,
+        "salinity": 16
+      },
+      "epochs": 2000,
+      "group": "isas",
+      "is_decoder": false
     },
     {
-      "variable": "temperature",
-      "encoding_dim": 16,
-      "split": "test",
-      "n_profiles": 623,
-      "pca_recon_rmse": 0.06015517702676072,
-      "ae_recon_rmse": 1.3639754056930542,
-      "ae_over_pca": 22.674281302277176,
-      "config_key": "argo_point"
+      "key": "isas_pt_ae128",
+      "label": "ISAS-pt-AE128",
+      "tag": "isas20",
+      "arch": "PredictionModel",
+      "encoding": "ae",
+      "latent_dim": 256,
+      "outputs": {
+        "temperature": 128,
+        "salinity": 128
+      },
+      "epochs": 2000,
+      "group": "isas",
+      "is_decoder": true
     },
     {
-      "variable": "salinity",
-      "encoding_dim": 16,
-      "split": "test",
-      "n_profiles": 623,
-      "pca_recon_rmse": 0.012711571660907243,
-      "ae_recon_rmse": 2.781388282775879,
-      "ae_over_pca": 218.80758390637646,
-      "config_key": "argo_point"
+      "key": "isas_pch_ae128",
+      "label": "ISAS-pch-AE128",
+      "tag": "isas20",
+      "arch": "PatchConvMLP",
+      "encoding": "ae",
+      "latent_dim": 256,
+      "outputs": {
+        "temperature": 128,
+        "salinity": 128
+      },
+      "epochs": 2000,
+      "group": "isas",
+      "is_decoder": true
+    },
+    {
+      "key": "argo_pca15",
+      "label": "ARGO-PCA15",
+      "tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "encoding": "pca",
+      "latent_dim": 30,
+      "outputs": {
+        "temperature": 15,
+        "salinity": 15
+      },
+      "epochs": 2000,
+      "group": "argo",
+      "is_decoder": false
+    },
+    {
+      "key": "argo_pca16",
+      "label": "ARGO-PCA16",
+      "tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "encoding": "pca",
+      "latent_dim": 32,
+      "outputs": {
+        "temperature": 16,
+        "salinity": 16
+      },
+      "epochs": 2000,
+      "group": "argo",
+      "is_decoder": false
     }
   ],
   "surface_models": [
     {
-      "config_key": "isas_point",
+      "key": "isas_pt_pca16",
+      "label": "ISAS-pt-PCA16",
+      "group": "isas",
+      "encoding": "pca",
       "dataset_tag": "isas20",
       "arch": "PredictionModel",
-      "cache": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_0a1578760303.pkl",
+      "cache": "../data/cache/train_ready_6d7b6102f7d1.pkl",
       "n_samples": 5044,
       "inference": {
-        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ISAS_GoM/baseline15pc/model_best.pth",
+        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/compare_runs/isas_pt_pca16/models/compare_isas_pt_pca16/0629_124620/model_best.pth",
         "n_eval": 758,
         "raw_profile_rmse_common": {
-          "temperature": 1.0186127039029258,
-          "salinity": 6.230438911727767
+          "temperature": 1.0081912179919112,
+          "salinity": 6.117207992306453
         },
         "raw_profile_rmse_native": {
-          "temperature": 1.0023177910785925,
-          "salinity": 5.525145902436806
-        }
+          "temperature": 0.994898408231969,
+          "salinity": 5.426241247200073
+        },
+        "avg_common_rmse": 3.5626996051491817
       }
     },
     {
-      "config_key": "isas_patch",
+      "key": "isas_pch_pca16",
+      "label": "ISAS-pch-PCA16",
+      "group": "isas",
+      "encoding": "pca",
       "dataset_tag": "isas20",
       "arch": "PatchConvMLP",
-      "cache": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_ed67559b5449.pkl",
+      "cache": "../data/cache/train_ready_e6f936bdc80a.pkl",
       "n_samples": 5044,
       "inference": {
-        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ISAS_GoM_patch/patch16_scales/model_best.pth",
+        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/compare_runs/isas_pch_pca16/models/compare_isas_pch_pca16/0629_124620/model_best.pth",
         "n_eval": 758,
         "raw_profile_rmse_common": {
-          "temperature": 1.026912038281879,
-          "salinity": 6.059695319745914
+          "temperature": 1.0483634435626918,
+          "salinity": 6.444644019243442
         },
         "raw_profile_rmse_native": {
-          "temperature": 1.0162190357581116,
-          "salinity": 5.317965835429865
-        }
+          "temperature": 1.0349427829834124,
+          "salinity": 5.6559230536466885
+        },
+        "avg_common_rmse": 3.7465037314030667
       }
     },
     {
-      "config_key": "argo_point",
-      "dataset_tag": "argo_v2",
-      "arch": "PatchConvMLP",
-      "cache": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_ff2393a1ea21.pkl",
-      "n_samples": 4145,
+      "key": "isas_pt_ae128",
+      "label": "ISAS-pt-AE128",
+      "group": "isas",
+      "encoding": "ae",
+      "dataset_tag": "isas20",
+      "arch": "PredictionModel",
+      "cache": "../data/cache/train_ready_5756d046151e.pkl",
+      "n_samples": 5044,
       "inference": {
-        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM/argo16_scales/model_best.pth",
-        "n_eval": 623,
+        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/compare_runs/isas_pt_ae128/models/compare_isas_pt_ae128/0629_125917/model_best.pth",
+        "n_eval": 758,
         "raw_profile_rmse_common": {
-          "temperature": 0.4156825716052817,
-          "salinity": 0.0762696908612031
+          "temperature": 1.5456403648227794,
+          "salinity": 6.3895120659235545
         },
         "raw_profile_rmse_native": {
-          "temperature": 0.41582212090560433,
-          "salinity": 0.07217925501467502
-        }
+          "temperature": 1.547919536819656,
+          "salinity": 6.350191056402567
+        },
+        "avg_common_rmse": 3.967576215373167
+      }
+    },
+    {
+      "key": "isas_pch_ae128",
+      "label": "ISAS-pch-AE128",
+      "group": "isas",
+      "encoding": "ae",
+      "dataset_tag": "isas20",
+      "arch": "PatchConvMLP",
+      "cache": "../data/cache/train_ready_919497840510.pkl",
+      "n_samples": 5044,
+      "inference": {
+        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/compare_runs/isas_pch_ae128/models/compare_isas_pch_ae128/0629_124633/model_best.pth",
+        "n_eval": 758,
+        "raw_profile_rmse_common": {
+          "temperature": 1.4950643757408064,
+          "salinity": 7.19143689554726
+        },
+        "raw_profile_rmse_native": {
+          "temperature": 1.4831347427481767,
+          "salinity": 7.257200508881345
+        },
+        "avg_common_rmse": 4.343250635644033
+      }
+    },
+    {
+      "key": "argo_pca15",
+      "label": "ARGO-PCA15",
+      "group": "argo",
+      "encoding": "pca",
+      "dataset_tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "cache": "../data/cache/train_ready_73acbc0cc659.pkl",
+      "n_samples": 4145,
+      "inference": {
+        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/compare_runs/argo_pca15/models/compare_argo_pca15/0629_125307/model_best.pth",
+        "n_eval": 623,
+        "raw_profile_rmse_common": {
+          "temperature": 0.4134816709689011,
+          "salinity": 0.07590363373095474
+        },
+        "raw_profile_rmse_native": {
+          "temperature": 0.41365982435109616,
+          "salinity": 0.0717927250255486
+        },
+        "avg_common_rmse": 0.24469265234992793
+      }
+    },
+    {
+      "key": "argo_pca16",
+      "label": "ARGO-PCA16",
+      "group": "argo",
+      "encoding": "pca",
+      "dataset_tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "cache": "../data/cache/train_ready_651f62a4b596.pkl",
+      "n_samples": 4145,
+      "inference": {
+        "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/compare_runs/argo_pca16/models/compare_argo_pca16/0629_125321/model_best.pth",
+        "n_eval": 623,
+        "raw_profile_rmse_common": {
+          "temperature": 0.4173605482217926,
+          "salinity": 0.07540319065126531
+        },
+        "raw_profile_rmse_native": {
+          "temperature": 0.41742383776399894,
+          "salinity": 0.07149775354288712
+        },
+        "avg_common_rmse": 0.24638186943652896
       }
     }
-  ]
+  ],
+  "depth_overlay_png": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_overlay.png",
+  "bin_maps_png": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/notebooks/compare_outputs/bin_maps_best.png",
+  "best_isas": "ISAS-pt-PCA16",
+  "best_argo": "ARGO-PCA15"
 }

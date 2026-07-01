@@ -11,12 +11,13 @@ import model.metric as module_metric
 import model.model as module_arch
 from model.loss import make_loss, true_profiles_numpy
 from parse_config import ConfigParser, validate_config
-from playground import prepare_device
-from playground.batch_size import resolve_batch_size
-from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model, maybe_compile_module
+from base.util import prepare_device
+from base.batch_size import resolve_batch_size
+from base.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model, maybe_compile_module
 from preproc.preproc_isas_sat import (
     build_train_cache,
     count_encoding_dims,
+    count_scalar_dims,
 )
 from trainer import Trainer
 
@@ -44,6 +45,10 @@ def ensure_cache(config):
         from preproc.export_l3_cache import build_argo_l3_train_cache
 
         cache_path = build_argo_l3_train_cache(config.config)
+    elif io_cfg.get("dataset_tag", "isas20") == "argo_l4":
+        from preproc.export_argo_l4_cache import build_argo_l4_cache
+
+        cache_path = build_argo_l4_cache(config.config)
     elif io_cfg.get("dataset_tag", "isas20") == "argo_v2":
         from preproc.export_v2_cache import build_argo_cache
 
@@ -147,7 +152,7 @@ def surface_residual_layout_from_cache(cache: dict) -> dict | None:
         "spatial_pad": int(cache.get("spatial_pad", 0)),
         "temporal_pad": int(cache.get("temporal_pad", 0)),
         "input_params": cache["input_params"],
-        "n_enc": count_encoding_dims(cache["input_params"]),
+        "n_enc": count_scalar_dims(cache["input_params"]),
     }
 
 
@@ -204,6 +209,8 @@ def main(config):
         ae_targets=ae_targets,
         ae_weights=ae_weights,
         surface_residual_layout=surface_residual_layout_from_cache(cache),
+        bottom_depth=cache.get("bottom_depth"),
+        pres_levels=cache.get("PRES"),
     )
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)
@@ -233,6 +240,7 @@ def main(config):
     if data_loader.l3_enabled:
         checkpoint_extra["l3_enabled"] = True
         checkpoint_extra["l3_channel_metadata"] = data_loader.l3_channel_metadata
+    if data_loader.sat_patch_shape:
         checkpoint_extra["sat_patch_shape"] = data_loader.sat_patch_shape
 
     trainer = Trainer(

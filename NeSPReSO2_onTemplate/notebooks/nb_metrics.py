@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
@@ -16,11 +17,15 @@ import torch
 
 import data_loader.data_loaders as module_data
 import model.model as module_arch
-from model.loss import sklearn_inverse_transform_pcs
+from model.loss import (
+    decode_latent_profiles,
+    load_decoders_from_dir,
+    sklearn_inverse_transform_pcs,
+)
 from parse_config import ConfigParser
-from playground import prepare_device
+from base.util import prepare_device
 from preproc.overlap import depth_grid_m, interp_profiles
-from train import ensure_cache, set_seed
+from train import ensure_cache, set_seed, surface_residual_layout_from_cache
 
 # ---------------------------------------------------------------------------
 # Statistics contract (documented in notebook Section 1)
@@ -31,6 +36,9 @@ DEPTH_STEP_M = 10.0
 COMMON_DEPTH_M = depth_grid_m(DEPTH_RANGE_M[0], DEPTH_RANGE_M[1], DEPTH_STEP_M)
 SPLIT_SEED_DEFAULT = 42
 SPLIT_FRACS = (0.70, 0.15, 0.15)
+# Fixed 1° GoM grid (matches legacy v2 maps extent: -99..-81°W, 18..30°N)
+GOM_LON_BINS = np.arange(-99.5, -80.5, 1.0)
+GOM_LAT_BINS = np.arange(17.5, 30.5, 1.0)
 
 
 @dataclass(frozen=True)
@@ -47,7 +55,7 @@ STATISTICS: tuple[StatisticDef, ...] = (
         "sqrt(nanmean((pred−true)²)) over all samples in the split and all depth "
         f"levels on the common grid {DEPTH_RANGE_M[0]}–{DEPTH_RANGE_M[1]} m "
         f"(step {DEPTH_STEP_M} m). Truth = cache['profiles'] (raw, not PCA-reconstructed). "
-        "Pred = inverse_PCA(model PCs) interpolated to the common grid.",
+        "Pred = inverse_PCA(model PCs) or frozen-AE decode (decoder mode) interpolated to the common grid.",
     ),
     StatisticDef(
         "raw_profile_rmse_native",
@@ -71,8 +79,8 @@ STATISTICS: tuple[StatisticDef, ...] = (
     StatisticDef(
         "bin_map_rmse",
         "°C or PSU",
-        "Spatial bin mean of per-profile scalar RMSE on the common grid (1° bins, "
-        "GoM validation/test subset).",
+        "Per 1° GoM bin: sqrt(nanmean((pred−true)²)) over profiles and common-grid "
+        "depths in that bin (fixed -99..-81°W, 18..30°N extent).",
     ),
     StatisticDef(
         "profile_recon_rmse",
@@ -139,9 +147,29 @@ def common_depth_mask(z: np.ndarray | None = None) -> np.ndarray:
     return (z >= DEPTH_RANGE_M[0]) & (z <= DEPTH_RANGE_M[1])
 
 
-def scalar_rmse(pred: np.ndarray, true: np.ndarray) -> float:
+def scalar_rmse(pred: np.ndarray, true: np.ndarray, depth_mask: np.ndarray | None = None) -> float:
     diff = pred - true
+    if depth_mask is not None:
+        if depth_mask.shape != diff.shape:
+            raise ValueError(f"depth_mask shape {depth_mask.shape} != diff {diff.shape}")
+        sel = diff[depth_mask]
+        if sel.size == 0:
+            return float("nan")
+        return float(np.sqrt(np.nanmean(sel**2)))
     return float(np.sqrt(np.nanmean(diff**2)))
+
+
+def bathy_profile_mask(
+    z: np.ndarray,
+    bottom_depth: np.ndarray,
+    sample_indices: np.ndarray | None = None,
+) -> np.ndarray:
+    """``(n_depth, n_samples)`` mask: levels with ``z <= bottom_depth``."""
+    z = np.asarray(z, dtype=np.float64)
+    bd = np.asarray(bottom_depth, dtype=np.float64)
+    if sample_indices is not None:
+        bd = bd[np.asarray(sample_indices, dtype=int)]
+    return z[:, np.newaxis] <= bd[np.newaxis, :]
 
 
 def depth_rmse_bias(pred: np.ndarray, true: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -156,10 +184,17 @@ def raw_profile_rmse_native(
     pred_profiles: Mapping[str, np.ndarray],
     true_profiles: Mapping[str, np.ndarray],
     outputs: OrderedDict,
+    *,
+    z: np.ndarray | None = None,
+    bottom_depth: np.ndarray | None = None,
+    sample_indices: np.ndarray | None = None,
 ) -> dict[str, float]:
+    depth_mask = None
+    if bottom_depth is not None and z is not None:
+        depth_mask = bathy_profile_mask(z, bottom_depth, sample_indices)
     out = {}
     for name in outputs:
-        out[name] = scalar_rmse(pred_profiles[name], true_profiles[name])
+        out[name] = scalar_rmse(pred_profiles[name], true_profiles[name], depth_mask)
     return out
 
 
@@ -168,14 +203,23 @@ def raw_profile_rmse_common(
     true_profiles: Mapping[str, np.ndarray],
     z_src: np.ndarray,
     outputs: OrderedDict,
+    *,
+    bottom_depth: np.ndarray | None = None,
+    sample_indices: np.ndarray | None = None,
 ) -> dict[str, float]:
     mask = common_depth_mask()
     z_common = COMMON_DEPTH_M[mask]
+    bd = None
+    if bottom_depth is not None and sample_indices is not None:
+        bd = np.asarray(bottom_depth, dtype=np.float64)[np.asarray(sample_indices, dtype=int)]
     out = {}
     for name in outputs:
         pred_c = align_profiles_to_depth(pred_profiles[name], z_src, z_common)
         true_c = align_profiles_to_depth(true_profiles[name], z_src, z_common)
-        out[name] = scalar_rmse(pred_c, true_c)
+        depth_mask = None
+        if bd is not None:
+            depth_mask = z_common[:, np.newaxis] <= bd[np.newaxis, :]
+        out[name] = scalar_rmse(pred_c, true_c, depth_mask)
     return out
 
 
@@ -192,24 +236,33 @@ def pcs_to_profiles_depth_major(
 # ---------------------------------------------------------------------------
 
 
-def split_indices(cache: Mapping[str, Any], split: str, seed: int = SPLIT_SEED_DEFAULT) -> np.ndarray:
-    import torch
-    from torch.utils.data import random_split
+def split_indices(
+    cache: Mapping[str, Any],
+    split: str,
+    seed: int = SPLIT_SEED_DEFAULT,
+    *,
+    dl_args: Mapping[str, Any] | None = None,
+) -> np.ndarray:
+    """Same split indices as ``NeSPReSODataLoader`` (random or chronological)."""
+    from base.split_utils import build_split_indices
 
-    from data_loader.data_loaders import NeSPReSODataset, _split_lengths
-
-    inputs = torch.tensor(cache["inputs"], dtype=torch.float32)
-    targets = torch.tensor(cache["targets"], dtype=torch.float32)
-    ds = NeSPReSODataset(inputs, targets)
-    n = len(ds)
-    train_frac, val_frac, test_frac = SPLIT_FRACS
-    train_len, val_len, test_len = _split_lengths(n, train_frac, val_frac, test_frac)
-    g = torch.Generator().manual_seed(int(seed))
-    train_sub, val_sub, test_sub = random_split(ds, [train_len, val_len, test_len], generator=g)
-    subsets = {"train": train_sub, "val": val_sub, "test": test_sub}
-    if split not in subsets:
+    n = cache["inputs"].shape[0]
+    args = dict(dl_args or {})
+    args.setdefault("train_frac", SPLIT_FRACS[0])
+    args.setdefault("val_frac", SPLIT_FRACS[1])
+    args.setdefault("test_frac", SPLIT_FRACS[2])
+    args.setdefault("split_mode", "random")
+    args.setdefault("split_seed", int(seed))
+    indices = build_split_indices(
+        n,
+        cache.get("JULD"),
+        args,
+        dataset_tag=cache.get("dataset_tag", "unknown"),
+        v2_src=args.get("v2_src"),
+    )
+    if split not in indices:
         raise ValueError(f"split must be train|val|test, got {split!r}")
-    return np.asarray(subsets[split].indices, dtype=int)
+    return np.asarray(indices[split], dtype=int)
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +285,9 @@ def run_inference(
     dl_args["split"] = split
     dl_args["shuffle"] = False
     dl_args["split_seed"] = config.config.get("seed", SPLIT_SEED_DEFAULT)
+    from eval_run import _resolve_eval_batch_size
+
+    _resolve_eval_batch_size(dl_args, split)
     data_loader = getattr(module_data, config["data_loader"]["type"])(**dl_args)
 
     if not data_loader.profiles:
@@ -268,23 +324,24 @@ def run_inference(
     }
 
 
-def profile_metrics_from_pcs(
-    pcs: np.ndarray,
+def _profile_metrics_from_pred(
+    pred: dict[str, np.ndarray],
     indices: np.ndarray,
     cache: Mapping[str, Any],
-    pca_models: Mapping,
     outputs: OrderedDict,
 ) -> dict[str, Any]:
+    """Shared metric path once pred profiles are (n_depth, n_samples) per variable."""
     idx = np.asarray(indices, dtype=int)
-    pred_all = pcs_to_profiles_depth_major(pcs, pca_models, outputs)
     z_native = depth_meters(cache)
-
-    # pred_all columns follow split batch order; idx are global cache indices for truth
-    pred = {name: pred_all[name] for name in outputs}
     true = {name: profiles_depth_major(cache, name)[:, idx] for name in outputs}
+    bottom = cache.get("bottom_depth")
 
-    native = raw_profile_rmse_native(pred, true, outputs)
-    common = raw_profile_rmse_common(pred, true, z_native, outputs)
+    native = raw_profile_rmse_native(
+        pred, true, outputs, z=z_native, bottom_depth=bottom, sample_indices=idx
+    )
+    common = raw_profile_rmse_common(
+        pred, true, z_native, outputs, bottom_depth=bottom, sample_indices=idx
+    )
 
     depth_stats = {}
     for name in outputs:
@@ -304,6 +361,208 @@ def profile_metrics_from_pcs(
         "true_profiles": true,
         "z_native": z_native,
     }
+
+
+def profile_metrics_from_pcs(
+    pcs: np.ndarray,
+    indices: np.ndarray,
+    cache: Mapping[str, Any],
+    pca_models: Mapping,
+    outputs: OrderedDict,
+) -> dict[str, Any]:
+    pred_all = pcs_to_profiles_depth_major(pcs, pca_models, outputs)
+    pred = {name: pred_all[name] for name in outputs}
+    return _profile_metrics_from_pred(pred, indices, cache, outputs)
+
+
+def profile_metrics_from_latents(
+    latents: np.ndarray,
+    indices: np.ndarray,
+    cache: Mapping[str, Any],
+    outputs: OrderedDict,
+    decoders: Mapping[str, torch.nn.Module],
+    *,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Decode frozen profile AEs (decoder training mode) then score in physical space."""
+    idx = np.asarray(indices, dtype=int)
+    latent_t = torch.tensor(latents, dtype=torch.float32, device=device)
+    inputs_t = torch.tensor(cache["inputs"][idx], dtype=torch.float32, device=device)
+    layout = surface_residual_layout_from_cache(cache)
+    decoded = decode_latent_profiles(
+        latent_t,
+        decoders,
+        outputs,
+        inputs=inputs_t,
+        surface_residual_layout=layout,
+    )
+    pred = {
+        name: decoded[name].detach().cpu().numpy().T  # (n_depth, n_samples)
+        for name in outputs
+    }
+    return _profile_metrics_from_pred(pred, indices, cache, outputs)
+
+
+def profile_metrics_from_inference(
+    config: ConfigParser,
+    checkpoint_path: str,
+    *,
+    split: str = "test",
+    device: torch.device | None = None,
+) -> dict[str, Any]:
+    """PCA-invert or AE-decode automatically from ``loss_config.mode``."""
+    inf = run_inference(config, checkpoint_path, split=split, device=device)
+    loss_cfg = config.config.get("loss_config") or {}
+    if device is None:
+        device, _ = prepare_device(config["n_gpu"])
+    if loss_cfg.get("mode") == "decoder":
+        decoders = load_decoders_from_dir(loss_cfg["decoder_dir"], inf["outputs"], device)
+        metrics = profile_metrics_from_latents(
+            inf["pcs"],
+            inf["indices"],
+            inf["cache"],
+            inf["outputs"],
+            decoders,
+            device=device,
+        )
+    else:
+        metrics = profile_metrics_from_pcs(
+            inf["pcs"],
+            inf["indices"],
+            inf["cache"],
+            inf["pca_models"],
+            inf["outputs"],
+        )
+    metrics["inference"] = inf
+    return metrics
+
+
+def avg_common_rmse(metrics: Mapping[str, Any]) -> float:
+    """Mean of T/S ``raw_profile_rmse_common``."""
+    common = metrics["raw_profile_rmse_common"]
+    return float(np.mean([common["temperature"], common["salinity"]]))
+
+
+def select_best(rows: list[dict[str, Any]], group: str) -> dict[str, Any] | None:
+    """Argmin by avg common RMSE within ``isas`` or ``argo`` group."""
+    pool = [r for r in rows if r.get("group") == group and "metrics" in r]
+    if not pool:
+        return None
+    return min(pool, key=lambda r: r["avg_common_rmse"])
+
+
+def plot_depth_rmse_overlay(
+    rows: list[dict[str, Any]],
+    *,
+    labels: Mapping[str, str] | None = None,
+    colors: Mapping[str, str] | None = None,
+    out_path: str | Path | None = None,
+    show: bool = True,
+) -> None:
+    """One figure: T and S depth-RMSE curves for all compare models."""
+    import matplotlib.pyplot as plt
+
+    labels = labels or {}
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    fig.suptitle(
+        f"Depth RMSE on common grid {DEPTH_RANGE_M[0]}–{DEPTH_RANGE_M[1]} m",
+        fontweight="bold",
+    )
+    for row in rows:
+        key = row["key"]
+        m = row["metrics"]
+        z = m["depth_m_common"]
+        color = (colors or {}).get(key)
+        label = labels.get(key, row.get("label", key))
+        for ax, var, title in zip(
+            axes,
+            ("temperature", "salinity"),
+            ("Temperature RMSE", "Salinity RMSE"),
+        ):
+            ax.plot(m["depth_stats"][var]["rmse"], z, lw=2, label=label, color=color)
+            ax.invert_yaxis()
+            ax.set_title(title)
+            ax.set_ylabel("Depth [m]")
+            ax.grid(True, alpha=0.3)
+    axes[0].set_xlabel("RMSE [°C]")
+    axes[1].set_xlabel("RMSE [PSU]")
+    axes[1].legend(loc="best", fontsize=8)
+    plt.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def plot_bin_maps_best(
+    best_isas: dict[str, Any] | None,
+    best_argo: dict[str, Any] | None,
+    *,
+    out_path: str | Path | None = None,
+    show: bool = True,
+) -> None:
+    """Four spatial RMSE maps: T/S for best ISAS and best ARGO by avg common RMSE."""
+    import cartopy.crs as ccrs
+    import matplotlib.pyplot as plt
+
+    entries = []
+    if best_isas is not None:
+        entries.append((best_isas, "ISAS"))
+    if best_argo is not None:
+        entries.append((best_argo, "ARGO"))
+    if not entries:
+        print("No best models to map")
+        return
+
+    fig, axes = plt.subplots(
+        len(entries),
+        2,
+        figsize=(14, 6 * len(entries)),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+        squeeze=False,
+    )
+    for row_i, (row, group_tag) in enumerate(entries):
+        inf = row["metrics"]["inference"]
+        m = row["metrics"]
+        idx = inf["indices"]
+        lon = inf["cache"]["LON"][idx]
+        lat = inf["cache"]["LAT"][idx]
+        for col, var in enumerate(("temperature", "salinity")):
+            ax = axes[row_i, col]
+            pred_c = align_profiles_to_depth(m["pred_profiles"][var], m["z_native"])[
+                common_depth_mask()
+            ]
+            true_c = align_profiles_to_depth(m["true_profiles"][var], m["z_native"])[
+                common_depth_mask()
+            ]
+            lon_bins, lat_bins, grid_rmse, _nprof = bin_map_scalar_rmse(
+                lon, lat, pred_c, true_c
+            )
+            lon_centers = (lon_bins[:-1] + lon_bins[1:]) / 2
+            lat_centers = (lat_bins[:-1] + lat_bins[1:]) / 2
+            ax.set_extent([-99, -81, 18, 30])
+            ax.coastlines()
+            pcm = ax.pcolormesh(
+                lon_centers,
+                lat_centers,
+                grid_rmse,
+                cmap="YlOrRd",
+                vmin=0.3,
+                vmax=2.0,
+                transform=ccrs.PlateCarree(),
+            )
+            unit = "°C" if var == "temperature" else "PSU"
+            ax.set_title(f"{group_tag} best ({row['label']}): {var} RMSE [{unit}]")
+            fig.colorbar(pcm, ax=ax, orientation="vertical", pad=0.02, fraction=0.046)
+    plt.tight_layout()
+    if out_path is not None:
+        fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 def assert_matches_eval_run(
@@ -333,14 +592,15 @@ def bin_map_scalar_rmse(
     pred_c: np.ndarray,
     true_c: np.ndarray,
     *,
-    lon_step: float = 1.0,
+    lon_bins: np.ndarray | None = None,
+    lat_bins: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """1° bin mean of per-profile scalar RMSE on the common grid."""
-    prof_rmse = np.sqrt(np.nanmean((pred_c - true_c) ** 2, axis=0))
-    lon = np.floor(lon) + 0.5
-    lat = np.floor(lat) + 0.5
-    lon_bins = np.arange(np.floor(lon.min()) - 0.5, np.ceil(lon.max()) + 0.5 + lon_step, lon_step)
-    lat_bins = np.arange(np.floor(lat.min()) - 0.5, np.ceil(lat.max()) + 0.5 + lon_step, lon_step)
+    """1° pooled RMSE on common-grid residuals (depth-major pred_c/true_c)."""
+    lon_bins = np.asarray(GOM_LON_BINS if lon_bins is None else lon_bins, dtype=np.float64)
+    lat_bins = np.asarray(GOM_LAT_BINS if lat_bins is None else lat_bins, dtype=np.float64)
+    lon = np.floor(np.asarray(lon, dtype=np.float64)) + 0.5
+    lat = np.floor(np.asarray(lat, dtype=np.float64)) + 0.5
+    sq = (pred_c - true_c) ** 2
     grid = np.full((len(lat_bins) - 1, len(lon_bins) - 1), np.nan)
     nprof = np.zeros_like(grid)
     for i in range(len(lon_bins) - 1):
@@ -354,8 +614,76 @@ def bin_map_scalar_rmse(
             if not np.any(in_bin):
                 continue
             nprof[j, i] = float(np.sum(in_bin))
-            grid[j, i] = float(np.nanmean(prof_rmse[in_bin]))
+            grid[j, i] = float(np.sqrt(np.nanmean(sq[:, in_bin])))
     return lon_bins, lat_bins, grid, nprof
+
+
+def plot_gom_rmse_map(
+    lon_bins: np.ndarray,
+    lat_bins: np.ndarray,
+    grid_rmse: np.ndarray,
+    nprof: np.ndarray,
+    *,
+    model_key: str,
+    dataset_tag: str = "",
+    variable: str = "Temperature",
+) -> None:
+    """Cartopy bin map on the fixed GoM grid (one model per figure)."""
+    import cartopy.crs as ccrs
+    import matplotlib.pyplot as plt
+
+    label = f"{model_key} ({dataset_tag})" if dataset_tag else model_key
+    title = f"{label}: {variable} RMSE, 1° bins, common depth grid"
+
+    lon_centers = (lon_bins[:-1] + lon_bins[1:]) / 2
+    lat_centers = (lat_bins[:-1] + lat_bins[1:]) / 2
+    fig, ax = plt.subplots(1, 1, figsize=(12, 12), subplot_kw={"projection": ccrs.PlateCarree()})
+    fig.suptitle(title, fontsize=16, fontweight="bold", y=0.98)
+    ax.set_extent([-99, -81, 18, 30])
+    ax.coastlines()
+    pcm = ax.pcolormesh(
+        lon_centers,
+        lat_centers,
+        grid_rmse,
+        cmap="YlOrRd",
+        vmin=0.3,
+        vmax=2.0,
+        transform=ccrs.PlateCarree(),
+    )
+    fig.colorbar(pcm, ax=ax, orientation="vertical", pad=0.04, fraction=0.046, label="RMSE [°C]")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_xticks(np.arange(-99, -81, 2))
+    ax.set_yticks(np.arange(18, 31, 2))
+    ax.grid(color="gray", linestyle="--", linewidth=0.5)
+    for i, lon in enumerate(lon_centers):
+        for j, lat in enumerate(lat_centers):
+            value = grid_rmse[j, i]
+            count = nprof[j, i]
+            if np.isnan(value) or count <= 0:
+                continue
+            ax.text(
+                lon,
+                lat + 0.2,
+                f"{count:.0f}",
+                color="gray",
+                ha="center",
+                va="center",
+                fontsize=9,
+                transform=ccrs.PlateCarree(),
+            )
+            ax.text(
+                lon,
+                lat - 0.2,
+                f"{value:.2f}",
+                color="black",
+                ha="center",
+                va="center",
+                fontsize=9,
+                transform=ccrs.PlateCarree(),
+            )
+    plt.tight_layout()
+    plt.show()
 
 
 def v2_checkpoint_dims(ckpt: dict) -> tuple[int, list[int], int]:

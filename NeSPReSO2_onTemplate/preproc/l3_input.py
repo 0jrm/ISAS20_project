@@ -145,16 +145,34 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         c, t, h, w = l3_sat_patch_shape(l3_cfg)
         arch_args["n_sat"] = l3_n_channels(l3_cfg)
         arch_args["patch_shape"] = [c, t, h, w]
-    elif arch.get("type") == "PatchConvMLP":
-        from preproc.preproc_isas_sat import compute_input_dim, count_sat_vars, sat_patch_shape
+    elif arch.get("type") in ("PatchConvMLP", "PatchMaskConvMLP"):
+        from preproc.preproc_isas_sat import (
+            compute_input_dim,
+            count_patch_channels,
+            count_scalar_dims,
+            resolve_use_mask_channels,
+            sat_patch_shape,
+        )
 
         spatial_pad = int(io_cfg.get("spatial_pad", 0))
         temporal_pad = int(io_cfg.get("temporal_pad", 0))
-        expected_dim = compute_input_dim(input_params, spatial_pad, temporal_pad)
-        arch_args["n_enc"] = count_encoding_dims(input_params)
-        n_sat = count_sat_vars(input_params)
-        patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
-        arch_args["n_sat"] = n_sat
+        use_mask_channels = resolve_use_mask_channels(config)
+        arch_args["use_mask_channels"] = use_mask_channels
+        expected_dim = compute_input_dim(
+            input_params, spatial_pad, temporal_pad, use_mask_channels=use_mask_channels
+        )
+        arch_args["n_enc"] = count_scalar_dims(input_params)
+        n_ch = count_patch_channels(input_params, use_mask_channels=use_mask_channels)
+        patch_shape = sat_patch_shape(
+            spatial_pad,
+            temporal_pad,
+            3,
+            input_params=input_params,
+            use_mask_channels=use_mask_channels,
+        )
+        arch_args["n_sat"] = n_ch if patch_shape else count_patch_channels(
+            input_params, use_mask_channels=use_mask_channels
+        )
         arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
     else:
         from preproc.preproc_isas_sat import compute_input_dim

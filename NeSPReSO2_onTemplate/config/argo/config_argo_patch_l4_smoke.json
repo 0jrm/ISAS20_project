@@ -1,0 +1,120 @@
+{
+    "name": "NeSPReSO2_ARGO_GoM_patch_l4_smoke",
+    "n_gpu": 1,
+    "seed": 42,
+    "arch": {
+        "type": "PatchMaskConvMLP",
+        "args": {
+            "input_dim": 535,
+            "output_dim": 32,
+            "d_model": 128,
+            "n_enc": 10,
+            "n_sat": 3,
+            "patch_shape": [3, 7, 5, 5],
+            "use_mask_channels": false,
+            "conv_channels": [16, 32],
+            "pool_output": [1, 1, 1],
+            "fusion": "concat",
+            "head_hidden": 256,
+            "head_depth": 2,
+            "head_dropout": 0.2
+        }
+    },
+    "input_params": {
+        "timecos": true,
+        "timesin": true,
+        "latcos": true,
+        "latsin": true,
+        "loncos": true,
+        "lonsin": true,
+        "sss": true,
+        "sst": true,
+        "ssh": true,
+        "sat": true,
+        "basin_sss": true,
+        "basin_sst": true,
+        "basin_ssh": true,
+        "bathy_depth": true
+    },
+    "io": {
+        "dataset_tag": "argo_l4",
+        "data_path": "../data/NeSPReSO_v2_ARGO_GoM_sat",
+        "sat_file": "satellite_NeSPReSO_v2_ARGO_GoM_smoke.h5",
+        "spatial_pad": 2,
+        "temporal_pad": 6,
+        "cache_dir": "../data/cache",
+        "max_samples": 16,
+        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "refit_pca": true,
+        "basin": {
+            "min_lat": 18.0,
+            "max_lat": 31.0,
+            "min_lon": -98.0,
+            "max_lon": -81.0,
+            "exclude_lat": 23.0,
+            "exclude_lon": -88.0
+        },
+        "groups": {
+            "sss": {"h5_group": "sss", "h5_var": "sos"},
+            "sst": {"h5_group": "ostia", "h5_var": "analysed_sst"},
+            "ssh": {"h5_group": "ssh", "h5_var": "adt"}
+        }
+    },
+    "outputs": {
+        "temperature": 16,
+        "salinity": 16
+    },
+    "density": {
+        "enabled": false,
+        "checkpoint": "",
+        "stats_path": "",
+        "stab_weight": 0.0,
+        "smooth_weight": 0.0
+    },
+    "data_loader": {
+        "type": "NeSPReSODataLoader",
+        "args": {
+            "cache_path": "",
+            "batch_size": 8,
+            "shuffle": true,
+            "split_mode": "chronological",
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": false
+        }
+    },
+    "loss": "combined_pca_loss",
+    "loss_config": {
+        "mode": "pc_mse_only"
+    },
+    "metrics": ["profile_rmse"],
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": 100000,
+            "gamma": 1.0
+        }
+    },
+    "trainer": {
+        "epochs": 100,
+        "save_dir": "saved/",
+        "save_period": 1,
+        "log_interval": 5,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": 50,
+        "tensorboard": false
+    }
+}

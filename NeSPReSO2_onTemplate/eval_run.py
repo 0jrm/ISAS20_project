@@ -17,7 +17,7 @@ from model.loss import decode_latent_profiles, load_decoders_from_dir, make_loss
 from train import surface_residual_layout_from_cache
 from model.metric import per_variable_rmse
 from parse_config import ConfigParser, validate_config
-from playground import prepare_device, read_json
+from base.util import prepare_device, read_json
 from train import ensure_cache, set_seed
 
 
@@ -72,9 +72,27 @@ def raw_profile_rmse(
     device=None,
     inputs=None,
     surface_residual_layout=None,
+    bottom_depth=None,
+    pres_levels=None,
 ):
     """RMSE in physical space vs cache ``profiles`` (not PCA-reconstructed targets)."""
     idx = np.asarray(indices, dtype=int)
+    depth_mask = None
+    if bottom_depth is not None and pres_levels is not None:
+        pres = np.asarray(pres_levels, dtype=np.float32)
+        bd = np.asarray(bottom_depth, dtype=np.float32)[idx]
+        depth_mask = pres[np.newaxis, :] <= bd[:, np.newaxis]
+
+    def _masked_rmse(diff):
+        if depth_mask is not None:
+            masked = diff.T
+            valid = depth_mask
+            if masked.shape != valid.shape:
+                valid = valid.T
+            sel = masked[valid]
+            return float(np.sqrt(np.nanmean(sel ** 2))) if sel.size else float("nan")
+        return float(np.sqrt(np.nanmean(diff ** 2)))
+
     if decoders is not None:
         pred_t = torch.tensor(pred_pcs, dtype=torch.float32, device=device)
         inp_t = None
@@ -91,14 +109,14 @@ def raw_profile_rmse(
         for name in outputs:
             # decode_latent_profiles is (N, n_depth); cache profiles are (n_depth, N).
             diff = pred[name].detach().cpu().numpy() - true_profiles[name][:, idx].T
-            out[name] = float(np.sqrt(np.nanmean(diff ** 2)))
+            out[name] = _masked_rmse(diff)
         return out
 
     pred = sklearn_inverse_transform_pcs(pred_pcs, pca_models, outputs)
     out = {}
     for name in outputs:
         diff = pred[name] - true_profiles[name][:, idx]
-        out[name] = float(np.sqrt(np.nanmean(diff ** 2)))
+        out[name] = _masked_rmse(diff)
     return out
 
 
@@ -211,6 +229,8 @@ def main(config, checkpoint_path: str, split: str = "test"):
             device=device,
             inputs=data_loader.cache["inputs"][indices],
             surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
+            bottom_depth=data_loader.cache.get("bottom_depth"),
+            pres_levels=data_loader.cache.get("PRES"),
         ),
     }
     if loss_cfg.get("mode") != "decoder" and pca_tgt is not None:

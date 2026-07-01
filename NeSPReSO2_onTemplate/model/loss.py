@@ -234,6 +234,24 @@ def genWeightedMSELoss(weights, device):
     return WeightedMSELoss(normalized, device)
 
 
+def masked_profile_mse(pred_profiles, true_profiles, depth_mask):
+    """MSE over profile levels where ``depth_mask`` is True."""
+    mask = depth_mask.to(dtype=pred_profiles.dtype)
+    diff2 = (pred_profiles - true_profiles) ** 2 * mask
+    denom = mask.sum().clamp_min(1.0)
+    return diff2.sum() / denom
+
+
+def bathy_depth_mask(indices, bottom_depth, pres_levels, device):
+    """``(batch, n_depth)`` mask: levels at or above bottom (``PRES <= bottom_depth``)."""
+    if bottom_depth is None or pres_levels is None:
+        return None
+    idx = torch.as_tensor(indices, dtype=torch.long, device=device)
+    bd = torch.as_tensor(bottom_depth, dtype=torch.float32, device=device)[idx]
+    pres = torch.as_tensor(pres_levels, dtype=torch.float32, device=device).unsqueeze(0)
+    return pres <= bd.unsqueeze(1)
+
+
 class PCALoss(nn.Module):
     def __init__(
         self,
@@ -244,6 +262,8 @@ class PCALoss(nn.Module):
         *,
         mode: str = "combined",
         true_profiles: Mapping[str, torch.Tensor] | None = None,
+        bottom_depth: np.ndarray | None = None,
+        pres_levels: np.ndarray | None = None,
     ):
         super().__init__()
         if mode not in VALID_LOSS_MODES:
@@ -257,6 +277,17 @@ class PCALoss(nn.Module):
             self.profile_scales.update(profile_scales)
 
         dev = device or torch.device("cpu")
+        self.use_bathy = bottom_depth is not None and pres_levels is not None
+        if self.use_bathy:
+            self.register_buffer(
+                "bottom_depth",
+                torch.tensor(np.asarray(bottom_depth, dtype=np.float32), device=dev),
+            )
+            self.register_buffer(
+                "pres_levels",
+                torch.tensor(np.asarray(pres_levels, dtype=np.float32), device=dev),
+            )
+
         for name in self.output_order:
             pca = pca_models[name]
             self.register_buffer(
@@ -285,6 +316,10 @@ class PCALoss(nn.Module):
         return torch_reconstruct_profile(pcs, components, mean)
 
     def forward(self, pcs, targets, indices=None):
+        depth_mask = None
+        if self.use_bathy and indices is not None:
+            depth_mask = bathy_depth_mask(indices, self.bottom_depth, self.pres_levels, pcs.device)
+
         if self.mode == "pred_profile_cached":
             if indices is None:
                 raise ValueError("pred_profile_cached PCALoss requires batch indices")
@@ -293,7 +328,10 @@ class PCALoss(nn.Module):
                 pred = pcs[:, start:end]
                 pred_profiles = self.inverse_transform(pred, self._components(name), self._mean(name))
                 true_profiles = self._true_profiles(name)[indices]
-                mse = nn.functional.mse_loss(pred_profiles, true_profiles)
+                if depth_mask is not None:
+                    mse = masked_profile_mse(pred_profiles, true_profiles, depth_mask)
+                else:
+                    mse = nn.functional.mse_loss(pred_profiles, true_profiles)
                 scale = self.profile_scales.get(name, 1.0)
                 total = total + mse / scale
             return total
@@ -304,7 +342,10 @@ class PCALoss(nn.Module):
             true = targets[:, start:end]
             pred_profiles = self.inverse_transform(pred, self._components(name), self._mean(name))
             true_profiles = self.inverse_transform(true, self._components(name), self._mean(name))
-            mse = nn.functional.mse_loss(pred_profiles, true_profiles)
+            if depth_mask is not None:
+                mse = masked_profile_mse(pred_profiles, true_profiles, depth_mask)
+            else:
+                mse = nn.functional.mse_loss(pred_profiles, true_profiles)
             scale = self.profile_scales.get(name, 1.0)
             total = total + mse / scale
         return total
@@ -386,6 +427,8 @@ class CombinedPCALoss(nn.Module):
         true_profiles: Mapping[str, torch.Tensor] | None = None,
         decoders: Mapping[str, nn.Module] | None = None,
         surface_residual_layout: Mapping[str, Any] | None = None,
+        bottom_depth: np.ndarray | None = None,
+        pres_levels: np.ndarray | None = None,
     ):
         super().__init__()
         if mode not in VALID_LOSS_MODES:
@@ -423,6 +466,8 @@ class CombinedPCALoss(nn.Module):
                 device,
                 mode=pca_mode,
                 true_profiles=true_profiles,
+                bottom_depth=bottom_depth,
+                pres_levels=pres_levels,
             )
 
         self.weighted_mse_loss = genWeightedMSELoss(weights, device)
@@ -508,6 +553,8 @@ def make_loss(
     ae_targets=None,
     ae_weights=None,
     surface_residual_layout: Mapping[str, Any] | None = None,
+    bottom_depth=None,
+    pres_levels=None,
     **kwargs,
 ) -> CombinedPCALoss:
     scales = loss_scales or {}
@@ -556,5 +603,7 @@ def make_loss(
         true_profiles=cached_profiles,
         decoders=decoders,
         surface_residual_layout=surface_residual_layout,
+        bottom_depth=bottom_depth,
+        pres_levels=pres_levels,
         **kwargs,
     )

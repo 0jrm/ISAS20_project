@@ -43,14 +43,14 @@ def _synthetic_pca_pair():
 
 
 def test_cap_batch_size():
-    from playground.batch_size import cap_batch_size, resolve_batch_size
+    from base.batch_size import cap_batch_size, resolve_batch_size
 
     assert cap_batch_size(512, 100) == 100
     assert cap_batch_size(256, 1000) == 256
 
 
 def test_resolve_batch_size_fixed():
-    from playground.batch_size import resolve_batch_size
+    from base.batch_size import resolve_batch_size
 
     class _Tiny(torch.nn.Module):
         def forward(self, x):
@@ -82,6 +82,135 @@ def test_compute_input_dim():
     assert compute_input_dim(flags, 2, 3) == 306
     assert sat_patch_shape(2, 3) == (3, 4, 5, 5)
     assert sat_patch_shape(0, 0) is None
+
+
+def test_argo_l4_input_dim_and_forward():
+    from model.model import PatchMaskConvMLP
+    from preproc.preproc_isas_sat import build_argo_l4_input_matrix, count_scalar_dims
+
+    flags = {
+        "timecos": True,
+        "timesin": True,
+        "latcos": True,
+        "latsin": True,
+        "loncos": True,
+        "lonsin": True,
+        "sss": True,
+        "sst": True,
+        "ssh": True,
+        "sat": True,
+        "basin_sss": True,
+        "basin_sst": True,
+        "basin_ssh": True,
+        "bathy_depth": True,
+    }
+    assert count_scalar_dims(flags) == 10
+    assert compute_input_dim(flags, 2, 6) == 535
+    assert sat_patch_shape(2, 6, 3, input_params=flags) == (3, 7, 5, 5)
+    assert compute_input_dim(flags, 2, 6, use_mask_channels=True) == 1060
+    assert sat_patch_shape(2, 6, 3, input_params=flags, use_mask_channels=True) == (6, 7, 5, 5)
+
+    n = 3
+    per = 5 * 5 * 7
+    juld = np.linspace(50, 60, n, dtype=np.float32)
+    lat = np.full(n, 25.0, dtype=np.float32)
+    lon = np.full(n, -90.0, dtype=np.float32)
+    sat_vars = {k: np.ones((n, per), dtype=np.float32) for k in ("sss", "sst", "ssh")}
+    sat_vars["sst"] += 300.0
+    basin = {"sss": np.zeros(n), "sst": np.full(n, 300.0), "ssh": np.zeros(n)}
+    bathy = np.full(n, 500.0, dtype=np.float32)
+    x = build_argo_l4_input_matrix(
+        juld, lat, lon, sat_vars, flags, basin_means=basin, bathy_depth=bathy
+    )
+    assert x.shape == (n, 535)
+    assert np.isfinite(x).all()
+
+    x_mask = build_argo_l4_input_matrix(
+        juld,
+        lat,
+        lon,
+        sat_vars,
+        flags,
+        basin_means=basin,
+        bathy_depth=bathy,
+        use_mask_channels=True,
+    )
+    assert x_mask.shape == (n, 1060)
+    mask_cols = x_mask[:, 10 + per : 10 + 2 * per]
+    assert mask_cols.min() >= 0.0 and mask_cols.max() <= 1.0
+
+    model = PatchMaskConvMLP(
+        input_dim=535,
+        output_dim=32,
+        dropout_prob=0.0,
+        d_model=32,
+        head_layers=[16],
+        conv_channels=[8, 16],
+        patch_shape=[3, 7, 5, 5],
+        n_enc=10,
+        n_sat=3,
+        use_mask_channels=False,
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.tensor(x))
+    assert out.shape == (n, 32)
+
+
+def test_bathy_truncation_loss():
+    from collections import OrderedDict
+    from sklearn.decomposition import PCA
+
+    from model.loss import PCALoss, bathy_depth_mask
+
+    n_z, n = 5, 4
+    rng = np.random.default_rng(0)
+    prof = rng.normal(size=(n, n_z)).astype(np.float64)
+    pca = PCA(n_components=2).fit(prof)
+    outputs = OrderedDict([("temperature", 2)])
+    pres = np.arange(n_z, dtype=np.float32)
+    bottom = np.array([1.0, 2.0, 0.0, 1.5], dtype=np.float32)
+    device = torch.device("cpu")
+    loss_fn = PCALoss(
+        {"temperature": pca},
+        outputs,
+        device=device,
+        bottom_depth=bottom,
+        pres_levels=pres,
+    )
+    pcs = torch.tensor(rng.normal(size=(n, 2)), dtype=torch.float32)
+    targets = torch.tensor(pca.transform(prof), dtype=torch.float32)
+    idx = np.arange(n)
+    mask = bathy_depth_mask(idx, bottom, pres, device)
+    assert mask.shape == (n, n_z)
+    assert not mask[:, -1].any()
+    val = loss_fn(pcs, targets, indices=idx)
+    assert torch.isfinite(val)
+
+
+def test_argo_l4_cache_smoke():
+    from pathlib import Path
+
+    from base.util import read_json
+    from preproc.export_argo_l4_cache import build_argo_l4_cache
+
+    root = Path(__file__).resolve().parent
+    cfg_path = root / "config/argo/config_argo_patch_l4_smoke.json"
+    sat_path = root.parent / "data/NeSPReSO_v2_ARGO_GoM_sat/satellite_NeSPReSO_v2_ARGO_GoM_smoke.h5"
+    if not cfg_path.is_file() or not sat_path.is_file():
+        return
+    cfg = read_json(cfg_path)
+    cache_path = build_argo_l4_cache(cfg, force=False)
+    import pickle
+
+    with open(cache_path, "rb") as f:
+        cache = pickle.load(f)
+    assert cache["dataset_tag"] == "argo_l4"
+    assert cache["inputs"].shape[1] == 535
+    assert cache["targets"].shape[1] == 32
+    assert "bottom_depth" in cache
+    assert list(cache["sat_patch_shape"]) == [3, 7, 5, 5]
+    assert cache.get("use_mask_channels") is False
 
 
 def test_patch_conv_mlp_point_mode():
@@ -485,7 +614,7 @@ def test_train_monitor_once():
         assert "isas20" in proc.stdout
 
 
-from playground import read_json
+from base.util import read_json
 
 
 def test_overlap_pairs():
@@ -508,7 +637,7 @@ def test_overlap_pairs():
             caches[tag] = c
     if len(caches) != 2:
         return
-    cfg = read_json(root / "config_argo.json")
+    cfg = read_json(root / "config/argo/config_argo.json")
     v2_src = cfg.get("io", {}).get("v2_src")
     if v2_src:
         sys.path.insert(0, str(v2_src))
@@ -538,6 +667,9 @@ def test_cache_schema_keys():
             if key in cache:
                 continue
             # legacy caches may omit patch metadata until rebuilt
+        if cache.get("dataset_tag") == "argo_l4":
+            assert "bottom_depth" in cache
+            assert cache.get("bathy_truncation") is True
         prof = cache["profiles"]
         assert "temperature" in prof and prof["temperature"].ndim == 2
         return
@@ -600,10 +732,10 @@ def test_l3_processed_batch_smoke():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent
-    cfg_path = root / "config_argo_l3_smoke.json"
+    cfg_path = root / "config/argo/config_argo_l3_smoke.json"
     if not cfg_path.is_file():
         return
-    from playground import read_json
+    from base.util import read_json
     from preproc.export_l3_cache import build_l3_processed_batch
 
     cfg = read_json(cfg_path)
@@ -689,11 +821,11 @@ def test_l3_cache_layout_guard():
 def test_sync_arch_l3_config():
     from pathlib import Path
 
-    from playground import read_json
+    from base.util import read_json
     from preproc.l3_input import sync_arch_with_io
 
     root = Path(__file__).resolve().parent
-    cfg = read_json(root / "config_argo_l3_smoke.json")
+    cfg = read_json(root / "config/argo/config_argo_l3_smoke.json")
     dim = sync_arch_with_io(cfg)
     assert dim == 46881
     assert cfg["arch"]["args"]["patch_shape"] == [15, 5, 25, 25]
@@ -786,10 +918,10 @@ def test_l4_processed_batch_smoke():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent
-    cfg_path = root / "config_argo_l3_l4_smoke.json"
+    cfg_path = root / "config/argo/config_argo_l3_l4_smoke.json"
     if not cfg_path.is_file():
         return
-    from playground import read_json
+    from base.util import read_json
     from preproc.export_l3_cache import build_l3_processed_batch
 
     cfg = read_json(cfg_path)
@@ -806,10 +938,10 @@ def test_l3_dataloader_batch():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent
-    cfg_path = root / "config_argo_l3_smoke.json"
+    cfg_path = root / "config/argo/config_argo_l3_smoke.json"
     if not cfg_path.is_file():
         return
-    from playground import read_json
+    from base.util import read_json
     from preproc.export_l3_cache import build_argo_l3_train_cache
 
     cfg = read_json(cfg_path)
@@ -903,10 +1035,10 @@ def test_stratified_eval_l3_cache_smoke():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent
-    cfg_path = root / "config_argo_l3_smoke.json"
+    cfg_path = root / "config/argo/config_argo_l3_smoke.json"
     if not cfg_path.is_file():
         return
-    from playground import read_json
+    from base.util import read_json
     from preproc.export_l3_cache import build_argo_l3_train_cache
 
     from eval_stratified import build_strata_masks, extract_l3_metrics, sample_years
@@ -1030,6 +1162,9 @@ if __name__ == "__main__":
     test_cap_batch_size()
     test_resolve_batch_size_fixed()
     test_compute_input_dim()
+    test_argo_l4_input_dim_and_forward()
+    test_bathy_truncation_loss()
+    test_argo_l4_cache_smoke()
     test_patch_conv_mlp_point_mode()
     test_patch_conv_mlp_patch_mode()
     test_patch_conv_mlp_residual_mode()

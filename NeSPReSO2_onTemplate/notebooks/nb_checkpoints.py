@@ -9,7 +9,7 @@ from parse_config import ConfigParser
 
 TEMPLATE_ROOT = Path(__file__).resolve().parents[1]
 
-# GoM production runs (see PLAN-patch-arch-handoff.md)
+# GoM production runs (legacy notebook only — not used in compare mode)
 KNOWN_CHECKPOINTS: dict[str, str] = {
     "isas_point": "saved/models/NeSPReSO2_ISAS_GoM/baseline15pc/model_best.pth",
     "isas_patch": "saved/models/NeSPReSO2_ISAS_GoM_patch/patch16_scales/model_best.pth",
@@ -20,6 +20,7 @@ CONFIG_EXPER_NAME = {
     "isas_point": "NeSPReSO2_ISAS_GoM",
     "isas_patch": "NeSPReSO2_ISAS_GoM_patch",
     "argo_point": "NeSPReSO2_ARGO_GoM",
+    "argo_patch_l4": "NeSPReSO2_ARGO_GoM_patch_l4",
 }
 
 
@@ -37,7 +38,7 @@ def discover_checkpoint(
     template_root: Path | None = None,
     explicit: Path | str | None = None,
 ) -> Path | None:
-    """Find ``model_best.pth`` for a surface config key (newest match wins on glob)."""
+    """Find ``model_best.pth`` for a legacy surface config key (newest match wins on glob)."""
     root = template_root or TEMPLATE_ROOT
 
     for candidate in (
@@ -60,8 +61,45 @@ def discover_checkpoint(
     if not pattern.is_dir():
         return None
 
-    hits = sorted(pattern.glob("*/model_best.pth"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return hits[0] if hits else None
+    hits = list(pattern.glob("*/model_best.pth"))
+    if not hits:
+        return None
+
+    def _rank(p: Path) -> tuple[int, float]:
+        ep = checkpoint_epoch(p)
+        return (ep if ep is not None else -1, p.stat().st_mtime)
+
+    return max(hits, key=_rank)
+
+
+def discover_compare_checkpoint(
+    key: str,
+    cfg: ConfigParser | None = None,
+    *,
+    template_root: Path | None = None,
+    explicit: Path | str | None = None,
+) -> Path | None:
+    """Find compare-run checkpoint — ``saved/compare_runs/<key>/`` only (no production fallback)."""
+    root = template_root or TEMPLATE_ROOT
+
+    for candidate in (
+        explicit,
+        root / "saved" / "compare_runs" / key / "model_best.pth",
+        _checkpoint_from_config(cfg) if cfg is not None else None,
+    ):
+        if candidate is None:
+            continue
+        p = candidate if isinstance(candidate, Path) else root / candidate
+        found = _exists(p)
+        if found is not None:
+            return found
+
+    run_dir = root / "saved" / "compare_runs" / key
+    if run_dir.is_dir():
+        hits = sorted(run_dir.glob("**/model_best.pth"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if hits:
+            return hits[0]
+    return None
 
 
 def _checkpoint_from_config(cfg: ConfigParser) -> Path | None:
@@ -105,8 +143,10 @@ def _checkpoint_after_train(
     cfg: ConfigParser,
     *,
     template_root: Path | None = None,
+    compare: bool = False,
 ) -> Path:
-    ckpt = discover_checkpoint(key, cfg, template_root=template_root)
+    discover = discover_compare_checkpoint if compare else discover_checkpoint
+    ckpt = discover(key, cfg, template_root=template_root)
     if ckpt is None:
         ckpt = _checkpoint_from_config(cfg)
     if ckpt is None or not ckpt.is_file():
@@ -123,15 +163,16 @@ def resolve_or_train(
     template_root: Path | None = None,
     explicit: Path | str | None = None,
     force_train: bool = False,
+    compare: bool = False,
 ) -> tuple[Path, str]:
     """
     Return (checkpoint_path, source) where source is ``found``, ``resumed``, or ``trained``.
 
-    Uses an existing checkpoint when it already reached ``max_epochs``. Otherwise trains
-  (resuming from a partial checkpoint when possible) up to ``max_epochs``.
+    When ``compare=True``, only searches ``saved/compare_runs/<key>/`` (no production paths).
     """
     target_epochs = int(max_epochs)
-    found = None if force_train else discover_checkpoint(
+    discover = discover_compare_checkpoint if compare else discover_checkpoint
+    found = None if force_train else discover(
         key, cfg, template_root=template_root, explicit=explicit
     )
 
@@ -145,10 +186,14 @@ def resolve_or_train(
         apply_training_epochs(cfg, target_epochs, monitor=True)
         print(f"{key}: resuming from epoch {done}, training to {target_epochs} …")
         train_fn(cfg)
-        return _checkpoint_after_train(key, cfg, template_root=template_root), "resumed"
+        return _checkpoint_after_train(
+            key, cfg, template_root=template_root, compare=compare
+        ), "resumed"
 
     cfg.resume = None
     apply_training_epochs(cfg, target_epochs, monitor=True)
     print(f"{key}: training up to {target_epochs} epochs …")
     train_fn(cfg)
-    return _checkpoint_after_train(key, cfg, template_root=template_root), "trained"
+    return _checkpoint_after_train(
+        key, cfg, template_root=template_root, compare=compare
+    ), "trained"
