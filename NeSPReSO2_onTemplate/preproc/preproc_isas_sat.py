@@ -21,6 +21,7 @@ from model.loss import OUTPUT_H5_VARS, get_pca_weights, true_profiles_numpy
 PATCH_ORDER_DOC = "time_major_row_major_lat_lon"
 
 ENCODING_KEYS = ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")
+SCALAR_EXTRA_KEYS = ("basin_sss", "basin_sst", "basin_ssh", "bathy_depth")
 SAT_KEYS = ("sss", "sst", "ssh")
 SURFACE_RESIDUAL_SAT_KEY = {"temperature": "sst", "salinity": "sss"}
 
@@ -84,6 +85,40 @@ def count_encoding_dims(input_params: Mapping[str, bool]) -> int:
     return sum(1 for k in ENCODING_KEYS if input_params.get(k))
 
 
+def count_scalar_extra_dims(input_params: Mapping[str, bool]) -> int:
+    return sum(1 for k in SCALAR_EXTRA_KEYS if input_params.get(k))
+
+
+def count_scalar_dims(input_params: Mapping[str, bool]) -> int:
+    """Harmonics + optional basin/bathy scalars."""
+    return count_encoding_dims(input_params) + count_scalar_extra_dims(input_params)
+
+
+def resolve_use_mask_channels(config: Mapping[str, Any]) -> bool:
+    """Whether satellite patches include interleaved mask columns (6 ch) vs values only (3 ch)."""
+    arch_args = (config.get("arch") or {}).get("args") or {}
+    if "use_mask_channels" in arch_args:
+        return bool(arch_args["use_mask_channels"])
+    input_params = config.get("input_params") or {}
+    if "use_mask_channels" in input_params:
+        return bool(input_params["use_mask_channels"])
+    # legacy alias
+    return bool(input_params.get("patch_mask"))
+
+
+def count_patch_channels(
+    input_params: Mapping[str, bool],
+    n_sat_vars: int = 3,
+    *,
+    use_mask_channels: bool = False,
+) -> int:
+    """Patch channel count; doubles when mask planes are included (value + mask per var)."""
+    n = count_sat_vars(input_params, n_sat_vars)
+    if use_mask_channels and n > 0:
+        return 2 * n
+    return n
+
+
 def count_sat_vars(input_params: Mapping[str, bool], n_sat_vars: int = 3) -> int:
     n = sum(1 for k in SAT_KEYS if input_params.get(k))
     if n == 0 and input_params.get("sat"):
@@ -103,12 +138,20 @@ def sat_patch_shape(
     spatial_pad: int,
     temporal_pad: int,
     n_sat_vars: int = 3,
+    *,
+    input_params: Mapping[str, bool] | None = None,
+    use_mask_channels: bool = False,
 ) -> tuple[int, int, int, int] | None:
     """``(C, T, H, W)`` when patches enabled; else ``None`` for point mode."""
     if spatial_pad == 0 and temporal_pad == 0:
         return None
     h = w = 2 * spatial_pad + 1
-    return (n_sat_vars, temporal_pad + 1, h, w)
+    n_ch = (
+        count_patch_channels(input_params, n_sat_vars, use_mask_channels=use_mask_channels)
+        if input_params
+        else n_sat_vars
+    )
+    return (n_ch, temporal_pad + 1, h, w)
 
 
 def compute_input_dim(
@@ -116,12 +159,28 @@ def compute_input_dim(
     spatial_pad: int = 0,
     temporal_pad: int = 0,
     n_sat_vars: int = 3,
+    *,
+    use_mask_channels: bool = False,
 ) -> int:
     """Feature count including flattened satellite patches when pads are set."""
-    n_enc = count_encoding_dims(input_params)
-    n_sat = count_sat_vars(input_params, n_sat_vars)
-    per_var = sat_features_per_var(spatial_pad, temporal_pad)
-    return n_enc + n_sat * per_var
+    n_scalar = count_scalar_dims(input_params)
+    n_ch = count_patch_channels(input_params, n_sat_vars, use_mask_channels=use_mask_channels)
+    per_ch = sat_features_per_var(spatial_pad, temporal_pad)
+    if spatial_pad == 0 and temporal_pad == 0:
+        return n_scalar + count_sat_vars(input_params, n_sat_vars)
+    return n_scalar + n_ch * per_ch
+
+
+def compute_argo_l4_input_dim(
+    input_params: Mapping[str, bool],
+    spatial_pad: int,
+    temporal_pad: int,
+    *,
+    use_mask_channels: bool = False,
+) -> int:
+    return compute_input_dim(
+        input_params, spatial_pad, temporal_pad, use_mask_channels=use_mask_channels
+    )
 
 
 def config_hash(config: Dict) -> str:
@@ -130,6 +189,7 @@ def config_hash(config: Dict) -> str:
         "input_params": config.get("input_params"),
         "io": config.get("io"),
         "outputs": config.get("outputs"),
+        "use_mask_channels": resolve_use_mask_channels(config),
     }
     blob = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:12]
@@ -194,6 +254,101 @@ def extract_sat_values(
         cx - spatial_pad : cx + spatial_pad + 1,
     ]
     return patches.reshape(arr.shape[0], -1).astype(np.float32)
+
+
+def extract_sat_patches_with_mask(
+    arr: np.ndarray,
+    spatial_pad: int,
+    temporal_pad: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (values, mask) flattened patches per station; mask is 1 where value is finite."""
+    raw = extract_sat_values(arr, spatial_pad, temporal_pad)
+    if raw.ndim == 1:
+        mask = np.isfinite(raw).astype(np.float32)
+        return np.nan_to_num(raw, nan=0.0).astype(np.float32), mask
+    finite = np.isfinite(raw)
+    values = np.where(finite, raw, 0.0).astype(np.float32)
+    mask = finite.astype(np.float32)
+    return values, mask
+
+
+def build_argo_l4_input_matrix(
+    juld: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    sat_vars: Dict[str, np.ndarray],
+    input_params: Mapping[str, bool],
+    *,
+    basin_means: Dict[str, np.ndarray] | None = None,
+    bathy_depth: np.ndarray | None = None,
+    use_mask_channels: bool = False,
+) -> np.ndarray:
+    """Scalars (harmonics + basin + bathy) + flattened satellite patch columns.
+
+    When ``use_mask_channels`` is true, each variable block is pixel-interleaved:
+    ``val_0, mask_0, val_1, mask_1, ...`` (SSS, then SST, then SSH). Otherwise
+    only value columns are emitted (NaN → 0).
+    """
+    cols = []
+    day = juld % 365
+
+    if input_params.get("timecos"):
+        cols.append(np.cos(2 * np.pi * day / 365))
+    if input_params.get("timesin"):
+        cols.append(np.sin(2 * np.pi * day / 365))
+    if input_params.get("latcos"):
+        cols.append(np.cos(2 * np.pi * lat / 180))
+    if input_params.get("latsin"):
+        cols.append(np.sin(2 * np.pi * lat / 180))
+    if input_params.get("loncos"):
+        cols.append(np.cos(2 * np.pi * lon / 360))
+    if input_params.get("lonsin"):
+        cols.append(np.sin(2 * np.pi * lon / 360))
+
+    basin_means = basin_means or {}
+    if input_params.get("basin_sss"):
+        cols.append(np.asarray(basin_means.get("sss", np.zeros(len(juld))), dtype=np.float32))
+    if input_params.get("basin_sst"):
+        sst_mean = np.asarray(basin_means.get("sst", np.zeros(len(juld))), dtype=np.float64)
+        cols.append((sst_mean - 273.15).astype(np.float32))
+    if input_params.get("basin_ssh"):
+        cols.append(np.asarray(basin_means.get("ssh", np.zeros(len(juld))), dtype=np.float32))
+    if input_params.get("bathy_depth"):
+        if bathy_depth is None:
+            raise ValueError("bathy_depth requested but not provided")
+        cols.append(np.asarray(bathy_depth, dtype=np.float32))
+
+    for key in SAT_KEYS:
+        if not input_params.get(key):
+            continue
+        if key not in sat_vars:
+            raise KeyError(f"Missing satellite variable '{key}' in sat_vars")
+        val = sat_vars[key]
+        if key == "sst" and val.ndim == 1:
+            val = val - 273.15
+        elif key == "sst":
+            val = val - 273.15
+        if val.ndim > 1:
+            finite = np.isfinite(val)
+            val = np.where(finite, val, 0.0).astype(np.float32)
+            if use_mask_channels:
+                mask = finite.astype(np.float32)
+                for j in range(val.shape[1]):
+                    cols.append(val[:, j])
+                    cols.append(mask[:, j])
+            else:
+                for j in range(val.shape[1]):
+                    cols.append(val[:, j])
+        elif val.ndim == 1:
+            cols.append(val)
+        else:
+            for j in range(val.shape[1]):
+                cols.append(val[:, j])
+
+    if not cols:
+        raise ValueError("No input features selected in input_params")
+    stacked = np.column_stack(cols).astype(np.float32)
+    return np.nan_to_num(stacked, nan=0.0)
 
 
 def build_input_matrix(
@@ -428,7 +583,7 @@ def reshape_time(data, temporal_pad):
 
 
 def preprocess_data(config: Dict) -> Dict:
-    """Legacy multi-dict preprocess (kept for playground notebooks)."""
+    """Legacy multi-dict preprocess (kept for exploratory notebooks)."""
     data_path = config["data_path"]
     sat_file = os.path.join(data_path, "satellite_NeSPReSO_v1_global.h5")
     prof_file = os.path.join(data_path, "profiles_NeSPReSO_v1_global.h5")
@@ -502,7 +657,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "cache":
         from parse_config import read_json, validate_config
 
-        cfg_path = sys.argv[2] if len(sys.argv) > 2 else "config.json"
+        cfg_path = sys.argv[2] if len(sys.argv) > 2 else "config/isas/config_isas.json"
         cfg = read_json(cfg_path)
         validate_config(cfg)
         build_train_cache(cfg, force="--force" in sys.argv)

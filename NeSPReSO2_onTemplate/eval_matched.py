@@ -26,7 +26,7 @@ import data_loader.data_loaders as module_data
 import model.model as module_arch
 from model.loss import sklearn_inverse_transform_pcs
 from parse_config import ConfigParser, validate_config
-from playground import prepare_device, read_json
+from base.util import prepare_device, read_json
 from preproc.overlap import (
     depth_grid_m,
     find_matched_pairs,
@@ -197,9 +197,9 @@ def eval_matched(isas_config, isas_ckpt, argo_config, argo_ckpt, *, device=None,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Balanced ISAS/ARGO comparison")
-    parser.add_argument("--isas-config", default="config_isas.json")
+    parser.add_argument("--isas-config", default="config/isas/config_isas.json")
     parser.add_argument("--isas-checkpoint", required=True)
-    parser.add_argument("--argo-config", default="config_argo.json")
+    parser.add_argument("--argo-config", default="config/argo/config_argo.json")
     parser.add_argument("--argo-checkpoint", required=True)
     parser.add_argument("--out", default=None)
     parser.add_argument("-d", "--device", default=None)

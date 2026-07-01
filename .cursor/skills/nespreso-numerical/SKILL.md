@@ -33,7 +33,7 @@ ponytail: single file, assert-based — no pytest framework.
 GoM defaults in `model/loss.py` are region-specific. After cache or PC count change:
 
 ```bash
-python3 scripts/derive_loss_scales.py -c config_argo.json --update-config
+python3 scripts/derive_loss_scales.py -c config/argo/config_argo.json --update-config
 ```
 
 ## Pre-merge checklist (numerical changes)

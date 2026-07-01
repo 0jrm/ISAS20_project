@@ -1,7 +1,7 @@
 import logging
 import logging.config
 from pathlib import Path
-from playground import read_json
+from base.util import read_json
 
 
 def setup_logging(save_dir, log_config='logger/logger_config.json', default_level=logging.INFO):

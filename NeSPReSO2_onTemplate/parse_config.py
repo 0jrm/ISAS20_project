@@ -5,8 +5,8 @@ from functools import reduce, partial
 from operator import getitem
 from datetime import datetime
 from logger import setup_logging
-from playground import read_json, write_json
-from playground.performance import validate_performance_config
+from base.util import read_json, write_json
+from base.performance import validate_performance_config
 
 
 def validate_config(config):
@@ -34,7 +34,7 @@ def validate_config(config):
             sc = dl["split_config"].get(split, {})
             assert sc.get("start") and sc.get("end"), f"split_config.{split} needs start/end dates"
     if config.get("performance"):
-        from playground.performance import get_performance_config
+        from base.performance import get_performance_config
 
         validate_performance_config(get_performance_config(config))
     l3 = config.get("io", {}).get("l3")

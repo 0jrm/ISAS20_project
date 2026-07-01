@@ -17,8 +17,8 @@ NeSPReSO v2 GoM dissertation branch: ARGO-first subsurface targets, mask-native 
 ```bash
 cd NeSPReSO2_onTemplate
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_smoke.json
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config/argo/config_argo.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/argo/config_argo_smoke.json
 ```
 
 Reports land in [`reports/`](reports/).

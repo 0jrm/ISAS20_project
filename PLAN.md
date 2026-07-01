@@ -34,10 +34,10 @@ The primary target should be ARGO/CORA/profile observations when available. ISAS
 Important areas likely include:
 
 * `NeSPReSO2_onTemplate/data_loader/data_loaders.py`
-* `NeSPReSO2_onTemplate/config_argo.json`
-* `NeSPReSO2_onTemplate/config_argo_smoke.json`
-* `NeSPReSO2_onTemplate/config_argo_pred_profile_cached.json`
-* `NeSPReSO2_onTemplate/config_isas*.json`
+* `NeSPReSO2_onTemplate/config/argo/config_argo.json`
+* `NeSPReSO2_onTemplate/config/argo/config_argo_smoke.json`
+* `NeSPReSO2_onTemplate/config/argo/config_argo_pred_profile_cached.json`
+* `NeSPReSO2_onTemplate/config/isas/config_isas*.json`
 * `NeSPReSO2_onTemplate/scripts/`
 * `NeSPReSO2_onTemplate/notebooks/`
 * `NeSPReSO2_onTemplate/notebooks/compare_outputs/`

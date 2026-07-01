@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from base import BaseModel
+from base.base_model import BaseModel
 import math
 
 
@@ -194,6 +194,139 @@ class PatchConvMLP(BaseModel):
             for block in self.head_blocks:
                 h = block(h)
             return self.head_out(h)
+        return self.head(h)
+
+
+class PatchMaskConvMLP(BaseModel):
+    """
+    Spatio-temporal patch encoder + MLP head.
+
+    With ``use_mask_channels=True``, flat satellite columns are pixel-interleaved
+    ``val, mask`` per variable (6 conv channels). With ``use_mask_channels=False``
+    (default), only value planes are used (3 channels); NaN pixels are zero-filled in preproc.
+    """
+
+    def __init__(
+        self,
+        input_dim=535,
+        output_dim=32,
+        dropout_prob=0.2,
+        d_model=128,
+        head_layers=None,
+        head_hidden=512,
+        head_depth=2,
+        head_dropout=None,
+        conv_channels=None,
+        patch_shape=None,
+        pool_output=None,
+        fusion="concat",
+        conv_norm_groups=8,
+        n_enc=10,
+        n_sat=3,
+        use_mask_channels=False,
+        residual=False,
+        **kwargs,
+    ):
+        super().__init__()
+        if conv_channels is None:
+            conv_channels = [32, 64]
+        if pool_output is None:
+            pool_output = [1, 1, 1]
+        if head_dropout is None:
+            head_dropout = dropout_prob
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_enc = n_enc
+        self.n_sat = n_sat
+        self.d_model = d_model
+        self.residual = bool(residual)
+        self.fusion = fusion
+        self.use_mask_channels = bool(use_mask_channels)
+        self.patch_shape = tuple(patch_shape) if patch_shape else None
+        self.pool_output = tuple(pool_output)
+
+        if self.patch_shape is None:
+            raise ValueError("PatchMaskConvMLP requires patch_shape")
+        if fusion not in ("add", "concat"):
+            raise ValueError(f"fusion must be 'add' or 'concat', got {fusion!r}")
+
+        c, t, h, w = self.patch_shape
+        per_ch = t * h * w
+        expected_sat = c * per_ch
+        if input_dim != n_enc + expected_sat:
+            raise ValueError(
+                f"PatchMaskConvMLP input_dim={input_dim} != n_enc({n_enc}) + sat({expected_sat})"
+            )
+        if self.use_mask_channels and c % 2 != 0:
+            raise ValueError(
+                f"use_mask_channels requires even patch_shape channels (value/mask pairs), got c={c}"
+            )
+
+        self.enc_proj = nn.Linear(n_enc, d_model)
+
+        layers = []
+        in_ch = c
+        for out_ch in conv_channels:
+            layers.extend(
+                [
+                    nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1),
+                    nn.GroupNorm(conv_norm_groups, out_ch),
+                    nn.ReLU(inplace=True),
+                ]
+            )
+            in_ch = out_ch
+        # Default [1,1,1] collapses the volume; e.g. [2,2,2] retains coarse structure
+        # at the cost of a larger sat_proj input (last_conv_ch * prod(pool_output)).
+        layers.append(nn.AdaptiveAvgPool3d(self.pool_output))
+        self.conv3d = nn.Sequential(*layers)
+        pool_flat = conv_channels[-1] * math.prod(self.pool_output)
+        self.sat_proj = nn.Linear(pool_flat, d_model)
+
+        if head_layers is not None:
+            widths = list(head_layers)
+        else:
+            widths = [head_hidden] * head_depth
+
+        head_in = d_model if fusion == "add" else 2 * d_model
+        head = []
+        prev = head_in
+        for width in widths:
+            head.extend([nn.Linear(prev, width), nn.ReLU(), nn.Dropout(head_dropout)])
+            prev = width
+        head.append(nn.Linear(prev, output_dim))
+        self.head = nn.Sequential(*head)
+
+    def _unpack_sat_channels(self, sat_flat):
+        """Decode flat satellite block to ``(B, C, T, H, W)``."""
+        b = sat_flat.size(0)
+        c, t, h, w = self.patch_shape
+        per_ch = t * h * w
+        if not self.use_mask_channels:
+            return sat_flat.view(b, c, per_ch).view(b, c, t, h, w)
+        n_pairs = c // 2
+        channels = []
+        for v in range(n_pairs):
+            block = sat_flat[:, v * 2 * per_ch : (v + 1) * 2 * per_ch]
+            channels.append(block[:, 0::2])
+            channels.append(block[:, 1::2])
+        return torch.stack(channels, dim=1).view(b, c, t, h, w)
+
+    def _encode_sat_patch(self, sat_flat):
+        b = sat_flat.size(0)
+        sat_vol = self._unpack_sat_channels(sat_flat)
+        feat = self.conv3d(sat_vol).view(b, -1)
+        return self.sat_proj(feat)
+
+    def forward(self, x):
+        enc = x[:, : self.n_enc]
+        sat_flat = x[:, self.n_enc :]
+        enc_h = self.enc_proj(enc)
+        sat_h = self._encode_sat_patch(sat_flat)
+        if self.fusion == "add":
+            h = enc_h + sat_h
+        else:
+            h = torch.cat([enc_h, sat_h], dim=-1)
         return self.head(h)
 
 

@@ -21,14 +21,14 @@ if str(ROOT) not in sys.path:
 import model.model as module_arch
 from model.loss import make_loss
 from parse_config import ConfigParser, validate_config
-from playground.batch_size import (
+from base.batch_size import (
     default_sweep_sizes,
     measure_throughput,
     pick_best_throughput,
     probe_max_batch_size,
     train_samples_from_cache,
 )
-from playground.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model
+from base.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model
 from train import ensure_cache
 
 
@@ -110,7 +110,7 @@ def print_table(rows: list[dict], max_bs: int, best_bs: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark batch sizes for GPU throughput")
-    parser.add_argument("-c", "--config", default="config_isas_patch.json", type=str)
+    parser.add_argument("-c", "--config", default="config/isas/config_isas_patch.json", type=str)
     parser.add_argument(
         "--sizes",
         default="",

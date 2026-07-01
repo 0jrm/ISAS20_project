@@ -8,7 +8,7 @@ import model.metric as module_metric
 import model.model as module_arch
 from model.loss import make_loss
 from parse_config import ConfigParser
-from playground import prepare_device
+from base.util import prepare_device
 from train import ensure_cache, set_seed
 from types import SimpleNamespace
 

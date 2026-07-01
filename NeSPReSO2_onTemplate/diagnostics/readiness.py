@@ -321,7 +321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.device
 
     from parse_config import ConfigParser, validate_config
-    from playground import read_json
+    from base.util import read_json
 
     cfg = read_json(args.config)
     validate_config(cfg)

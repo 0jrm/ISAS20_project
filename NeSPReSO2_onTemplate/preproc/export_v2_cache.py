@@ -126,11 +126,11 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from playground import read_json
+    from base.util import read_json
     from parse_config import validate_config
 
     parser = argparse.ArgumentParser(description="Export v2 dataset pickle to train-ready cache")
-    parser.add_argument("-c", "--config", required=True, help="config JSON (e.g. config_argo.json)")
+    parser.add_argument("-c", "--config", required=True, help="config JSON (e.g. config/argo/config_argo.json)")
     parser.add_argument("--force", action="store_true", help="rebuild even if cache exists")
     args = parser.parse_args(argv)
     cfg = read_json(args.config)

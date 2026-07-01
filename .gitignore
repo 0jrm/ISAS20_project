@@ -36,7 +36,7 @@ ENV/
 data/
 *.h5
 
-# Model artifacts and run logs (keep playground/run outputs out of git)
+# Model artifacts and run logs (see NeSPReSO2_onTemplate/saved/README.md)
 *.pth
 *_log.txt
 # but keep the shipped NeSPReSO base model

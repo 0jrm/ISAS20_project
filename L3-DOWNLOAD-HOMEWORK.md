@@ -16,7 +16,7 @@ This file is the **user-facing** checklist for finishing L3 surface downloads an
    - `download_l3_products.py`: removed `no_directories` (incompatible with `skip_existing` in `copernicusmarine` 2.1.2).
    - `preproc/l3_rasterize.py`: recursive file discovery (`rglob`) for Copernicus nested subdirs.
    - `preproc/l3_rasterize.py`: longitude normalization (altimetry 0–360° vs ARGO −180–180°).
-3. Pointed `config_argo_l3_smoke.json` → `io.l3.raw_root: /unity/g2/jmiranda/SubsurfaceFields/Data/raw`.
+3. Pointed `config/argo/config_argo_l3_smoke.json` → `io.l3.raw_root: /unity/g2/jmiranda/SubsurfaceFields/Data/raw`.
 4. Installed `cdsapi` in `nespreso` (ERA5 still blocked until you add credentials).
 5. Started a **background 2020 daily SSH download** loop.
 6. Verified non-zero SSH rasterization on five `2020-01-15` profiles (~10–17% patch coverage; nearest track 14–74 km).
@@ -85,7 +85,7 @@ These fixes are in your working tree but not committed:
 |------|--------|
 | `NeSPReSO2_onTemplate/scripts/download_l3_products.py` | Copernicus API compat |
 | `NeSPReSO2_onTemplate/preproc/l3_rasterize.py` | `rglob` + lon normalization |
-| `NeSPReSO2_onTemplate/config_argo_l3_smoke.json` | absolute `raw_root` |
+| `NeSPReSO2_onTemplate/config/argo/config_argo_l3_smoke.json` | absolute `raw_root` |
 | `NeSPReSO2_onTemplate/selfcheck.py` | `test_l3_lon_normalization_gom_bbox` |
 | (+ other branch edits from prior sessions) | L4 augment, export_l3_cache, etc. |
 
@@ -223,11 +223,11 @@ cd NeSPReSO2_onTemplate
 
 # Small smoke (profiles near 2020-01-15)
 srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
-  -c config_argo_l3_smoke.json --max-samples 20 --anchor-date 2020-01-15 --force
+  -c config/argo/config_argo_l3_smoke.json --max-samples 20 --anchor-date 2020-01-15 --force
 
 # Full dataset (4145 profiles) — slow; run when raw coverage is adequate
 srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
-  -c config_argo_l3_smoke.json --export-train-cache --force
+  -c config/argo/config_argo_l3_smoke.json --export-train-cache --force
 ```
 
 Gate — non-zero SSH **and** wind coverage:
@@ -257,7 +257,7 @@ If `ssh == 0` with files present, check lon normalization fix is in your checkou
 ```bash
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
 
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l3_smoke.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/argo/config_argo_l3_smoke.json
 ```
 
 Gate: selfcheck exits 0; train completes 2 epochs under `saved/smoke_argo_l3/`.
@@ -322,7 +322,7 @@ python3 scripts/download_l3_products.py --product era5_wind \
   --year 2020 --month 6 --data-root ~/SubsurfaceFields/Data/raw
 
 # L3 raw coverage report
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo_l3_smoke.json
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config/argo/config_argo_l3_smoke.json
 ```
 
 ---
@@ -351,7 +351,7 @@ Minimum viable (thesis smoke path):
 - [ ] SSH 2020 daily files in `~/SubsurfaceFields/Data/raw/altimetry_l3/`
 - [ ] `build_l3_samples.py --anchor-date 2020-01-15` shows **ssh > 0 and wind_u > 0**
 - [ ] `selfcheck.py` passes
-- [ ] Optional: 2-epoch `config_argo_l3_smoke.json` train completes
+- [ ] Optional: 2-epoch `config/argo/config_argo_l3_smoke.json` train completes
 
 Dissertation training path:
 
@@ -382,7 +382,7 @@ cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project-phase3-co
 for m in $(seq 1 12); do python3 scripts/download_l3_products.py --product era5_wind --year 2020 --month $m --data-root ~/SubsurfaceFields/Data/raw; done
 
 # 2) rebuild cache
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config_argo_l3_smoke.json --max-samples 20 --anchor-date 2020-01-15 --export-train-cache --force
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config/argo/config_argo_l3_smoke.json --max-samples 20 --anchor-date 2020-01-15 --export-train-cache --force
 
 # 3) gate
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py

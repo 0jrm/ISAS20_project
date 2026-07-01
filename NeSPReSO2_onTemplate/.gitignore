@@ -104,6 +104,7 @@ ENV/
 data/
 input/
 saved/
+!saved/README.md
 datasets/
 
 # editor, os cache directory

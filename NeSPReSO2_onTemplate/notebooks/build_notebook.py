@@ -25,13 +25,20 @@ def code(source: str) -> dict:
 
 cells = [
     md(
-        """# NeSPReSO comparison notebook
+        """# NeSPReSO encoding comparison
 
-End-to-end comparison of **ISAS20** vs **ARGO**, **point** vs **patch** surface models, and **PCA** vs **AE** profile representations.
+Compare **PCA-16** vs **AE-128** surface models on a pinned **random 70/15/15** split (seed 42).
 
-All comparison tables use the **same statistics contract** (see Section 1). Scalar RMSE in summary tables uses the **common depth grid** (0–1800 m, 10 m steps) so ISAS (187 native levels) and ARGO (1801 levels) are directly comparable. Native-grid RMSE (matches `eval_run.py`) is reported separately.
+| Group | Models |
+|-------|--------|
+| ISAS | point/patch × PCA-16 / AE-128 |
+| ARGO | PCA-15 vs PCA-16 (point PatchConvMLP) |
 
-**Workflow:** setup → statistics contract → profile PCA/AE → cache → smoke train → eval → depth curves & maps → cross-regime → v2 appendix."""
+**Section 8** compares trained **production** ARGO models: point scalars vs L4 spatio-temporal patches (chronological split).
+
+Scalar RMSE uses the **common depth grid** (0–1800 m, 10 m steps). PCA and AE are compared in **profile RMSE space**, not latent dimension count.
+
+**Workflow:** setup → statistics → compare configs → AE decoder artifacts → caches → train/eval → overlay depth curves → best-model maps → **ARGO production point vs L4** → v2 appendix."""
     ),
     md("## Section 0 — Setup"),
     code(
@@ -39,11 +46,8 @@ All comparison tables use the **same statistics contract** (see Section 1). Scal
 
 import json
 import sys
-import time
-from collections import OrderedDict
 from pathlib import Path
 
-import importlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -67,84 +71,83 @@ V2_CHECKPOINT = Path(
     "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/saved_models/"
     "model_Test Loss: 0.8847_2024-10-09 20:45:20_sat.pth"
 )
-V2_DATASET_PICKLE = Path(
-    "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl"
-)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EVAL_SPLIT = "test"
-TRAIN_EPOCHS = 100  # target epochs for surface models (train or resume if undertrained)
-FORCE_RETRAIN = False  # set True to ignore existing checkpoints and train fresh
-AE_EPOCHS = 50
-N_REPEAT = 5
+MAX_EPOCHS = 2000
+PCA_DIM = 16
+AE_DIM = 128
+FORCE_RETRAIN = False
 
-from nb_configs import AE_DEFAULTS, SURFACE_CONFIG_KEYS, make_config_parser
+from nb_configs import (
+    COMPARE_CONFIG_KEYS,
+    COMPARE_CONFIGS,
+    MANIFEST_PATH,
+    compare_matrix_row,
+    load_manifest,
+    make_compare_config_parser,
+)
 from nb_checkpoints import checkpoint_epoch, resolve_or_train
 from nb_metrics import (
     COMMON_DEPTH_M,
     DEPTH_RANGE_M,
-    STATISTICS,
     statistics_markdown,
-    profile_metrics_from_pcs,
-    representation_metrics_on_split,
-    run_inference,
+    profile_metrics_from_inference,
+    avg_common_rmse,
+    select_best,
+    plot_depth_rmse_overlay,
+    plot_bin_maps_best,
     assert_matches_eval_run,
-    depth_rmse_bias,
-    common_depth_mask,
     split_indices,
 )
 from train import ensure_cache, main as train_main
 from eval_run import main as eval_main
 
+manifest = load_manifest(MANIFEST_PATH)
 print(f"Device: {DEVICE}")
 print(f"Template: {TEMPLATE_ROOT}")
-print(f"Common depth grid: {DEPTH_RANGE_M[0]}–{DEPTH_RANGE_M[1]} m, {len(COMMON_DEPTH_M)} levels")"""
+print(f"Common depth grid: {DEPTH_RANGE_M[0]}–{DEPTH_RANGE_M[1]} m, {len(COMMON_DEPTH_M)} levels")
+if manifest:
+    print(f"Manifest: {MANIFEST_PATH} ({len(manifest.get('runs', []))} runs)")"""
     ),
-    md("## Section 1 — Statistics contract\n\nEvery table and plot in this notebook uses **only** these definitions:"),
+    md("## Section 1 — Statistics contract\n\nEvery table and plot uses **only** these definitions:"),
     code("print(statistics_markdown())"),
-    md("## Section 2 — Inline configs"),
+    md("## Section 2 — Compare config matrix"),
     code(
-        """CONFIGS = {key: make_config_parser(key, template_root=TEMPLATE_ROOT) for key in SURFACE_CONFIG_KEYS}
+        """CONFIGS = {
+    key: make_compare_config_parser(key, template_root=TEMPLATE_ROOT)
+    for key in COMPARE_CONFIG_KEYS
+}
 
+print(f"{'label':16s} {'key':16s} {'tag':8s} {'arch':16s} {'enc':4s} {'latent':>6s} {'epochs':>6s}")
+print("-" * 72)
 for key, cfg in CONFIGS.items():
-    io = cfg.config["io"]
+    row = compare_matrix_row(key, cfg)
     print(
-        f"{key:12s} tag={io['dataset_tag']:8s} arch={cfg.config['arch']['type']:16s} "
-        f"outputs={cfg.config['outputs']} epochs={cfg.config['trainer']['epochs']}"
+        f"{row['label']:16s} {key:16s} {row['tag']:8s} {row['arch']:16s} "
+        f"{row['encoding']:4s} {row['latent_dim']:6d} {row['epochs']:6d}"
     )"""
     ),
     md(
-        """## Section 3 — Profile representation: PCA vs AE
+        """## Section 3 — Profile AE decoders (Phase A)
 
-**Statistic:** `profile_recon_rmse` on the **test split** only, native depths, NaN-masked.
+ISAS surface AE models use frozen decoders trained once via
+`scripts/run_encoding_compare_train.sh` Phase A → `saved/decoders/isas20/Autoencoder_dim128/`.
 
-Compares PCA-X vs AE-X bottleneck reconstruction (not surface-model prediction)."""
+No inline throwaway AE training in this notebook."""
     ),
     code(
-        """repr_rows = []
-for key in ("isas_patch", "argo_point"):
-    cfg = CONFIGS[key]
-    ensure_cache(cfg)
-    cache_path = cfg.config["data_loader"]["args"]["cache_path"]
-    import pickle
-    with open(cache_path, "rb") as f:
-        cache = pickle.load(f)
-    tag = cache.get("dataset_tag", key)
-    for row in representation_metrics_on_split(
-        cache, EVAL_SPLIT, encoding_dim=AE_DEFAULTS["encoding_dim"],
-        ae_epochs=AE_EPOCHS, device=DEVICE, seed=cfg.config.get("seed", 42),
-    ):
-        row["config_key"] = key
-        row["dataset_tag"] = tag
-        repr_rows.append(row)
-
-print(f"{'tag':10s} {'var':12s} {'PCA':>10s} {'AE':>10s} {'AE/PCA':>8s}")
-print("-" * 44)
-for r in repr_rows:
-    print(
-        f"{r['dataset_tag']:10s} {r['variable']:12s} {r['pca_recon_rmse']:10.4f} "
-        f"{r['ae_recon_rmse']:10.4f} {r['ae_over_pca']:8.3f}"
-    )"""
+        """AE_SUMMARY = TEMPLATE_ROOT / "saved/decoders/isas20/Autoencoder_dim128/summary.json"
+if AE_SUMMARY.is_file():
+    ae_doc = json.loads(AE_SUMMARY.read_text())
+    print(f"AE arch={ae_doc.get('arch')} dim={ae_doc.get('encoding_dim')} cache={Path(ae_doc.get('cache', '')).name}")
+    for var, stats in ae_doc.get("variables", {}).items():
+        print(
+            f"  {var:12s} val_rmse={stats.get('val_rmse', float('nan')):.4f}  "
+            f"PCA baseline={stats.get('pca_recon_rmse', float('nan')):.4f}"
+        )
+else:
+    print(f"No AE summary at {AE_SUMMARY} — run scripts/run_encoding_compare_train.sh Phase A first")"""
     ),
     md("## Section 4 — Build caches"),
     code(
@@ -159,16 +162,17 @@ for key, cfg in CONFIGS.items():
     n = cache["inputs"].shape[0]
     n_z = prof.shape[0] if prof.shape[1] == n else prof.shape[1]
     print(
-        f"{key}: N={cache['inputs'].shape[0]}, native_depths={n_z}, "
+        f"{key}: N={n}, native_depths={n_z}, tag={cache.get('dataset_tag')}, "
         f"cache={Path(path).name}"
     )"""
     ),
     md(
-        """## Section 5 — Resolve checkpoints (discover or train)
+        """## Section 5 — Resolve checkpoints (compare runs only)
 
-Search order: known GoM paths → `saved/models/<exper>/…/model_best.pth` → notebook save dir.
+Search order: `saved/compare_runs/<key>/model_best.pth` → config save dir.
 
-Discovers the newest checkpoint; reuses it when it already reached **`TRAIN_EPOCHS`** (100). Otherwise resumes or trains to that target with `monitor=min val_loss` (or when `FORCE_RETRAIN=True`, trains fresh)."""
+Reuses checkpoints that reached **`MAX_EPOCHS`**; otherwise resumes/trains with `monitor=min val_loss`.
+Production `KNOWN_CHECKPOINTS` are **not** used in compare mode."""
     ),
     code(
         """checkpoints = {}
@@ -179,9 +183,10 @@ for key, cfg in CONFIGS.items():
         key,
         cfg,
         train_fn=train_main,
-        max_epochs=TRAIN_EPOCHS,
+        max_epochs=MAX_EPOCHS,
         template_root=TEMPLATE_ROOT,
         force_train=FORCE_RETRAIN,
+        compare=True,
     )
     checkpoints[key] = ckpt
     checkpoint_source[key] = src
@@ -192,174 +197,238 @@ for key, cfg in CONFIGS.items():
     md(
         """## Section 6 — Inference & scalar metrics
 
-**Primary comparison table** uses `raw_profile_rmse_common` (common 0–1800 m grid, 181 levels, 10 m step).
+**Primary table:** `raw_profile_rmse_common` on the common 0–1800 m grid.
 
-| Column | Statistic | Use |
-|--------|-----------|-----|
-| `T_common` / `S_common` | `raw_profile_rmse_common` | **Cross-model / cross-dataset** comparison |
-| `T_native` / `S_native` | `raw_profile_rmse_native` | Matches `eval_run.py` on native PRES grid |
-
-All rows use split=`test`, seed=42, fractions 70/15/15."""
+`avg_common_rmse` = mean(T, S) common RMSE — used to rank best model within ISAS / ARGO."""
     ),
     code(
-        """import importlib
-import nb_metrics
-
-importlib.reload(nb_metrics)
-
-summary_rows = []
+        """summary_rows = []
 
 for key, cfg in CONFIGS.items():
     ckpt = checkpoints.get(key)
     if ckpt is None or not Path(ckpt).exists():
-        print(f"{key}: no checkpoint — re-run Section 5")
+        print(f"{key}: no checkpoint — re-run Section 5 or scripts/run_encoding_compare_train.sh")
         continue
 
-    inf = nb_metrics.run_inference(cfg, str(ckpt), split=EVAL_SPLIT, device=DEVICE)
-    metrics = nb_metrics.profile_metrics_from_pcs(
-        inf["pcs"], inf["indices"], inf["cache"], inf["pca_models"], inf["outputs"]
-    )
+    spec = COMPARE_CONFIGS[key]
+    metrics = profile_metrics_from_inference(cfg, str(ckpt), split=EVAL_SPLIT, device=DEVICE)
     eval_report = eval_main(cfg, str(ckpt), split=EVAL_SPLIT)
 
     row = {
-        "config": key,
-        "tag": inf["dataset_tag"],
+        "key": key,
+        "label": spec.label,
+        "group": spec.group,
+        "tag": metrics["inference"]["dataset_tag"],
         "arch": cfg.config["arch"]["type"],
-        "n_test": inf["n_samples"],
+        "encoding": spec.encoding,
+        "n_test": metrics["inference"]["n_samples"],
+        "metrics": metrics,
         "T_rmse_common": metrics["raw_profile_rmse_common"]["temperature"],
         "S_rmse_common": metrics["raw_profile_rmse_common"]["salinity"],
         "T_rmse_native": metrics["raw_profile_rmse_native"]["temperature"],
         "S_rmse_native": metrics["raw_profile_rmse_native"]["salinity"],
+        "avg_common_rmse": avg_common_rmse(metrics),
         "loss": eval_report["loss"],
     }
     summary_rows.append(row)
 
     try:
-        nb_metrics.assert_matches_eval_run(cfg, str(ckpt), metrics["raw_profile_rmse_native"], split=EVAL_SPLIT)
+        assert_matches_eval_run(cfg, str(ckpt), metrics["raw_profile_rmse_native"], split=EVAL_SPLIT)
         row["eval_run_ok"] = True
     except AssertionError as e:
         row["eval_run_ok"] = False
         print(f"eval_run cross-check {key}: {e}")
 
 print()
-hdr = f"{'config':12s} {'tag':8s} {'T_common':>10s} {'S_common':>10s} {'T_native':>10s} {'S_native':>10s}"
+hdr = f"{'label':16s} {'enc':4s} {'avg':>8s} {'T_com':>8s} {'S_com':>8s} {'T_nat':>8s} {'S_nat':>8s}"
 print(hdr)
 print("-" * len(hdr))
-for r in summary_rows:
+for r in sorted(summary_rows, key=lambda x: (x["group"], x["avg_common_rmse"])):
     print(
-        f"{r['config']:12s} {r['tag']:8s} {r['T_rmse_common']:10.4f} {r['S_rmse_common']:10.4f} "
-        f"{r['T_rmse_native']:10.4f} {r['S_rmse_native']:10.4f}"
-    )"""
-    ),
-    md(
-        """## Section 7 — Depth curves & spatial maps
+        f"{r['label']:16s} {r['encoding']:4s} {r['avg_common_rmse']:8.4f} "
+        f"{r['T_rmse_common']:8.4f} {r['S_rmse_common']:8.4f} "
+        f"{r['T_rmse_native']:8.4f} {r['S_rmse_native']:8.4f}"
+    )
 
-Depth curves use `depth_rmse` / `depth_bias` on the **common grid** (same range for all models).
-
-Maps bin spatial RMSE on the same depth-integrated residual field."""
+best_isas = select_best(summary_rows, "isas")
+best_argo = select_best(summary_rows, "argo")
+if best_isas:
+    print(f"\\nBest ISAS: {best_isas['label']} avg_common={best_isas['avg_common_rmse']:.4f}")
+if best_argo:
+    print(f"Best ARGO: {best_argo['label']} avg_common={best_argo['avg_common_rmse']:.4f}")"""
     ),
+    md("## Section 7 — Depth RMSE overlay (all 6 models)"),
     code(
-        """if not summary_rows:
-    print("No checkpoints — skip plots")
+        """if summary_rows:
+    plot_depth_rmse_overlay(summary_rows)
 else:
-    import importlib
-    import nb_metrics
-
-    importlib.reload(nb_metrics)
-    align_profiles_to_depth = nb_metrics.align_profiles_to_depth
-    common_depth_mask = nb_metrics.common_depth_mask
-
-    for row in summary_rows:
-        key = row["config"]
-        cfg = CONFIGS[key]
-        ckpt = checkpoints[key]
-        inf = nb_metrics.run_inference(cfg, str(ckpt), split=EVAL_SPLIT, device=DEVICE)
-        m = nb_metrics.profile_metrics_from_pcs(
-            inf["pcs"], inf["indices"], inf["cache"], inf["pca_models"], inf["outputs"]
-        )
-        z = m["depth_m_common"]
-
-        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-        fig.suptitle(
-            f"{key} ({row['tag']}) — common grid {DEPTH_RANGE_M[0]}–{DEPTH_RANGE_M[1]} m",
-            fontweight="bold",
-        )
-        for ax, var, title, unit in [
-            (axes[0, 0], "temperature", "Temperature RMSE", "RMSE [°C]"),
-            (axes[0, 1], "salinity", "Salinity RMSE", "RMSE [PSU]"),
-            (axes[1, 0], "temperature", "Temperature bias", "Bias [°C]"),
-            (axes[1, 1], "salinity", "Salinity bias", "Bias [PSU]"),
-        ]:
-            if "RMSE" in title:
-                ax.plot(m["depth_stats"][var]["rmse"], z, lw=2)
-            else:
-                ax.plot(m["depth_stats"][var]["bias"], z, lw=2)
-            ax.invert_yaxis()
-            ax.set_title(title)
-            ax.set_xlabel(unit)
-            ax.set_ylabel("Depth [m]")
-            ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()"""
-    ),
-    code(
-        """# Spatial maps (1° bins) on common-grid depth-integrated residuals
-if summary_rows:
-    sys.path.insert(0, str(V2_REPO / "src"))
-    from nespreso.viz.maps import plot_bin_map
-    from nb_metrics import bin_map_scalar_rmse
-
-    for row in summary_rows:
-        key = row["config"]
-        cfg = CONFIGS[key]
-        ckpt = checkpoints[key]
-        inf = nb_metrics.run_inference(cfg, str(ckpt), split=EVAL_SPLIT, device=DEVICE)
-        m = nb_metrics.profile_metrics_from_pcs(
-            inf["pcs"], inf["indices"], inf["cache"], inf["pca_models"], inf["outputs"]
-        )
-        idx = inf["indices"]
-        lon = inf["cache"]["LON"][idx]
-        lat = inf["cache"]["LAT"][idx]
-        pred_c = align_profiles_to_depth(m["pred_profiles"]["temperature"], m["z_native"])[common_depth_mask()]
-        true_c = align_profiles_to_depth(m["true_profiles"]["temperature"], m["z_native"])[common_depth_mask()]
-
-        lon_bins, lat_bins, grid_rmse, nprof = bin_map_scalar_rmse(lon, lat, pred_c, true_c)
-        plot_bin_map(lon_bins, lat_bins, grid_rmse, nprof, "Temperature", "RMSE (common grid)")"""
+    print("No checkpoints — skip overlay")"""
     ),
     md(
-        """## Section 8 — v2 appendix (forward parity)
-
-The bundled v2 checkpoint is **9 inputs → 512 → 512 → 30 outputs** (15+15 PCs). It does **not** match
-current `argo_point` (16+16 = 32 outputs). This cell infers dims from the checkpoint and uses the
-`isas_point` cache (9-dim inputs) for the val-split forward pass."""
+        """## Section 7b — Spatial maps (best ISAS + best ARGO only)"""
     ),
     code(
-        """# v2 vs template forward pass — PCS should match ~1e-6
-if V2_REPO.exists() and V2_CHECKPOINT.exists():
-    sys.path.insert(0, str(V2_REPO / "src"))
-    from nespreso.models.mlp import PredictionModel as V2PredictionModel
+        """if summary_rows:
+    plot_bin_maps_best(best_isas, best_argo)
+else:
+    print("No checkpoints — skip maps")"""
+    ),
+    md(
+        """## Section 8 — ARGO production: point vs L4 patch
+
+Compare **trained production** checkpoints (not compare-run re-trains):
+
+| Model | Arch | Inputs | Split |
+|-------|------|--------|-------|
+| ARGO-point | `PatchConvMLP` | scalar SSS/SST/SSH | chronological 70/15/15 |
+| ARGO-L4-patch | `PatchMaskConvMLP` | 5×5×7-day L4 patches + basin + bathy | chronological 70/15/15 |
+
+Checkpoints: `saved/models/NeSPReSO2_ARGO_GoM/` vs `saved/models/NeSPReSO2_ARGO_GoM_patch_l4/`."""
+    ),
+    code(
+        """from nb_configs import (
+    PRODUCTION_ARGO_KEYS,
+    PRODUCTION_ARGO_SPECS,
+    make_production_config_parser,
+    production_argo_matrix_row,
+)
+from nb_checkpoints import checkpoint_epoch, discover_checkpoint
+
+ARGO_PROD = {
+    key: make_production_config_parser(key, template_root=TEMPLATE_ROOT)
+    for key in PRODUCTION_ARGO_KEYS
+}
+
+print(f"{'label':16s} {'tag':10s} {'arch':18s} {'split':14s}")
+print("-" * 62)
+for key, cfg in ARGO_PROD.items():
+    row = production_argo_matrix_row(key, cfg)
+    print(f"{row['label']:16s} {row['tag']:10s} {row['arch']:18s} {row['split_mode']:14s}")
+
+argo_prod_ckpts = {}
+for key, cfg in ARGO_PROD.items():
+    ckpt = discover_checkpoint(key, cfg, template_root=TEMPLATE_ROOT)
+    if ckpt is None:
+        print(f"{key}: no checkpoint — train with config/argo/config_argo*.json first")
+        continue
+    argo_prod_ckpts[key] = ckpt
+    done = checkpoint_epoch(ckpt)
+    epoch_note = f" (epoch {done})" if done is not None else ""
+    print(f"{key}: {ckpt}{epoch_note}")"""
+    ),
+    code(
+        """argo_prod_rows = []
+
+for key, cfg in ARGO_PROD.items():
+    ckpt = argo_prod_ckpts.get(key)
+    if ckpt is None:
+        continue
+    label = PRODUCTION_ARGO_SPECS[key][0]
+    cache_path = ensure_cache(cfg)
+    metrics = profile_metrics_from_inference(cfg, str(ckpt), split=EVAL_SPLIT, device=DEVICE)
+    eval_report = eval_main(cfg, str(ckpt), split=EVAL_SPLIT)
+    row = {
+        "key": key,
+        "label": label,
+        "group": "argo",
+        "tag": metrics["inference"]["dataset_tag"],
+        "arch": cfg.config["arch"]["type"],
+        "n_test": metrics["inference"]["n_samples"],
+        "metrics": metrics,
+        "T_rmse_common": metrics["raw_profile_rmse_common"]["temperature"],
+        "S_rmse_common": metrics["raw_profile_rmse_common"]["salinity"],
+        "T_rmse_native": metrics["raw_profile_rmse_native"]["temperature"],
+        "S_rmse_native": metrics["raw_profile_rmse_native"]["salinity"],
+        "avg_common_rmse": avg_common_rmse(metrics),
+        "loss": eval_report["loss"],
+        "checkpoint": str(ckpt),
+        "cache": cache_path,
+    }
+    argo_prod_rows.append(row)
+    try:
+        assert_matches_eval_run(cfg, str(ckpt), metrics["raw_profile_rmse_native"], split=EVAL_SPLIT)
+        row["eval_run_ok"] = True
+    except AssertionError as e:
+        row["eval_run_ok"] = False
+        print(f"eval_run cross-check {key}: {e}")
+
+print()
+hdr = f"{'label':16s} {'tag':10s} {'avg':>8s} {'T_com':>8s} {'S_com':>8s} {'T_nat':>8s} {'S_nat':>8s}"
+print(hdr)
+print("-" * len(hdr))
+for r in sorted(argo_prod_rows, key=lambda x: x["avg_common_rmse"]):
+    print(
+        f"{r['label']:16s} {r['tag']:10s} {r['avg_common_rmse']:8.4f} "
+        f"{r['T_rmse_common']:8.4f} {r['S_rmse_common']:8.4f} "
+        f"{r['T_rmse_native']:8.4f} {r['S_rmse_native']:8.4f}"
+    )
+
+if len(argo_prod_rows) == 2:
+    pt = next(r for r in argo_prod_rows if r["key"] == "argo_point")
+    l4 = next(r for r in argo_prod_rows if r["key"] == "argo_patch_l4")
+    delta = l4["avg_common_rmse"] - pt["avg_common_rmse"]
+    pct = 100.0 * delta / pt["avg_common_rmse"]
+    winner = l4["label"] if delta < 0 else pt["label"]
+    print(f"\\nΔ avg_common (L4 − point): {delta:+.4f} ({pct:+.1f}%) — lower is better → {winner}")"""
+    ),
+    code(
+        """if argo_prod_rows:
+    plot_depth_rmse_overlay(
+        argo_prod_rows,
+        colors={"argo_point": "#1f77b4", "argo_patch_l4": "#d62728"},
+        out_path=TEMPLATE_ROOT / "notebooks" / "compare_outputs" / "argo_production_depth_rmse.png",
+    )
+    argo_out = TEMPLATE_ROOT / "notebooks" / "compare_outputs" / "argo_production_results.json"
+    argo_out.parent.mkdir(exist_ok=True)
+    serializable = [
+        {
+            "key": r["key"],
+            "label": r["label"],
+            "tag": r["tag"],
+            "arch": r["arch"],
+            "checkpoint": r["checkpoint"],
+            "cache": str(r["cache"]),
+            "n_test": r["n_test"],
+            "avg_common_rmse": r["avg_common_rmse"],
+            "raw_profile_rmse_common": r["metrics"]["raw_profile_rmse_common"],
+            "raw_profile_rmse_native": r["metrics"]["raw_profile_rmse_native"],
+            "loss": r["loss"],
+        }
+        for r in argo_prod_rows
+    ]
+    argo_out.write_text(json.dumps({"eval_split": EVAL_SPLIT, "models": serializable}, indent=2) + "\\n")
+    print(f"Saved {argo_out}")
+else:
+    print("No ARGO production checkpoints — skip depth overlay")"""
+    ),
+    md(
+        """## Section 9 — v2 appendix (forward parity)
+
+Legacy v2 checkpoint (9 inputs → 30 outputs) vs template `PredictionModel` on ISAS point cache."""
+    ),
+    code(
+        """if V2_REPO.exists() and V2_CHECKPOINT.exists():
     from model.model import PredictionModel as TemplatePredictionModel
     from torch.utils.data import DataLoader, Subset
     from data_loader.data_loaders import NeSPReSODataset, _collate_with_index
     from nb_metrics import v2_checkpoint_dims
 
+    sys.path.insert(0, str(V2_REPO / "src"))
+    from nespreso.models.mlp import PredictionModel as V2PredictionModel
+
     ckpt = torch.load(V2_CHECKPOINT, map_location="cpu", weights_only=False)
     input_dim, layers, out_dim = v2_checkpoint_dims(ckpt)
-    dropout = 0.2
     print(f"v2 checkpoint: input_dim={input_dim}, layers={layers}, output_dim={out_dim}")
 
-    # isas_point cache has 9-dim inputs (point mode); matches v2 ckpt architecture
-    cfg = CONFIGS["isas_point"]
-    ensure_cache(cfg)
+    cfg_legacy = make_compare_config_parser("isas_pt_pca16", template_root=TEMPLATE_ROOT)
+    ensure_cache(cfg_legacy)
     import pickle
-    with open(cfg.config["data_loader"]["args"]["cache_path"], "rb") as f:
+    with open(cfg_legacy.config["data_loader"]["args"]["cache_path"], "rb") as f:
         cache = pickle.load(f)
     if cache["inputs"].shape[1] != input_dim:
-        raise ValueError(
-            f"cache input_dim {cache['inputs'].shape[1]} != checkpoint {input_dim}"
-        )
+        raise ValueError(f"cache input_dim {cache['inputs'].shape[1]} != checkpoint {input_dim}")
 
-    val_idx = split_indices(cache, "val")
+    val_idx = split_indices(cache, "val", dl_args=cfg_legacy.config["data_loader"]["args"])
     ds = NeSPReSODataset(
         torch.tensor(cache["inputs"], dtype=torch.float32),
         torch.tensor(cache["targets"], dtype=torch.float32),
@@ -368,8 +437,8 @@ if V2_REPO.exists() and V2_CHECKPOINT.exists():
         Subset(ds, val_idx.tolist()), batch_size=512, shuffle=False, collate_fn=_collate_with_index
     )
 
-    v2m = V2PredictionModel(input_dim, layers, out_dim, dropout)
-    tplm = TemplatePredictionModel(input_dim, layers, out_dim, dropout)
+    v2m = V2PredictionModel(input_dim, layers, out_dim, 0.2)
+    tplm = TemplatePredictionModel(input_dim, layers, out_dim, 0.2)
     v2m.load_state_dict(ckpt["model_state_dict"])
     tplm.load_state_dict(ckpt["model_state_dict"])
     v2m.eval().to(DEVICE)
@@ -388,13 +457,6 @@ else:
     print("v2 repo/checkpoint not found — skip appendix")"""
     ),
 ]
-
-# fix section 4 indentation (no-op guard removed)
-for i, c in enumerate(cells):
-    if c["cell_type"] == "code" and "align_profiles_to_depth" in "".join(c["source"]):
-        src = c["source"]
-        if "from nb_metrics import" not in "".join(src):
-            c["source"] = ["from nb_metrics import align_profiles_to_depth, common_depth_mask\n"] + src
 
 nb = {
     "nbformat": 4,

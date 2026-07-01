@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CONFIG="${1:-config_isas.json}"
+CONFIG="${1:-config/isas/config_isas.json}"
 OUT_DIR="saved/benchmarks"
 mkdir -p "$OUT_DIR"
 STAMP=$(date +%Y%m%d_%H%M%S)

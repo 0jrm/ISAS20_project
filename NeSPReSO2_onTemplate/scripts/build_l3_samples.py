@@ -12,13 +12,13 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from parse_config import validate_config
-from playground import read_json
+from base.util import read_json
 from preproc.export_l3_cache import build_argo_l3_train_cache, build_l3_processed_batch
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rasterize L3 SSH + ERA5 wind around ARGO profiles")
-    parser.add_argument("-c", "--config", required=True, help="config JSON (e.g. config_argo_l3_smoke.json)")
+    parser.add_argument("-c", "--config", required=True, help="config JSON (e.g. config/argo/config_argo_l3_smoke.json)")
     parser.add_argument("--max-samples", type=int, default=None, help="limit number of profiles")
     parser.add_argument("--anchor-date", default="2020-01-15", help="pick nearest profiles to this date")
     parser.add_argument("--force", action="store_true", help="rebuild even if output exists")

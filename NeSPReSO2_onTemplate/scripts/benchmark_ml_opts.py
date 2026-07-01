@@ -28,7 +28,7 @@ import model.model as module_arch
 from data_loader.data_loaders import _collate_with_index
 from model.loss import make_loss
 from parse_config import ConfigParser, validate_config
-from playground.performance import (
+from base.performance import (
     BENCHMARK_VARIANTS,
     VariantSpec,
     apply_backend_settings,
@@ -446,7 +446,7 @@ def main():
     global WARMUP_EPOCHS, TIMED_EPOCHS
 
     parser = argparse.ArgumentParser(description="Benchmark ML optimization variants")
-    parser.add_argument("-c", "--config", default="config_isas.json", type=str)
+    parser.add_argument("-c", "--config", default="config/isas/config_isas.json", type=str)
     parser.add_argument("--variant", default="all", type=str, help="all | ddp | <variant_name>")
     parser.add_argument("--warmup-epochs", type=int, default=WARMUP_EPOCHS)
     parser.add_argument("--timed-epochs", type=int, default=TIMED_EPOCHS)

@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 import numpy as np
 import torch
-from base import BaseTrainer
-from playground import MetricTracker
-from playground.performance import autocast_dtype_from_name
+from base.base_trainer import BaseTrainer
+from base.util import MetricTracker
+from base.performance import autocast_dtype_from_name
 
 
 class Trainer(BaseTrainer):
@@ -41,7 +41,7 @@ class Trainer(BaseTrainer):
         if len_epoch is None:
             self.len_epoch = len(self.data_loader)
         else:
-            from playground import inf_loop
+            from base.util import inf_loop
 
             self.data_loader = inf_loop(data_loader)
             self.len_epoch = len_epoch

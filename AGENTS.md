@@ -36,8 +36,8 @@ Always cap CPU scope:
 ```bash
 cd NeSPReSO2_onTemplate
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo.json
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config/argo/config_argo.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/argo/config_argo.json
 ```
 
 GPU training: add `--gres=gpu:1`. See [`NeSPReSO2_onTemplate/README.md`](NeSPReSO2_onTemplate/README.md).

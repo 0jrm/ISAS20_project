@@ -27,7 +27,7 @@ Run the census:
 
 ```bash
 cd NeSPReSO2_onTemplate
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config/argo/config_argo.json
 ```
 
 Inspect `reports/split_design.md`. For the current GoM ARGO export:
@@ -40,9 +40,9 @@ Inspect `reports/split_design.md`. For the current GoM ARGO export:
 | D (test = 2015–2018 sparse era) | Yes | Low-observation stress test |
 | E (2015–19 / 2020 / 2021) | Yes | Common-overlap explicit dates |
 
-**Recommended default:** Candidate B (`config_argo.json` with `split_mode: chronological`).
+**Recommended default:** Candidate B (`config/argo/config_argo.json` with `split_mode: chronological`).
 
-**Explicit date alternative:** `config_argo_chrono_dates.json` (Candidate E).
+**Explicit date alternative:** `config/argo/config_argo_chrono_dates.json` (Candidate E).
 
 ## High/low data-regime subsets
 
@@ -58,13 +58,13 @@ Use these for stratified evaluation once L3 coverage metrics exist.
 
 | Task | Command |
 |------|---------|
-| Data census | `python3 scripts/data_census.py -c config_argo.json` |
-| ARGO smoke train | `python3 train.py -c config_argo_smoke.json` |
-| ARGO baseline train | `python3 train.py -c config_argo.json` |
-| ARGO eval | `python3 eval_run.py -c config_argo.json -r <checkpoint> --out saved/eval.json` |
+| Data census | `python3 scripts/data_census.py -c config/argo/config_argo.json` |
+| ARGO smoke train | `python3 train.py -c config/argo/config_argo_smoke.json` |
+| ARGO baseline train | `python3 train.py -c config/argo/config_argo.json` |
+| ARGO eval | `python3 eval_run.py -c config/argo/config_argo.json -r <checkpoint> --out saved/eval.json` |
 | L3 download list | `python3 scripts/download_l3_products.py --product all_scaffold` |
 | L3 SSH sample day | `python3 scripts/download_l3_products.py --product ssh_l3_historical --date 2020-01-15` |
-| L3 rasterization smoke | `python3 scripts/build_l3_samples.py -c config_argo_l3_smoke.json --max-samples 20` |
+| L3 rasterization smoke | `python3 scripts/build_l3_samples.py -c config/argo/config_argo_l3_smoke.json --max-samples 20` |
 
 L3 sample generation rasterizes Copernicus L3 SSH + ERA5 wind around ARGO targets into mask-native bundles (`value`, `mask`, `age`, `uncertainty`, `count`). SST/SMAP deferred.
 
@@ -99,7 +99,7 @@ Explicit date ranges:
 
 ## L4 augmentation
 
-Enabled via `io.l4` in L3 configs (`config_argo_l3_l4_smoke.json`). Applies real L3 mask geometry to L4 DUACS SSH fields with source-flag metadata. See [`HANDOFF.md`](HANDOFF.md).
+Enabled via `io.l4` in L3 configs (`config/argo/config_argo_l3_l4_smoke.json`). Applies real L3 mask geometry to L4 DUACS SSH fields with source-flag metadata. See [`HANDOFF.md`](HANDOFF.md).
 
 ## L3 model inputs (Phase 5)
 

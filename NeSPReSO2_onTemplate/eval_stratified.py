@@ -28,7 +28,7 @@ from nb_metrics import (  # noqa: E402
     run_inference,
 )
 from parse_config import ConfigParser, validate_config
-from playground import read_json
+from base.util import read_json
 
 # ponytail: fixed bins; upgrade path = data-driven quantiles when n is large
 COVERAGE_BIN_EDGES = (0.0, 1e-6, 0.01, 0.05, 1.0)

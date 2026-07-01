@@ -8,7 +8,7 @@ The session in transcript `226fab9d` (Jun 18) completed through **PLAN commit or
 |------|--------|---------------|
 | 0–2 Data census, chronological split, ARGO path | **Done** | `base/split_utils.py`, `scripts/data_census.py`, ARGO configs with `split_mode: chronological` |
 | 7 L3 downloader scaffolding | **Done** | `scripts/download_l3_products.py` |
-| 8–9 L3 rasterization + masked batch loading | **Done** | `preproc/l3_rasterize.py`, `preproc/export_l3_cache.py`, `scripts/build_l3_samples.py`, `config_argo_l3_smoke.json` |
+| 8–9 L3 rasterization + masked batch loading | **Done** | `preproc/l3_rasterize.py`, `preproc/export_l3_cache.py`, `scripts/build_l3_samples.py`, `config/argo/config_argo_l3_smoke.json` |
 
 **Next per HANDOFF.md and PLAN.md MVP:** L3 SSH + ERA5 wind mask-native pipeline (SST/SMAP deferred).
 
@@ -22,7 +22,7 @@ The session in transcript `226fab9d` (Jun 18) completed through **PLAN commit or
 
 ## Implementation plan
 
-### 1. Config block (`io.l3` + `config_argo_l3_smoke.json`)
+### 1. Config block (`io.l3` + `config/argo/config_argo_l3_smoke.json`)
 
 ### 2. Core rasterization (`preproc/l3_rasterize.py`)
 
@@ -43,5 +43,5 @@ cd NeSPReSO2_onTemplate
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
 python3 scripts/download_l3_products.py --product ssh_l3_historical --date 2020-01-15
 python3 scripts/download_l3_products.py --product era5_wind --year 2020 --month 1
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config_argo_l3_smoke.json --max-samples 20
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py -c config/argo/config_argo_l3_smoke.json --max-samples 20
 ```

@@ -9,13 +9,13 @@ description: Train, cache-build, eval, and agent-monitor NeSPReSO dual-dataset r
 
 1. Read [`HANDOFF.md`](../../../HANDOFF.md) and [`PLAN-dissertation-data-foundation.md`](../../../PLAN-dissertation-data-foundation.md).
 2. Edit machine paths in config JSON (`io.data_path`, `io.v2_pickle`, `io.v2_src`) — never hardcode in Python.
-3. Run data census if splits are uncertain: `python3 scripts/data_census.py -c config_argo.json`
+3. Run data census if splits are uncertain: `python3 scripts/data_census.py -c config/argo/config_argo.json`
 4. Build caches if missing:
 
 ```bash
 cd NeSPReSO2_onTemplate
-srun --ntasks=1 --cpus-per-task=8 python3 preproc/preproc_isas_sat.py cache config_isas.json --force
-srun --ntasks=1 --cpus-per-task=8 python3 preproc/export_v2_cache.py -c config_argo.json --force
+srun --ntasks=1 --cpus-per-task=8 python3 preproc/preproc_isas_sat.py cache config/isas/config_isas.json --force
+srun --ntasks=1 --cpus-per-task=8 python3 preproc/export_v2_cache.py -c config/argo/config_argo.json --force
 ```
 
 `train.py` calls `ensure_cache()` automatically; `--force` only when inputs or `config_hash` inputs change.
@@ -23,12 +23,12 @@ srun --ntasks=1 --cpus-per-task=8 python3 preproc/export_v2_cache.py -c config_a
 ## Train
 
 ```bash
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_isas_patch.json -id my_run_id
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo.json -id my_run_id
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/isas/config_isas_patch.json -id my_run_id
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/argo/config_argo.json -id my_run_id
 ```
 
 - `batch_size: 0` auto-probes VRAM; GoM often → 1 batch/epoch.
-- `config_argo.json` keeps `batch_size: 512` for v2 parity unless user says otherwise.
+- `config/argo/config_argo.json` keeps `batch_size: 512` for v2 parity unless user says otherwise.
 - Stdout sentinels: `NESPRO_TRAIN_EPOCH`, `NESPRO_TRAIN_DONE`, `NESPRO_TRAIN_FAIL`.
 - Status: `{save_dir}/status.json`.
 
@@ -47,7 +47,7 @@ ponytail: parallel launch when ≥2 idle GPUs (`nvidia-smi` util < 10%); upgrade
 
 ```bash
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 \
-  python3 eval_run.py -c config_argo.json \
+  python3 eval_run.py -c config/argo/config_argo.json \
   -r saved/models/NeSPReSO2_ARGO_GoM/my_run_id/model_best.pth \
   --out /tmp/eval.json
 ```

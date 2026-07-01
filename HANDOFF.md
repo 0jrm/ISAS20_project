@@ -14,7 +14,7 @@
 
 ## What this branch is
 
-GoM dissertation NeSPReSO: **ARGO/CORA subsurface targets**, **mask-native L3 surface inputs** (not L4 gridded truth), **chronological splits**. Legacy ISAS production (`config_isas_patch.json`, PCA-16) lives on `nespreso-v2-port` and is not replaced by this work.
+GoM dissertation NeSPReSO: **ARGO/CORA subsurface targets**, **mask-native L3 surface inputs** (not L4 gridded truth), **chronological splits**. Legacy ISAS production (`config/isas/config_isas_patch.json`, PCA-16) lives on `nespreso-v2-port` and is not replaced by this work.
 
 ---
 
@@ -48,8 +48,8 @@ ISAS production baseline (`patch16_scales`): T **1.016** / S **5.318**. Not the 
 
 GoM ARGO export spans **2015–2022** (4145 profiles), not 2002–2020. Candidate A (2002–2015 train) is **empty**.
 
-**Default dissertation split:** chronological **70/15/15** (`config_argo.json`, no `split_config`).  
-**Explicit dates alternative:** `config_argo_chrono_dates.json` (Candidate E).  
+**Default dissertation split:** chronological **70/15/15** (`config/argo/config_argo.json`, no `split_config`).  
+**Explicit dates alternative:** `config/argo/config_argo_chrono_dates.json` (Candidate E).  
 See `reports/split_design.md` for high/low observation stress subsets (2020 peak vs 2015–2018 sparse).
 
 ---
@@ -64,7 +64,7 @@ See `reports/split_design.md` for high/low observation stress subsets (2020 peak
 | Time bins | 5 windows: 0, 24, 72, 168, 336 h (`temporal_pad=4`) |
 | PatchConvMLP shape | `(C,T,H,W) = (15, 5, 25, 25)` |
 | Input dim | **46881** = 6 encodings + 15×5×25×25 |
-| Legacy ARGO point mode | `config_argo.json` — still 9-D L4 COAPS inputs |
+| Legacy ARGO point mode | `config/argo/config_argo.json` — still 9-D L4 COAPS inputs |
 
 **Cache naming:** `data/cache/train_ready_l3_<config_hash>_<l3_hash>.pkl`  
 **Processed samples:** `data/processed/l3_samples_<l3_hash>.pkl`
@@ -83,10 +83,10 @@ cd NeSPReSO2_onTemplate
 srun --ntasks=1 --cpus-per-task=8 python3 selfcheck.py
 
 # Census + split reports
-srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config_argo.json
+srun --ntasks=1 --cpus-per-task=8 python3 scripts/data_census.py -c config/argo/config_argo.json
 
 # Legacy ARGO smoke (L4 point inputs, chronological)
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_smoke.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/argo/config_argo_smoke.json
 
 # L3 download (credentials: copernicusmarine login, ~/.cdsapirc for ERA5)
 python3 scripts/download_l3_products.py --product all_scaffold
@@ -95,24 +95,24 @@ python3 scripts/download_l3_products.py --product era5_wind --year 2020 --month 
 
 # L3 processed samples + train cache
 srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
-  -c config_argo_l3_smoke.json --max-samples 20 --export-train-cache --force
+  -c config/argo/config_argo_l3_smoke.json --max-samples 20 --export-train-cache --force
 # Omit --max-samples for full 4145-profile cache (empty bundles if no raw data)
 
 # L4 mask-augment processed batch (uses real L3 mask geometry on L4 SSH when raw present)
 srun --ntasks=1 --cpus-per-task=8 python3 scripts/build_l3_samples.py \
-  -c config_argo_l3_l4_smoke.json --max-samples 20 --export-train-cache --force
+  -c config/argo/config_argo_l3_l4_smoke.json --max-samples 20 --export-train-cache --force
 
 # L3 mask-native smoke train (2 epochs)
-srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config_argo_l3_smoke.json
+srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 train.py -c config/argo/config_argo_l3_smoke.json
 
 # Stratified eval (needs trained checkpoint paired with its cache)
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 eval_stratified.py \
-  -c config_argo_l3_smoke.json -r saved/smoke_argo_l3/checkpoint-epoch2.pth \
+  -c config/argo/config_argo_l3_smoke.json -r saved/smoke_argo_l3/checkpoint-epoch2.pth \
   --split test --out saved/eval_stratified_l3_smoke.json --md-out saved/eval_stratified_l3_smoke.md
 
 # Readiness diagnostics (static stability; needs checkpoint + cache)
 srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 diagnostics/readiness.py \
-  -c config_argo_l3_smoke.json -r saved/smoke_argo_l3/checkpoint-epoch2.pth \
+  -c config/argo/config_argo_l3_smoke.json -r saved/smoke_argo_l3/checkpoint-epoch2.pth \
   --split test --out saved/readiness_l3_smoke.json --md-out saved/readiness_l3_smoke.md
 ```
 
@@ -131,9 +131,9 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 diagnostics/readiness.py 
 | `preproc/export_l3_cache.py` | Processed batch + `build_argo_l3_train_cache()` |
 | `preproc/l4_augment.py` | L4 mask/noise augment + source flags (Phase 4) |
 | `preproc/l4_rasterize.py` | DUACS L4 SSH → patch grid sampling |
-| `config_argo_l3_smoke.json` | L3 patch smoke (15-ch, chronological) |
-| `config_argo_l3_l4_smoke.json` | L3 + L4 mask-augment smoke (`io.l4.enabled`) |
-| `config_argo_chrono_dates.json` | Explicit date split alternative |
+| `config/argo/config_argo_l3_smoke.json` | L3 patch smoke (15-ch, chronological) |
+| `config/argo/config_argo_l3_l4_smoke.json` | L3 + L4 mask-augment smoke (`io.l4.enabled`) |
+| `config/argo/config_argo_chrono_dates.json` | Explicit date split alternative |
 | `eval_stratified.py` | Stratified RMSE/bias by L3 coverage, track distance, census subsets |
 | `diagnostics/readiness.py` | `gsw_torch` σ₀ static-stability readiness on predicted profiles |
 
@@ -155,7 +155,7 @@ srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1 python3 diagnostics/readiness.py 
 - L4 augment: SSH only (`mask_augment` mode); wind/SST L4 and `auxiliary` merge mode **deferred**.
 - Spatially correlated L4 noise **deferred** (independent pixel noise today).
 - Full-dataset L3 cache build without raw files is correct but **zero coverage** everywhere.
-- `config_argo_l3_smoke.json` sets `input_params.sss/sst/ssh/sat: false` — encodings only; sat block comes from L3 tensors.
+- `config/argo/config_argo_l3_smoke.json` sets `input_params.sss/sst/ssh/sat: false` — encodings only; sat block comes from L3 tensors.
 - ISAS configs still use random split (legacy parity).
 
 ---

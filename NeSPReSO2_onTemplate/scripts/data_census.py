@@ -23,7 +23,7 @@ from base.split_utils import (
     build_split_indices,
     split_summary,
 )
-from playground import read_json, write_json
+from base.util import read_json, write_json
 
 
 def _git_commit() -> str | None:
@@ -395,7 +395,7 @@ def write_markdown_split(design: dict, path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="ARGO data census and split design")
-    parser.add_argument("-c", "--config", default="config_argo.json", help="ARGO config JSON")
+    parser.add_argument("-c", "--config", default="config/argo/config_argo.json", help="ARGO config JSON")
     parser.add_argument(
         "--reports-dir",
         default="../reports",
