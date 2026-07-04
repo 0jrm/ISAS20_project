@@ -16,9 +16,13 @@ SURFACE_CONFIG_KEYS = ("isas_point", "isas_patch", "argo_point")
 
 PRODUCTION_ARGO_KEYS = ("argo_point", "argo_patch_l4")
 
+PRODUCTION_ANOM_KEYS = ("argo_anom_point", "argo_anom_patch_l4")
+
 PRODUCTION_ARGO_SPECS: dict[str, tuple[str, str]] = {
     "argo_point": ("ARGO-point", "config/argo/config_argo.json"),
     "argo_patch_l4": ("ARGO-L4-patch", "config/argo/config_argo_patch_l4.json"),
+    "argo_anom_point": ("ANOM-point", "config/argo/config_argo_anom.json"),
+    "argo_anom_patch_l4": ("ANOM-L4-patch", "config/argo/config_argo_patch_l4_anom.json"),
 }
 
 MAX_EPOCHS = 2000

@@ -178,6 +178,16 @@ class Trainer(BaseTrainer):
 
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
+
+        if hasattr(self.model, "gate"):
+            grad_norm = 0.0
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    grad_norm += float(p.grad.data.norm(2) ** 2)
+            log["grad_norm"] = grad_norm ** 0.5
+            if self.writer is not None:
+                self.writer.add_scalar("train/grad_norm", log["grad_norm"], epoch)
+
         return log
 
     def _valid_epoch(self, epoch):

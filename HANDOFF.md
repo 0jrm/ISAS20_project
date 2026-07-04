@@ -7,6 +7,7 @@
 
 **Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).  
 **L3 download homework (user):** [`L3-DOWNLOAD-HOMEWORK.md`](L3-DOWNLOAD-HOMEWORK.md)
+**Latest session handoff (2026-07-03):** [`HANDOFF-2026-07-03-l4-stale-sat.md`](HANDOFF-2026-07-03-l4-stale-sat.md) — L4 patch root cause (stale satellite ≥2021-01), gap downloads running in tmux `satdl`
 
 **Conda env:** `nespreso` (has `netCDF4`, `copernicusmarine`; use for selfcheck/train).
 

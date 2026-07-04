@@ -1,0 +1,63 @@
+{
+  "eval_split": "test",
+  "n_test": 623,
+  "cache_raw": "../data/cache/train_ready_4411c65ee518.pkl",
+  "cache_anom": "../data/cache/train_ready_0085aed3c9b8.pkl",
+  "models": [
+    {
+      "label": "ARGO-point (golden PCA-argo)",
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM/argo16_scales/model_best.pth",
+      "native_T": 0.5143,
+      "native_S": 0.0834,
+      "avg_common": 0.3013
+    },
+    {
+      "label": "Climatology-only",
+      "checkpoint": "baseline:climatology",
+      "native_T": 1.6575,
+      "native_S": 0.2157,
+      "avg_common": null
+    },
+    {
+      "label": "L4-patch fixed-sat (NEW)",
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_patch_l4/patch_l4_fixedsat/model_best.pth",
+      "train_epochs": 510,
+      "best_val_profile_rmse": 0.6926,
+      "native_T": 1.8568,
+      "native_S": 0.2310,
+      "avg_common": 1.0449
+    },
+    {
+      "label": "L4-patch stale ckpt on NEW cache",
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_patch_l4/0701_102436/model_best.pth",
+      "native_T": 1.3947,
+      "native_S": 0.1982,
+      "avg_common": 0.7992
+    },
+    {
+      "label": "ANOM-point",
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_anom/0703_113539/model_best.pth",
+      "native_T": 0.6475,
+      "native_S": 0.1003,
+      "avg_common": 0.3758
+    },
+    {
+      "label": "ANOM-L4 fixed-sat (NEW)",
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_patch_l4_anom/patch_l4_anom_fixedsat/model_best.pth",
+      "train_epochs": 524,
+      "best_val_profile_rmse": 0.6351,
+      "native_T": 1.7485,
+      "native_S": 0.2247,
+      "avg_common": 0.9864
+    },
+    {
+      "label": "ANOM-L4 stale ckpt on NEW cache",
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_patch_l4_anom/0703_162232/model_best.pth",
+      "native_T": 1.0354,
+      "native_S": 0.1510,
+      "avg_common": 0.5950
+    }
+  ],
+  "depth_plot": "notebooks/compare_outputs/fixedsat_vs_golden_depth_rmse.png",
+  "bin_maps": "notebooks/compare_outputs/fixedsat_bin_maps.png"
+}

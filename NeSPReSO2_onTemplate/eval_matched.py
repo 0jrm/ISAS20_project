@@ -24,7 +24,7 @@ import torch
 
 import data_loader.data_loaders as module_data
 import model.model as module_arch
-from model.loss import sklearn_inverse_transform_pcs
+from model.loss import reconstruct_physical_profiles
 from parse_config import ConfigParser, validate_config
 from base.util import prepare_device, read_json
 from preproc.overlap import (
@@ -80,7 +80,10 @@ def _predict(ctx, rows: np.ndarray, device, chunk: int = 1024) -> dict[str, np.n
             x = torch.tensor(inp[s : s + chunk], dtype=torch.float32, device=device)
             parts.append(ctx["model"](x).cpu().numpy())
     pcs = np.vstack(parts)
-    return sklearn_inverse_transform_pcs(pcs, ctx["pca"], ctx["outputs"])
+    clim = ctx["cache"].get("clim_profiles")
+    return reconstruct_physical_profiles(
+        pcs, ctx["pca"], ctx["outputs"], clim_profiles=clim, indices=rows
+    )
 
 
 def _rmse_from_sq(sq: list[np.ndarray]) -> dict[str, float] | None:

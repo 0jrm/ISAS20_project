@@ -1,0 +1,75 @@
+{
+  "device": "cuda",
+  "eval_split": "test",
+  "models": [
+    {
+      "key": "argo_point",
+      "label": "ARGO-point",
+      "group": "argo",
+      "tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "matrix": {
+        "key": "argo_point",
+        "label": "ARGO-point",
+        "tag": "argo_v2",
+        "arch": "PatchConvMLP",
+        "latent_dim": 32,
+        "outputs": {
+          "temperature": 16,
+          "salinity": 16
+        },
+        "split_mode": "chronological",
+        "group": "argo"
+      },
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM/argo16_scales/model_best.pth",
+      "epoch": 449,
+      "cache": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_db0611a2667c.pkl",
+      "n_test": 623,
+      "raw_profile_rmse_common": {
+        "temperature": 0.5155709733434491,
+        "salinity": 0.08711966399038332
+      },
+      "raw_profile_rmse_native": {
+        "temperature": 0.514299681289214,
+        "salinity": 0.0834083545403577
+      },
+      "avg_common_rmse": 0.3013453186669162,
+      "loss": 0.17272787568657202
+    },
+    {
+      "key": "argo_patch_l4",
+      "label": "ARGO-L4-patch",
+      "group": "argo",
+      "tag": "argo_l4",
+      "arch": "PatchMaskConvMLP",
+      "matrix": {
+        "key": "argo_patch_l4",
+        "label": "ARGO-L4-patch",
+        "tag": "argo_l4",
+        "arch": "PatchMaskConvMLP",
+        "latent_dim": 32,
+        "outputs": {
+          "temperature": 16,
+          "salinity": 16
+        },
+        "split_mode": "chronological",
+        "group": "argo"
+      },
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_patch_l4/0701_102436/model_best.pth",
+      "epoch": 252,
+      "cache": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_24a04650ff6c.pkl",
+      "n_test": 623,
+      "raw_profile_rmse_common": {
+        "temperature": 1.3966412432023312,
+        "salinity": 0.2018319003637208
+      },
+      "raw_profile_rmse_native": {
+        "temperature": 1.394695623321213,
+        "salinity": 0.19818538821016823
+      },
+      "avg_common_rmse": 0.799236571783026,
+      "loss": 8.492433547973633
+    }
+  ],
+  "depth_overlay_png": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_depth_rmse.png"
+}

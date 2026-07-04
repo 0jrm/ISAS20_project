@@ -7,7 +7,7 @@ from collections import OrderedDict
 import numpy as np
 import torch
 
-from model.loss import output_slices, sklearn_inverse_transform_pcs, torch_reconstruct_profile
+from model.loss import output_slices, reconstruct_physical_profiles, sklearn_inverse_transform_pcs, torch_reconstruct_profile
 
 
 def inverse_transform_profiles(pcs, pca_models, outputs):
@@ -26,6 +26,12 @@ def profile_rmse(output, target, indices, data_loader):
 
     pred = inverse_transform_profiles(out_np, pca_models, outputs)
     true = inverse_transform_profiles(tgt_np, pca_models, outputs)
+
+    clim = getattr(data_loader, "cache", {}).get("clim_profiles") if hasattr(data_loader, "cache") else None
+    if clim is not None:
+        idx = indices.detach().cpu().numpy() if torch.is_tensor(indices) else np.asarray(indices)
+        pred = reconstruct_physical_profiles(out_np, pca_models, outputs, clim_profiles=clim, indices=idx)
+        true = reconstruct_physical_profiles(tgt_np, pca_models, outputs, clim_profiles=clim, indices=idx)
 
     rmses = []
     for name in outputs:

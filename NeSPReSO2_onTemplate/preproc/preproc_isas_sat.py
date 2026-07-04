@@ -22,8 +22,16 @@ PATCH_ORDER_DOC = "time_major_row_major_lat_lon"
 
 ENCODING_KEYS = ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")
 SCALAR_EXTRA_KEYS = ("basin_sss", "basin_sst", "basin_ssh", "bathy_depth")
+CENTER_SCALAR_KEYS = ("center_sss", "center_sst", "center_ssh")
+ENGINEERED_PATCH_KEYS = (
+    "patch_ssh_gradient",
+    "patch_ssh_laplacian",
+    "patch_temporal_tendency",
+    "patch_sst_gradient",
+)
 SAT_KEYS = ("sss", "sst", "ssh")
 SURFACE_RESIDUAL_SAT_KEY = {"temperature": "sst", "salinity": "sss"}
+NORMALIZATION_VERSION = "train_zscore_v1"
 
 
 def sat_patch_center_index(spatial_pad: int, temporal_pad: int) -> int:
@@ -47,7 +55,7 @@ def surface_residual_feature_col(
 ) -> int:
     """Column index in the feature matrix for scalar SST (T) or SSS (S) residual."""
     key = SURFACE_RESIDUAL_SAT_KEY[variable]
-    col = n_enc
+    col = count_scalar_dims(input_params) if input_params is not None else n_enc
     per_var = sat_features_per_var(spatial_pad, temporal_pad)
     center = sat_patch_center_index(spatial_pad, temporal_pad)
     for sat_key in SAT_KEYS:
@@ -92,6 +100,59 @@ def count_scalar_extra_dims(input_params: Mapping[str, bool]) -> int:
 def count_scalar_dims(input_params: Mapping[str, bool]) -> int:
     """Harmonics + optional basin/bathy scalars."""
     return count_encoding_dims(input_params) + count_scalar_extra_dims(input_params)
+
+
+def count_center_scalar_dims(input_params: Mapping[str, bool]) -> int:
+    return sum(1 for k in CENTER_SCALAR_KEYS if input_params.get(k))
+
+
+def count_base_dims(input_params: Mapping[str, bool]) -> int:
+    """Point-encoder block: harmonics + optional center SSH/SST/SSS scalars."""
+    return count_encoding_dims(input_params) + count_center_scalar_dims(input_params)
+
+
+def count_engineered_patch_channels(input_params: Mapping[str, bool]) -> int:
+    """Extra patch channel planes (each is one full spatio-temporal block)."""
+    n = 0
+    if input_params.get("patch_ssh_gradient"):
+        n += 2
+    if input_params.get("patch_ssh_laplacian"):
+        n += 1
+    if input_params.get("patch_temporal_tendency"):
+        n += len(SAT_KEYS)
+    if input_params.get("patch_sst_gradient"):
+        n += 2
+    return n
+
+
+def count_residual_patch_channels(
+    input_params: Mapping[str, bool],
+    *,
+    use_mask_channels: bool = False,
+) -> int:
+    """Patch encoder channels: center-relative sat vars + optional engineered planes."""
+    n_sat = count_sat_vars(input_params)
+    if use_mask_channels and n_sat > 0:
+        n_sat *= 2
+    n_eng = count_engineered_patch_channels(input_params)
+    return n_sat + n_eng
+
+
+def compute_argo_residual_input_dim(
+    input_params: Mapping[str, bool],
+    spatial_pad: int,
+    temporal_pad: int,
+    *,
+    use_mask_channels: bool = False,
+    include_bathy_scalar: bool = False,
+) -> int:
+    """Residual layout: base scalars + optional bathy + flattened patch block."""
+    base = count_base_dims(input_params)
+    if include_bathy_scalar and input_params.get("bathy_depth"):
+        base += 1
+    per_ch = sat_features_per_var(spatial_pad, temporal_pad)
+    n_ch = count_residual_patch_channels(input_params, use_mask_channels=use_mask_channels)
+    return base + n_ch * per_ch
 
 
 def resolve_use_mask_channels(config: Mapping[str, Any]) -> bool:
@@ -351,6 +412,284 @@ def build_argo_l4_input_matrix(
     return np.nan_to_num(stacked, nan=0.0)
 
 
+def _reshape_sat_patch_block(
+    flat: np.ndarray,
+    spatial_pad: int,
+    temporal_pad: int,
+) -> np.ndarray:
+    """``(N, T, H, W)`` from flattened satellite variable block."""
+    t_win = temporal_pad + 1
+    h = w = 2 * spatial_pad + 1
+    n = flat.shape[0]
+    return flat.reshape(n, t_win, h, w).astype(np.float32)
+
+
+def _flatten_sat_patch_block(vol: np.ndarray) -> np.ndarray:
+    return vol.reshape(vol.shape[0], -1).astype(np.float32)
+
+
+def _center_value_at_latest(vol: np.ndarray, spatial_pad: int) -> np.ndarray:
+    """Scalar center pixel at latest time, shape ``(N,)``."""
+    cy = cx = spatial_pad
+    return vol[:, -1, cy, cx].astype(np.float32)
+
+
+def _make_center_relative(vol: np.ndarray, spatial_pad: int) -> np.ndarray:
+    """Subtract latest-time center scalar from every pixel (center == 0 exactly)."""
+    center = _center_value_at_latest(vol, spatial_pad)[:, np.newaxis, np.newaxis, np.newaxis]
+    return (vol - center).astype(np.float32)
+
+
+def _spatial_gradients_latest(vol: np.ndarray, spatial_pad: int) -> tuple[np.ndarray, np.ndarray]:
+    """Spatial gradients on latest time slice, broadcast across T."""
+    latest = vol[:, -1]
+    gy, gx = np.gradient(latest, axis=(1, 2))
+    t = vol.shape[1]
+    gx_full = np.repeat(gx[:, np.newaxis, :, :], t, axis=1)
+    gy_full = np.repeat(gy[:, np.newaxis, :, :], t, axis=1)
+    return gx_full.astype(np.float32), gy_full.astype(np.float32)
+
+
+def _spatial_laplacian_latest(vol: np.ndarray, spatial_pad: int) -> np.ndarray:
+    latest = vol[:, -1]
+    gy, gx = np.gradient(latest, axis=(1, 2))
+    _, gxx = np.gradient(gx, axis=(1, 2))
+    gyy, _ = np.gradient(gy, axis=(1, 2))
+    lap = gxx + gyy
+    t = vol.shape[1]
+    return np.repeat(lap[:, np.newaxis, :, :], t, axis=1).astype(np.float32)
+
+
+def _temporal_tendency(vol: np.ndarray) -> np.ndarray:
+    """Last minus previous time slice; earliest step uses zero tendency."""
+    out = np.zeros_like(vol, dtype=np.float32)
+    if vol.shape[1] > 1:
+        out[:, -1] = vol[:, -1] - vol[:, -2]
+    return out
+
+
+def _prepare_sat_volumes(
+    sat_vars: Dict[str, np.ndarray],
+    input_params: Mapping[str, bool],
+    spatial_pad: int,
+    temporal_pad: int,
+) -> Dict[str, np.ndarray]:
+    """Normalize units and reshape satellite variables to ``(N, T, H, W)``."""
+    out: Dict[str, np.ndarray] = {}
+    for key in SAT_KEYS:
+        if not input_params.get(key):
+            continue
+        if key not in sat_vars:
+            raise KeyError(f"Missing satellite variable '{key}' in sat_vars")
+        val = np.asarray(sat_vars[key], dtype=np.float32)
+        if key == "sst":
+            val = val - 273.15
+        if val.ndim == 1:
+            raise ValueError(f"Residual model requires patch data for {key}, got scalars")
+        finite = np.isfinite(val)
+        val = np.where(finite, val, 0.0).astype(np.float32)
+        out[key] = _reshape_sat_patch_block(val, spatial_pad, temporal_pad)
+    return out
+
+
+def _engineered_patch_planes(
+    volumes: Dict[str, np.ndarray],
+    input_params: Mapping[str, bool],
+    spatial_pad: int,
+) -> list[np.ndarray]:
+  planes: list[np.ndarray] = []
+  ssh = volumes.get("ssh")
+  sst = volumes.get("sst")
+  if input_params.get("patch_ssh_gradient") and ssh is not None:
+    gx, gy = _spatial_gradients_latest(ssh, spatial_pad)
+    planes.extend([gx, gy])
+  if input_params.get("patch_ssh_laplacian") and ssh is not None:
+    planes.append(_spatial_laplacian_latest(ssh, spatial_pad))
+  if input_params.get("patch_temporal_tendency"):
+    for key in SAT_KEYS:
+      if key in volumes:
+        planes.append(_temporal_tendency(volumes[key]))
+  if input_params.get("patch_sst_gradient") and sst is not None:
+    gx, gy = _spatial_gradients_latest(sst, spatial_pad)
+    planes.extend([gx, gy])
+  return planes
+
+
+def build_residual_feature_names(
+    input_params: Mapping[str, bool],
+    spatial_pad: int,
+    temporal_pad: int,
+    *,
+    include_bathy_scalar: bool = False,
+    center_relative: bool = True,
+) -> list[str]:
+    names: list[str] = []
+    if input_params.get("timecos"):
+        names.append("timecos")
+    if input_params.get("timesin"):
+        names.append("timesin")
+    if input_params.get("latcos"):
+        names.append("latcos")
+    if input_params.get("latsin"):
+        names.append("latsin")
+    if input_params.get("loncos"):
+        names.append("loncos")
+    if input_params.get("lonsin"):
+        names.append("lonsin")
+    if input_params.get("center_sss"):
+        names.append("center_sss")
+    if input_params.get("center_sst"):
+        names.append("center_sst")
+    if input_params.get("center_ssh"):
+        names.append("center_ssh")
+    if include_bathy_scalar and input_params.get("bathy_depth"):
+        names.append("bathy_depth")
+    per_var = sat_features_per_var(spatial_pad, temporal_pad)
+    prefix = "rel_" if center_relative else "raw_"
+    for key in SAT_KEYS:
+        if not input_params.get(key):
+            continue
+        for i in range(per_var):
+            names.append(f"{prefix}{key}_{i}")
+    if input_params.get("patch_ssh_gradient"):
+        for i in range(per_var):
+            names.extend([f"ssh_grad_x_{i}", f"ssh_grad_y_{i}"])
+    if input_params.get("patch_ssh_laplacian"):
+        for i in range(per_var):
+            names.append(f"ssh_laplacian_{i}")
+    if input_params.get("patch_temporal_tendency"):
+        for key in SAT_KEYS:
+            if input_params.get(key):
+                for i in range(per_var):
+                    names.append(f"{key}_dt_{i}")
+    if input_params.get("patch_sst_gradient"):
+        for i in range(per_var):
+            names.extend([f"sst_grad_x_{i}", f"sst_grad_y_{i}"])
+    return names
+
+
+def build_argo_residual_input_matrix(
+    juld: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    sat_vars: Dict[str, np.ndarray],
+    input_params: Mapping[str, bool],
+    *,
+    spatial_pad: int = 2,
+    temporal_pad: int = 6,
+    bathy_depth: np.ndarray | None = None,
+    center_relative: bool = True,
+    include_bathy_scalar: bool = False,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Base scalars + center-relative patch block (+ optional engineered planes)."""
+    cols: list[np.ndarray] = []
+    day = juld % 365
+
+    if input_params.get("timecos"):
+        cols.append(np.cos(2 * np.pi * day / 365))
+    if input_params.get("timesin"):
+        cols.append(np.sin(2 * np.pi * day / 365))
+    if input_params.get("latcos"):
+        cols.append(np.cos(2 * np.pi * lat / 180))
+    if input_params.get("latsin"):
+        cols.append(np.sin(2 * np.pi * lat / 180))
+    if input_params.get("loncos"):
+        cols.append(np.cos(2 * np.pi * lon / 360))
+    if input_params.get("lonsin"):
+        cols.append(np.sin(2 * np.pi * lon / 360))
+
+    volumes = _prepare_sat_volumes(sat_vars, input_params, spatial_pad, temporal_pad)
+    if input_params.get("center_sss") and "sss" in volumes:
+        cols.append(_center_value_at_latest(volumes["sss"], spatial_pad))
+    if input_params.get("center_sst") and "sst" in volumes:
+        cols.append(_center_value_at_latest(volumes["sst"], spatial_pad))
+    if input_params.get("center_ssh") and "ssh" in volumes:
+        cols.append(_center_value_at_latest(volumes["ssh"], spatial_pad))
+
+    if include_bathy_scalar and input_params.get("bathy_depth"):
+        if bathy_depth is None:
+            raise ValueError("bathy_depth requested but not provided")
+        cols.append(np.asarray(bathy_depth, dtype=np.float32))
+
+    base_dim = len(cols)
+    patch_offset = base_dim
+    patch_planes: list[np.ndarray] = []
+    for key in SAT_KEYS:
+        if key not in volumes:
+            continue
+        vol = volumes[key]
+        if center_relative:
+            vol = _make_center_relative(vol, spatial_pad)
+        patch_planes.append(vol)
+    patch_planes.extend(_engineered_patch_planes(volumes, input_params, spatial_pad))
+
+    for plane in patch_planes:
+        cols.append(_flatten_sat_patch_block(plane))
+
+    if not cols:
+        raise ValueError("No input features selected in input_params")
+    stacked = np.column_stack(cols).astype(np.float32)
+    meta = {
+        "base_dim": int(base_dim),
+        "patch_offset": int(patch_offset),
+        "center_relative": bool(center_relative),
+        "include_bathy_scalar": bool(include_bathy_scalar),
+    }
+    return np.nan_to_num(stacked, nan=0.0), meta
+
+
+def apply_train_standardization(
+    inputs: np.ndarray,
+    juld: np.ndarray,
+    config: Mapping[str, Any],
+    feature_names: list[str] | None = None,
+    *,
+    dataset_tag: str,
+    v2_src: str | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Z-score inputs using train-split statistics only."""
+    from base.split_utils import build_split_indices
+
+    dl_cfg = dict((config.get("data_loader") or {}).get("args") or {})
+    n = inputs.shape[0]
+    splits = build_split_indices(
+        n,
+        juld,
+        dl_cfg,
+        dataset_tag=dataset_tag,
+        v2_src=v2_src,
+    )
+    tr = np.asarray(splits["train"], dtype=int)
+    X = np.asarray(inputs, dtype=np.float32)
+    mu = X[tr].mean(axis=0)
+    sd = X[tr].std(axis=0)
+    sd = np.maximum(sd, 1e-6)
+    standardized = ((X - mu) / sd).astype(np.float32)
+    meta = {
+        "mean": mu.astype(np.float32),
+        "std": sd.astype(np.float32),
+        "feature_names": list(feature_names or []),
+        "normalization_version": NORMALIZATION_VERSION,
+        "split": "train_chronological",
+        "train_indices": tr,
+    }
+    return standardized, meta
+
+
+def residual_sat_patch_shape(
+    input_params: Mapping[str, bool],
+    spatial_pad: int,
+    temporal_pad: int,
+    *,
+    use_mask_channels: bool = False,
+) -> tuple[int, int, int, int]:
+    """``(C, T, H, W)`` for residual patch encoder."""
+    h = w = 2 * spatial_pad + 1
+    t = temporal_pad + 1
+    c = count_residual_patch_channels(input_params, use_mask_channels=use_mask_channels)
+    return (c, t, h, w)
+
+
 def build_input_matrix(
     juld: np.ndarray,
     lat: np.ndarray,
@@ -480,17 +819,21 @@ def build_train_cache(config: Dict, force: bool = False) -> str:
     pca_models = {}
     pcs_by_name = {}
     target_cols = []
-    for name, n_comp in outputs.items():
-        profiles = profile_data[name]
-        profiles = np.nan_to_num(profiles, nan=0.0)
-        pca = PCA(n_components=n_comp)
-        pcs = pca.fit_transform(profiles)
-        pca_models[name] = pca
-        pcs_by_name[name] = pcs.T
-        target_cols.append(pcs.astype(np.float32))
+    if not io_cfg.get("anomaly_targets"):
+        for name, n_comp in outputs.items():
+            profiles_fit = profile_data[name]
+            profiles_fit = np.nan_to_num(profiles_fit, nan=0.0)
+            pca = PCA(n_components=n_comp)
+            pcs = pca.fit_transform(profiles_fit)
+            pca_models[name] = pca
+            pcs_by_name[name] = pcs.T
+            target_cols.append(pcs.astype(np.float32))
 
-    targets = np.hstack(target_cols).astype(np.float32)
-    weights = get_pca_weights(pca_models, pcs_by_name, list(outputs.keys()))
+        targets = np.hstack(target_cols).astype(np.float32)
+        weights = get_pca_weights(pca_models, pcs_by_name, list(outputs.keys()))
+    else:
+        targets = None
+        weights = None
     # ponytail: depth-major (n_z, N) matches v2 ``TEMP``/``SAL`` layout for eval scripts.
     # Keep NaN for missing/deep levels so eval RMSE can mask them; PCA fit above uses its
     # own nan_to_num. NEVER nan_to_num here — 0.0 fill contaminates profile-space RMSE.
@@ -501,6 +844,24 @@ def build_train_cache(config: Dict, force: bool = False) -> str:
     dataset_tag = io_cfg.get("dataset_tag", "isas20")
     n_sat = count_sat_vars(input_params)
     patch_shape = sat_patch_shape(spatial_pad, temporal_pad, n_sat)
+
+    anom = None
+    if io_cfg.get("anomaly_targets"):
+        from preproc.climatology import build_anomaly_targets_block
+
+        anom = build_anomaly_targets_block(
+            profiles,
+            lat.astype(np.float32),
+            lon.astype(np.float32),
+            juld.astype(np.float32),
+            pres,
+            outputs,
+            config,
+        )
+        targets = anom["targets"]
+        pca_models = anom["pca_models"]
+        pcs_by_name = anom["pcs_by_name"]
+        weights = anom["weights"]
 
     payload = {
         "inputs": inputs,
@@ -526,6 +887,22 @@ def build_train_cache(config: Dict, force: bool = False) -> str:
         "min_depth": 0,
         "max_depth": int(profile_data[list(outputs.keys())[0]].shape[1] - 1),
     }
+    if anom is not None:
+        payload.update(
+            {
+                k: anom[k]
+                for k in (
+                    "climatology",
+                    "clim_profiles",
+                    "anomaly_targets",
+                    "ssh_obs_adt",
+                    "ssh_obs_sla",
+                    "clim_steric",
+                    "steric_calibration",
+                )
+                if k in anom
+            }
+        )
 
     return write_train_cache(payload, cache_dir, chash)
 

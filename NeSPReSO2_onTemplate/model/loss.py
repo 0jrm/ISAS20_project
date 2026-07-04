@@ -12,6 +12,7 @@ import torch.nn as nn
 
 import model.model as module_arch
 from model.density import DensityConstraint
+from model.steric import StericConstraint
 
 # ponytail: GoM temp/sal-specific scales; re-derive for new outputs or regions
 DEFAULT_PROFILE_SCALES = {"temperature": 37.86, "salinity": 0.28}
@@ -50,6 +51,51 @@ def sklearn_inverse_transform_pcs(pcs, pca_models, outputs):
     for name, start, end in output_slices(outputs):
         profiles[name] = pca_models[name].inverse_transform(pcs[:, start:end]).T
     return profiles
+
+
+def reconstruct_physical_profiles(
+    pcs,
+    pca_models,
+    outputs,
+    *,
+    clim_profiles: Mapping[str, np.ndarray] | None = None,
+    indices: np.ndarray | list[int] | None = None,
+):
+    """
+    Inverse PCA to physical profiles; add climatology when ``anomaly_targets``.
+
+    Returns dict var -> (n_depth, n_batch). Accepts torch or numpy ``pcs``.
+    """
+    if torch.is_tensor(pcs):
+        pcs_np = pcs.detach().cpu().numpy()
+    else:
+        pcs_np = np.asarray(pcs, dtype=np.float64)
+    prof = sklearn_inverse_transform_pcs(pcs_np, pca_models, outputs)
+    if clim_profiles is None:
+        return prof
+    idx = np.arange(pcs_np.shape[0]) if indices is None else np.asarray(indices, dtype=int)
+    for name in outputs:
+        clim = np.asarray(clim_profiles[name], dtype=np.float32)
+        if clim.ndim == 2 and clim.shape[1] > idx.max():
+            prof[name] = prof[name] + clim[:, idx]
+    return prof
+
+
+def _add_clim_torch(
+    recon: dict[str, torch.Tensor],
+    clim_profiles: Mapping[str, np.ndarray],
+    indices: torch.Tensor,
+    output_order: list[str],
+) -> dict[str, torch.Tensor]:
+    out = {}
+    idx = indices.detach().cpu().numpy()
+    for name in output_order:
+        clim = torch.as_tensor(clim_profiles[name][:, idx], dtype=recon[name].dtype, device=recon[name].device)
+        if recon[name].shape == clim.T.shape:
+            out[name] = recon[name] + clim.T
+        else:
+            out[name] = recon[name] + clim
+    return out
 
 
 def compute_true_profiles(
@@ -198,7 +244,7 @@ def decode_latent_profiles(
     surface_residual_layout: Mapping[str, Any] | None = None,
 ) -> dict[str, torch.Tensor]:
     """Batch-major profiles from concatenated latent slices."""
-    from preproc.preproc_isas_sat import count_encoding_dims, surface_residual_from_features
+    from preproc.preproc_isas_sat import count_scalar_dims, surface_residual_from_features
 
     recon = {}
     start = 0
@@ -210,7 +256,7 @@ def decode_latent_profiles(
             if inputs is None or surface_residual_layout is None:
                 raise ValueError("surface-residual decoder requires inputs and surface_residual_layout")
             layout = dict(surface_residual_layout)
-            layout.setdefault("n_enc", count_encoding_dims(layout.get("input_params", {})))
+            layout.setdefault("n_enc", count_scalar_dims(layout.get("input_params", {})))
             surface_residual = surface_residual_from_features(inputs, name, **layout)
             recon[name] = decoder.decode(z, surface_residual=surface_residual)
         else:
@@ -394,10 +440,10 @@ class DecoderProfileLoss(nn.Module):
             z = pcs[:, start:end]
             surface_residual = None
             if getattr(self.decoders[name], "surface_residual", False):
-                from preproc.preproc_isas_sat import count_encoding_dims, surface_residual_from_features
+                from preproc.preproc_isas_sat import count_scalar_dims, surface_residual_from_features
 
                 layout = dict(self.surface_residual_layout or {})
-                layout.setdefault("n_enc", count_encoding_dims(layout.get("input_params", {})))
+                layout.setdefault("n_enc", count_scalar_dims(layout.get("input_params", {})))
                 surface_residual = surface_residual_from_features(inputs, name, **layout)
                 pred_profiles = self.decoders[name].decode(z, surface_residual=surface_residual)
             else:
@@ -422,6 +468,9 @@ class CombinedPCALoss(nn.Module):
         combined_mse_scale=None,
         density_config=None,
         density_meta=None,
+        steric_config=None,
+        steric_meta=None,
+        clim_profiles: Mapping[str, np.ndarray] | None = None,
         *,
         mode: str = "combined",
         true_profiles: Mapping[str, torch.Tensor] | None = None,
@@ -485,9 +534,36 @@ class CombinedPCALoss(nn.Module):
                 )
 
         self.needs_inputs = bool(self.decoder_loss and self.decoder_loss.needs_inputs)
+        self.clim_profiles = clim_profiles
+        self._use_clim = clim_profiles is not None
+        if self._use_clim:
+            for name in self.output_order:
+                arr = np.asarray(clim_profiles[name], dtype=np.float32)
+                self.register_buffer(f"{name}_clim_profiles", torch.tensor(arr, dtype=torch.float32, device=device))
+
         self.density_helper = None
         if density_config and density_config.get("enabled", False):
             self.density_helper = DensityConstraint(dataset=density_meta, device=device, config=density_config)
+        self.steric_helper = None
+        if steric_config and steric_config.get("enabled", False):
+            self.steric_helper = StericConstraint(dataset=steric_meta, device=device, config=steric_config)
+
+    def _physical_profiles(self, pcs, inputs=None, indices=None):
+        recon = self._reconstruct_profiles(pcs, inputs=inputs)
+        if not self._use_clim or indices is None:
+            return recon
+        if isinstance(recon, tuple):
+            temp_name, sal_name = self.output_order[0], self.output_order[1]
+            temp_p, sal_p = recon
+            idx = torch.as_tensor(indices, dtype=torch.long, device=pcs.device)
+            clim_t = getattr(self, f"{temp_name}_clim_profiles")[:, idx].T
+            clim_s = getattr(self, f"{sal_name}_clim_profiles")[:, idx].T
+            return temp_p + clim_t, sal_p + clim_s
+        idx = torch.as_tensor(indices, dtype=torch.long, device=pcs.device)
+        out = {}
+        for name in self.output_order:
+            out[name] = recon[name] + getattr(self, f"{name}_clim_profiles")[:, idx].T
+        return out
 
     def _reconstruct_profiles(self, pcs, inputs=None):
         if self.mode == "decoder":
@@ -526,14 +602,18 @@ class CombinedPCALoss(nn.Module):
             pca_loss = self.pca_loss(pcs, targets, indices)
             combined_loss = (pca_loss / self.combined_pca_scale + weighted_mse_loss / self.combined_mse_scale) / 2
 
-        if self.density_helper is not None and indices is not None and len(self.output_order) >= 2:
-            temp_name, sal_name = self.output_order[0], self.output_order[1]
-            recon = self._reconstruct_profiles(pcs, inputs=inputs)
-            if isinstance(recon, tuple):
-                temp_profiles, sal_profiles = recon
+        needs_physical = self.density_helper is not None or self.steric_helper is not None
+        if needs_physical and indices is not None and len(self.output_order) >= 2:
+            recon_phys = self._physical_profiles(pcs, inputs=inputs, indices=indices)
+            if isinstance(recon_phys, tuple):
+                temp_profiles, sal_profiles = recon_phys
             else:
-                temp_profiles, sal_profiles = recon[temp_name], recon[sal_name]
-            combined_loss = combined_loss + self.density_helper(temp_profiles, sal_profiles, indices)
+                temp_name, sal_name = self.output_order[0], self.output_order[1]
+                temp_profiles, sal_profiles = recon_phys[temp_name], recon_phys[sal_name]
+            if self.density_helper is not None:
+                combined_loss = combined_loss + self.density_helper(temp_profiles, sal_profiles, indices)
+            if self.steric_helper is not None:
+                combined_loss = combined_loss + self.steric_helper(temp_profiles, sal_profiles, indices)
 
         return combined_loss
 
@@ -546,6 +626,9 @@ def make_loss(
     device,
     density_config: dict[str, Any] | None = None,
     density_meta=None,
+    steric_config: dict[str, Any] | None = None,
+    steric_meta=None,
+    clim_profiles=None,
     loss_scales: dict[str, Any] | None = None,
     loss_config: dict[str, Any] | None = None,
     targets=None,
@@ -596,6 +679,9 @@ def make_loss(
         device=device,
         density_config=density_config,
         density_meta=density_meta,
+        steric_config=steric_config,
+        steric_meta=steric_meta,
+        clim_profiles=clim_profiles,
         profile_scales=scales.get("profile_scales"),
         combined_pca_scale=scales.get("combined_pca_scale"),
         combined_mse_scale=scales.get("combined_mse_scale"),

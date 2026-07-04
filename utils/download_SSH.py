@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 import copernicusmarine
 
@@ -9,8 +10,8 @@ output_dir = "/unity/g2/jmiranda/SubsurfaceFields/Data/CMEMS/SSH"
 DATASET_ID = "c3s_obs-sl_glo_phy-ssh_my_twosat-l4-duacs-0.25deg_P1D"
 DATASET_VERSION = "202411"
 
-# Years to download
-YEARS = [1999]
+# Years to download (override via CLI: python download_SSH.py 2021 2022)
+YEARS = [int(y) for y in sys.argv[1:]] or [1999]
 
 # Download a single year
 def download_year(year, output_dir):
@@ -32,7 +33,6 @@ def download_year(year, output_dir):
             end_datetime=end_date.strftime("%Y-%m-%dT23:59:59"),
             output_directory=output_dir,
             output_filename=f"SSH_{date_str}.nc",
-            force_download=True,
             disable_progress_bar=False
         )
         print(f"Downloaded SSH_{date_str}.nc")

@@ -166,6 +166,154 @@ class NeSPReSODataLoader(DataLoader):
         return dl
 
 
+def _time_channels_for_doy(doy: float) -> np.ndarray:
+    ang = 2.0 * np.pi * doy / 365.25
+    return np.array([np.cos(ang), np.sin(ang), np.cos(2 * ang), np.sin(2 * ang)], dtype=np.float32)
+
+
+def _collate_field(batch):
+    fields, targets, pixel_rc, sample_idx, date_indices = zip(*batch)
+    fields = torch.stack(fields)
+    batch_of_pixel = torch.cat(
+        [torch.full((pr.shape[0],), b, dtype=torch.long) for b, pr in enumerate(pixel_rc)]
+    )
+    targets = torch.cat(targets, dim=0)
+    pixel_rc = torch.cat(pixel_rc, dim=0)
+    sample_idx = torch.cat(sample_idx, dim=0)
+    return fields, targets, sample_idx, pixel_rc, batch_of_pixel
+
+
+class FieldDataset(Dataset):
+    """One item per date: field grid + supervised pixels on that date."""
+
+    def __init__(self, cache, date_indices: list[int]):
+        self.cache = cache
+        self.date_indices = date_indices
+        self.fields = np.asarray(cache["fields"], dtype=np.float32)
+        self.dates = cache["dates"]
+        self.sample_date_idx = np.asarray(cache["sample_date_idx"], dtype=np.int64)
+        self.sample_pixel_rc = np.asarray(cache["sample_pixel_rc"], dtype=np.int64)
+        self.targets = torch.tensor(cache["targets"], dtype=torch.float32)
+        self.juld = np.asarray(cache["JULD"], dtype=np.float32)
+
+    def __len__(self):
+        return len(self.date_indices)
+
+    def __getitem__(self, i):
+        d = self.date_indices[i]
+        base = self.fields[d]
+        date_str = str(self.dates[d])[:10]
+        from datetime import date
+
+        doy = date.fromisoformat(date_str).timetuple().tm_yday
+        tch = _time_channels_for_doy(doy)
+        tmap = np.broadcast_to(tch[:, None, None], (4, base.shape[1], base.shape[2])).copy()
+        field = np.concatenate([base, tmap], axis=0)
+        field_t = torch.tensor(field, dtype=torch.float32)
+
+        mask = self.sample_date_idx == d
+        sample_idx = torch.tensor(np.where(mask)[0], dtype=torch.long)
+        pixel_rc = torch.tensor(self.sample_pixel_rc[mask], dtype=torch.long)
+        tgt = self.targets[sample_idx]
+        return field_t, tgt, pixel_rc, sample_idx, d
+
+
+class FieldDataLoader(DataLoader):
+    """Field U-Net loader: chronological split by date."""
+
+    def __init__(
+        self,
+        cache_path,
+        batch_size,
+        shuffle=True,
+        train_frac=0.7,
+        val_frac=0.15,
+        test_frac=0.15,
+        split_seed=42,
+        split_mode="chronological",
+        split_config=None,
+        unassigned="exclude",
+        v2_src=None,
+        split="train",
+        num_workers=0,
+        pin_memory=False,
+        **kwargs,
+    ):
+        kwargs.pop("validation_split", None)
+        kwargs.pop("training", None)
+        kwargs.pop("batch_size_safety", None)
+        with open(cache_path, "rb") as f:
+            self.cache = pickle.load(f)
+
+        n_dates = len(self.cache["dates"])
+        order = np.arange(n_dates)
+        if split_mode == "chronological":
+            train_len = int(n_dates * train_frac)
+            val_len = int(n_dates * val_frac)
+            split_indices = {
+                "train": order[:train_len].tolist(),
+                "val": order[train_len : train_len + val_len].tolist(),
+                "test": order[train_len + val_len :].tolist(),
+            }
+        else:
+            from base.split_utils import assign_random_indices
+
+            split_indices = assign_random_indices(
+                n_dates, train_frac=train_frac, val_frac=val_frac, test_frac=test_frac, split_seed=split_seed
+            )
+
+        self.split_indices = split_indices
+        active_dates = split_indices[split]
+        dataset = FieldDataset(self.cache, active_dates)
+
+        self.cache_path = cache_path
+        self.pca_models = self.cache["pca_models"]
+        self.outputs = OrderedDict(self.cache["outputs"])
+        self.weights = self.cache["weights"]
+        self.LAT = self.cache["LAT"]
+        self.LON = self.cache["LON"]
+        self.PRES = self.cache.get("PRES")
+        self.profiles = self.cache.get("profiles")
+        self.input_params = self.cache.get("input_params", {})
+        self.dataset_tag = self.cache.get("dataset_tag", "argo_field")
+        self.min_depth = self.cache.get("min_depth", 0)
+        self.max_depth = self.cache.get("max_depth", 0)
+        self.batch_size = batch_size
+        self._split = split
+        self.train_subset = FieldDataset(self.cache, split_indices["train"])
+        self.val_subset = FieldDataset(self.cache, split_indices["val"])
+        self.test_subset = FieldDataset(self.cache, split_indices["test"])
+
+        super().__init__(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle and split == "train",
+            num_workers=num_workers,
+            collate_fn=_collate_field,
+            pin_memory=pin_memory,
+        )
+
+    def split_validation(self):
+        return DataLoader(
+            self.val_subset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=_collate_field,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+    def split_test(self):
+        return DataLoader(
+            self.test_subset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=_collate_field,
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory,
+        )
+
+
 class MnistDataLoader(BaseDataLoader):
     """Legacy MNIST loader (template default)."""
 

@@ -145,6 +145,14 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         c, t, h, w = l3_sat_patch_shape(l3_cfg)
         arch_args["n_sat"] = l3_n_channels(l3_cfg)
         arch_args["patch_shape"] = [c, t, h, w]
+    elif arch.get("type") == "FieldUNet":
+        field_cfg = io_cfg.get("field") or {}
+        n_static = 3
+        n_time = 4
+        arch_args["in_channels"] = int(field_cfg.get("in_channels", n_static + n_time))
+        arch_args["out_channels"] = sum(config["outputs"].values())
+        arch_args["base_width"] = int(field_cfg.get("base_width", 32))
+        expected_dim = arch_args["in_channels"]
     elif arch.get("type") in ("PatchConvMLP", "PatchMaskConvMLP"):
         from preproc.preproc_isas_sat import (
             compute_input_dim,
@@ -174,6 +182,41 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
             input_params, use_mask_channels=use_mask_channels
         )
         arch_args["patch_shape"] = list(patch_shape) if patch_shape else None
+    elif arch.get("type") == "ResidualPatchModel":
+        from preproc.preproc_isas_sat import (
+            compute_argo_residual_input_dim,
+            count_base_dims,
+            count_encoding_dims,
+            residual_sat_patch_shape,
+            resolve_use_mask_channels,
+        )
+
+        spatial_pad = int(io_cfg.get("spatial_pad", 0))
+        temporal_pad = int(io_cfg.get("temporal_pad", 0))
+        use_mask_channels = resolve_use_mask_channels(config)
+        include_bathy_scalar = bool(io_cfg.get("include_bathy_scalar", False))
+        expected_dim = compute_argo_residual_input_dim(
+            input_params,
+            spatial_pad,
+            temporal_pad,
+            use_mask_channels=use_mask_channels,
+            include_bathy_scalar=include_bathy_scalar,
+        )
+        patch_shape = residual_sat_patch_shape(
+            input_params,
+            spatial_pad,
+            temporal_pad,
+            use_mask_channels=use_mask_channels,
+        )
+        base_dim = int(arch_args.get("base_dim", 0)) or (
+            count_base_dims(input_params)
+            + (1 if include_bathy_scalar and input_params.get("bathy_depth") else 0)
+        )
+        arch_args["base_dim"] = base_dim
+        arch_args["patch_offset"] = base_dim
+        arch_args["n_enc"] = count_encoding_dims(input_params)
+        arch_args["n_sat"] = 3
+        arch_args["patch_shape"] = list(patch_shape)
     else:
         from preproc.preproc_isas_sat import compute_input_dim
 

@@ -1,0 +1,118 @@
+{
+    "name": "NeSPReSO2_ARGO_GoM_residual",
+    "n_gpu": 1,
+    "seed": 42,
+    "arch": {
+        "type": "ResidualPatchModel",
+        "args": {
+            "input_dim": 534,
+            "output_dim": 32,
+            "base_dim": 9,
+            "patch_offset": 9,
+            "d_model": 128,
+            "n_enc": 6,
+            "n_sat": 3,
+            "patch_shape": [3, 7, 5, 5],
+            "conv_channels": [16, 32],
+            "pool_output": [2, 3, 3],
+            "head_hidden": 256,
+            "head_depth": 2,
+            "dropout_prob": 0.2,
+            "gate_per_pc": false,
+            "freeze_base": true,
+            "warmstart_ckpt": "saved/models/NeSPReSO2_ARGO_GoM/argo16_scales/model_best.pth",
+            "warmstart_patch_ckpt": null,
+            "base_head_layers": [1024, 1024]
+        }
+    },
+    "input_params": {
+        "timecos": true,
+        "timesin": true,
+        "latcos": true,
+        "latsin": true,
+        "loncos": true,
+        "lonsin": true,
+        "center_sss": true,
+        "center_sst": true,
+        "center_ssh": true,
+        "sss": true,
+        "sst": true,
+        "ssh": true,
+        "patch_ssh_gradient": false,
+        "patch_ssh_laplacian": false,
+        "patch_temporal_tendency": false,
+        "patch_sst_gradient": false
+    },
+    "io": {
+        "dataset_tag": "argo_residual",
+        "data_path": "../data/NeSPReSO_v2_ARGO_GoM_sat",
+        "sat_file": "satellite_NeSPReSO_v2_ARGO_GoM.h5",
+        "spatial_pad": 2,
+        "temporal_pad": 6,
+        "cache_dir": "../data/cache",
+        "standardize_inputs": true,
+        "center_relative_patches": true,
+        "include_bathy_scalar": false,
+        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "refit_pca": true,
+        "groups": {
+            "sss": {"h5_group": "sss", "h5_var": "sos"},
+            "sst": {"h5_group": "ostia", "h5_var": "analysed_sst"},
+            "ssh": {"h5_group": "ssh", "h5_var": "adt"}
+        }
+    },
+    "outputs": {
+        "temperature": 16,
+        "salinity": 16
+    },
+    "data_loader": {
+        "type": "NeSPReSODataLoader",
+        "args": {
+            "cache_path": "",
+            "batch_size": 512,
+            "shuffle": true,
+            "split_mode": "chronological",
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 0.001,
+            "weight_decay": 0.0001,
+            "amsgrad": false
+        }
+    },
+    "loss": "combined_pca_loss",
+    "loss_config": {
+        "mode": "pc_mse_only"
+    },
+    "metrics": ["profile_rmse"],
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": 100000,
+            "gamma": 1.0
+        }
+    },
+    "trainer": {
+        "epochs": 8000,
+        "save_dir": "saved/",
+        "save_period": 1,
+        "log_interval": 10,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": 500,
+        "tensorboard": true
+    },
+    "residual_training": {
+        "stage": "residual_only",
+        "baseline_verify": true
+    }
+}

@@ -19,7 +19,7 @@ if str(_ROOT) not in sys.path:
 if str(_ROOT / "notebooks") not in sys.path:
     sys.path.insert(0, str(_ROOT / "notebooks"))
 
-import gsw_torch as gsw  # noqa: E402 — API matches gsw; returns torch.Tensor
+import gsw_torch as gsw  # noqa: E402 — differentiable GSW bindings; use as ``gsw`` throughout
 
 DEFAULT_STABILITY_TOL_KGM3 = 0.01
 _GSW_DTYPE = torch.float64
@@ -163,13 +163,56 @@ def steric_ssh_diagnostic(
     latitude: np.ndarray,
     longitude: np.ndarray,
     ssh: np.ndarray | None = None,
+    *,
+    clim_steric: np.ndarray | None = None,
+    calibration: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    """RC-2 placeholder — steric height vs SSH consistency (not wired yet)."""
-    _ = (temperature, salinity, pressure, latitude, longitude, ssh)
-    return {
-        "status": "not_implemented",
-        "reason": "steric SSH consistency requires reviewed methodology and matched SSH targets",
+    """RC-2: calibrated steric height anomaly vs observed SLA."""
+    from model.steric import steric_height_anomaly
+    import torch
+
+    lat = np.asarray(latitude, dtype=np.float64).ravel()
+    lon = np.asarray(longitude, dtype=np.float64).ravel()
+    n_samples = lat.shape[0]
+    temp = _as_depth_major(np.asarray(temperature, dtype=np.float64), temperature.shape[0], n_samples)
+    sal = _as_depth_major(np.asarray(salinity, dtype=np.float64), salinity.shape[0], n_samples)
+    pres = _pressure_grid(pressure, n_depth=temp.shape[0], n_samples=n_samples)
+
+    temp_t = torch.as_tensor(temp, dtype=_GSW_DTYPE)
+    sal_t = torch.as_tensor(sal, dtype=_GSW_DTYPE)
+    pres_t = torch.as_tensor(pres, dtype=_GSW_DTYPE)
+    lat_t = torch.as_tensor(lat, dtype=_GSW_DTYPE)
+    lon_t = torch.as_tensor(lon, dtype=_GSW_DTYPE)
+
+    with torch.no_grad():
+        steric = steric_height_anomaly(temp_t, sal_t, pres_t, lat_t, lon_t, subsample_dz=5).numpy()
+
+    cal = calibration or {"alpha": 1.0, "beta": 0.0}
+    alpha = float(cal.get("alpha", 1.0))
+    beta = float(cal.get("beta", 0.0))
+    if clim_steric is not None:
+        steric_anom = steric - np.asarray(clim_steric, dtype=np.float64).ravel()
+    else:
+        steric_anom = steric
+    pred_sla = alpha * steric_anom + beta
+
+    out: dict[str, Any] = {
+        "status": "ok",
+        "method": "gsw_torch.steric_height_anomaly",
+        "n_profiles": int(n_samples),
+        "steric_height_m": steric.tolist(),
+        "calibrated_sla_m": pred_sla.tolist(),
     }
+    if ssh is not None:
+        obs = np.asarray(ssh, dtype=np.float64).ravel()
+        valid = np.isfinite(obs) & np.isfinite(pred_sla)
+        if valid.sum() > 1:
+            out["rmse_m"] = float(np.sqrt(np.mean((pred_sla[valid] - obs[valid]) ** 2)))
+            out["correlation"] = float(np.corrcoef(pred_sla[valid], obs[valid])[0, 1])
+        else:
+            out["rmse_m"] = None
+            out["correlation"] = None
+    return out
 
 
 def uncertainty_calibration_hook(

@@ -13,7 +13,7 @@ import torch
 
 import data_loader.data_loaders as module_data
 import model.model as module_arch
-from model.loss import decode_latent_profiles, load_decoders_from_dir, make_loss, sklearn_inverse_transform_pcs
+from model.loss import decode_latent_profiles, load_decoders_from_dir, make_loss, reconstruct_physical_profiles, sklearn_inverse_transform_pcs
 from train import surface_residual_layout_from_cache
 from model.metric import per_variable_rmse
 from parse_config import ConfigParser, validate_config
@@ -74,6 +74,7 @@ def raw_profile_rmse(
     surface_residual_layout=None,
     bottom_depth=None,
     pres_levels=None,
+    clim_profiles=None,
 ):
     """RMSE in physical space vs cache ``profiles`` (not PCA-reconstructed targets)."""
     idx = np.asarray(indices, dtype=int)
@@ -112,7 +113,9 @@ def raw_profile_rmse(
             out[name] = _masked_rmse(diff)
         return out
 
-    pred = sklearn_inverse_transform_pcs(pred_pcs, pca_models, outputs)
+    pred = reconstruct_physical_profiles(
+        pred_pcs, pca_models, outputs, clim_profiles=clim_profiles, indices=idx
+    )
     out = {}
     for name in outputs:
         diff = pred[name] - true_profiles[name][:, idx]
@@ -184,6 +187,16 @@ def main(config, checkpoint_path: str, split: str = "test"):
         ae_targets=data_loader.cache.get(target_key),
         ae_weights=data_loader.cache.get(weight_key),
         surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
+        steric_config=config.config.get("steric"),
+        steric_meta=SimpleNamespace(
+            LAT=data_loader.LAT,
+            LON=data_loader.LON,
+            PRES=data_loader.PRES,
+            ssh_obs_sla=data_loader.cache.get("ssh_obs_sla"),
+            clim_steric=data_loader.cache.get("clim_steric"),
+            steric_calibration=data_loader.cache.get("steric_calibration"),
+        ),
+        clim_profiles=data_loader.cache.get("clim_profiles"),
     )
 
     total_loss = 0.0
@@ -231,6 +244,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
             surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
             bottom_depth=data_loader.cache.get("bottom_depth"),
             pres_levels=data_loader.cache.get("PRES"),
+            clim_profiles=data_loader.cache.get("clim_profiles"),
         ),
     }
     if loss_cfg.get("mode") != "decoder" and pca_tgt is not None:

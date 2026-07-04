@@ -1,0 +1,67 @@
+{
+    "name": "NeSPReSO2_ARGO_GoM_field_smoke",
+    "n_gpu": 1,
+    "seed": 42,
+    "arch": {
+        "type": "FieldUNet",
+        "args": {
+            "in_channels": 7,
+            "out_channels": 32,
+            "base_width": 16
+        }
+    },
+    "input_params": {},
+    "io": {
+        "dataset_tag": "argo_field",
+        "cache_dir": "../data/cache",
+        "cache_version": 2,
+        "spatial_pad": 0,
+        "temporal_pad": 0,
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "basin": {
+            "min_lat": 18.0,
+            "max_lat": 31.0,
+            "min_lon": -98.0,
+            "max_lon": -81.0
+        },
+        "field": {
+            "source_config": "config/argo/config_argo_anom_smoke.json",
+            "max_dates": 8,
+            "grid_shape": [52, 68],
+            "base_width": 16
+        }
+    },
+    "outputs": {"temperature": 16, "salinity": 16},
+    "density": {"enabled": false, "checkpoint": "", "stats_path": "", "stab_weight": 0.0, "smooth_weight": 0.0},
+    "steric": {"enabled": false, "scale": 0.01, "subsample_dz": 5},
+    "data_loader": {
+        "type": "FieldDataLoader",
+        "args": {
+            "cache_path": "",
+            "batch_size": 2,
+            "shuffle": true,
+            "split_mode": "chronological",
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false
+        }
+    },
+    "optimizer": {"type": "Adam", "args": {"lr": 0.001, "weight_decay": 0, "amsgrad": false}},
+    "loss": "combined_pca_loss",
+    "loss_config": {"mode": "pc_mse_only"},
+    "metrics": ["profile_rmse"],
+    "lr_scheduler": {"type": "StepLR", "args": {"step_size": 100000, "gamma": 1.0}},
+    "trainer": {
+        "epochs": 2,
+        "save_dir": "saved/smoke_argo_field/",
+        "save_period": 2,
+        "log_interval": 1,
+        "verbosity": 2,
+        "monitor": "off",
+        "early_stop": 0,
+        "tensorboard": false
+    }
+}

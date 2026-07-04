@@ -12,13 +12,27 @@ from base.performance import validate_performance_config
 def validate_config(config):
     """Trust-boundary checks before training or cache build."""
     outputs = config["outputs"]
-    output_dim = config["arch"]["args"]["output_dim"]
-    assert output_dim == sum(outputs.values()), "output_dim must equal sum(outputs.values())"
+    arch_type = config["arch"]["type"]
+    arch_args = config["arch"]["args"]
+    if arch_type == "FieldUNet":
+        out_channels = arch_args.get("out_channels")
+        if out_channels is not None:
+            assert out_channels == sum(outputs.values()), (
+                "out_channels must equal sum(outputs.values())"
+            )
+    else:
+        output_dim = arch_args["output_dim"]
+        assert output_dim == sum(outputs.values()), "output_dim must equal sum(outputs.values())"
     assert int(config["io"]["spatial_pad"]) >= 0 and int(config["io"]["temporal_pad"]) >= 0
     density = config.get("density", {})
     if density.get("enabled"):
         assert os.path.isfile(density["checkpoint"]), f"missing density checkpoint: {density['checkpoint']}"
         assert os.path.isfile(density["stats_path"]), f"missing density stats: {density['stats_path']}"
+    steric = config.get("steric") or {}
+    if steric.get("enabled"):
+        assert config.get("io", {}).get("anomaly_targets"), (
+            "steric.enabled requires io.anomaly_targets=true (clim_steric + calibration in cache)"
+        )
     loss_cfg = config.get("loss_config") or {}
     mode = loss_cfg.get("mode", "combined")
     from model.loss import VALID_LOSS_MODES

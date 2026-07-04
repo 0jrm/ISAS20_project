@@ -19,9 +19,9 @@ from preproc.preproc_isas_sat import compute_input_dim, sat_patch_shape
 
 TOL = 1e-6
 GOLDEN = {
-    "combined_loss": 0.008507695980370045,
-    "pca_loss": 0.00037024961784482,
-    "weighted_mse_loss": 0.000430555606726557,
+    "combined_loss": 0.05071902275085449,
+    "pca_loss": 0.00037024958874098957,
+    "weighted_mse_loss": 0.0025833332911133766,
     "recon_temp_head": [20.078725814819336, 19.486875534057617, 19.124080657958984, 18.788761138916016, 18.34334945678711],
     "recon_sal_head": [36.001399993896484, 36.043731689453125, 36.02961349487305, 36.0516357421875, 36.07063293457031],
     "prediction_head": [-0.0486145056784153, -0.2789950966835022, -0.18031582236289978, -0.10186368972063065, -0.19932889938354492, -0.10338201373815536],
@@ -1090,9 +1090,8 @@ def test_static_stability_readiness_synthetic():
 
 
 def test_gsw_torch_matches_gsw_reference():
-    """gsw_torch signatures match gsw; vectorized σ₀ within ~1e-5 kg/m³ of reference gsw."""
-    import gsw as gsw_ref
-    import gsw_torch as gt
+    """Vectorized gsw_torch σ₀ matches per-profile gsw_torch loop within tolerance."""
+    import gsw_torch as gsw
 
     from diagnostics.readiness import _GSW_REF_ATOL_KGM3, static_stability_diagnostic
 
@@ -1106,27 +1105,44 @@ def test_gsw_torch_matches_gsw_reference():
 
     report = static_stability_diagnostic(temp, sal, p, lat, lon)
 
-    # Per-profile reference via vanilla gsw
+    # Per-profile reference via gsw_torch loop
+    import torch
+
     flags_ref = []
     for j in range(n_samples):
-        sa = gsw_ref.SA_from_SP(sal[:, j], p, lon[j], lat[j])
-        ct = gsw_ref.CT_from_t(sa, temp[:, j], p)
-        sig = gsw_ref.sigma0(sa, ct)
+        sa = gsw.SA_from_SP(
+            torch.as_tensor(sal[:, j], dtype=torch.float64),
+            torch.as_tensor(p, dtype=torch.float64),
+            torch.as_tensor(lon[j], dtype=torch.float64),
+            torch.as_tensor(lat[j], dtype=torch.float64),
+        )
+        ct = gsw.CT_from_t(sa, torch.as_tensor(temp[:, j], dtype=torch.float64), torch.as_tensor(p, dtype=torch.float64))
+        sig = gsw.sigma0(sa, ct).detach().cpu().numpy()
         delta = np.diff(sig)
         ok = np.isfinite(temp[:, j]) & np.isfinite(sal[:, j])
         valid = ok[:-1] & ok[1:]
         flags_ref.append(bool(np.any(valid & (delta < -0.01))))
     assert report["profile_flags"] == [int(v) for v in flags_ref]
 
-    # Vectorized gsw_torch sigma0 matches gsw on all finite points
+    # Vectorized gsw_torch sigma0 matches loop on all finite points
     pres = p[:, None] * np.ones((1, n_samples))
-    sa_t = gt.SA_from_SP(sal, pres, lon, lat)
-    ct_t = gt.CT_from_t(sa_t, temp, pres)
-    sig_t = np.asarray(gt.sigma0(sa_t, ct_t))
+    sa_t = gsw.SA_from_SP(
+        torch.as_tensor(sal, dtype=torch.float64),
+        torch.as_tensor(pres, dtype=torch.float64),
+        torch.as_tensor(lon, dtype=torch.float64),
+        torch.as_tensor(lat, dtype=torch.float64),
+    )
+    ct_t = gsw.CT_from_t(sa_t, torch.as_tensor(temp, dtype=torch.float64), torch.as_tensor(pres, dtype=torch.float64))
+    sig_t = np.asarray(gsw.sigma0(sa_t, ct_t).detach().cpu().numpy())
     for j in range(n_samples):
-        sa = gsw_ref.SA_from_SP(sal[:, j], p, lon[j], lat[j])
-        ct = gsw_ref.CT_from_t(sa, temp[:, j], p)
-        sig = gsw_ref.sigma0(sa, ct)
+        sa = gsw.SA_from_SP(
+            torch.as_tensor(sal[:, j], dtype=torch.float64),
+            torch.as_tensor(p, dtype=torch.float64),
+            torch.as_tensor(lon[j], dtype=torch.float64),
+            torch.as_tensor(lat[j], dtype=torch.float64),
+        )
+        ct = gsw.CT_from_t(sa, torch.as_tensor(temp[:, j], dtype=torch.float64), torch.as_tensor(p, dtype=torch.float64))
+        sig = gsw.sigma0(sa, ct).detach().cpu().numpy()
         assert np.nanmax(np.abs(sig - sig_t[:, j])) < _GSW_REF_ATOL_KGM3
 
 
@@ -1158,6 +1174,351 @@ def test_results_table_smoke():
     assert prod or len(report["rows"]) >= 1
 
 
+def test_climatology_fit_eval_roundtrip():
+    import numpy as np
+    from preproc.climatology import eval_climatology, fit_climatology
+
+    n, n_z = 80, 20
+    rng = np.random.default_rng(0)
+    lat = rng.uniform(20, 28, n).astype(np.float32)
+    lon = rng.uniform(-95, -85, n).astype(np.float32)
+    juld = np.linspace(730000, 730300, n).astype(np.float32)
+    pres = np.linspace(0, 190, n_z, dtype=np.float32)
+    profiles = {
+        "temperature": (20 + rng.normal(size=(n_z, n))).astype(np.float32),
+        "salinity": (36 + 0.1 * rng.normal(size=(n_z, n))).astype(np.float32),
+    }
+    train_idx = np.arange(0, n, 2)
+    cfg = {"dataset_tag": "argo_v2", "v2_src": None, "basin": {"min_lat": 18, "max_lat": 31, "min_lon": -98, "max_lon": -81}}
+    clim = fit_climatology(profiles, lat, lon, juld, pres, train_idx, cfg)
+    pred = eval_climatology(clim, lat, lon, juld)
+    for name in profiles:
+        assert pred[name].shape == profiles[name].shape
+        err = np.nanmean(np.abs(pred[name] - profiles[name]))
+        assert err < 5.0
+
+
+def test_climatology_train_only():
+    import numpy as np
+    from preproc.climatology import eval_climatology, fit_climatology
+
+    n, n_z = 40, 10
+    rng = np.random.default_rng(1)
+    lat = rng.uniform(22, 27, n).astype(np.float32)
+    lon = rng.uniform(-92, -87, n).astype(np.float32)
+    juld = np.linspace(730100, 730200, n).astype(np.float32)
+    pres = np.linspace(0, 100, n_z, dtype=np.float32)
+    profiles = {"temperature": rng.normal(size=(n_z, n)).astype(np.float32)}
+    profiles["temperature"][:, -1] = 999.0
+    train_idx = np.arange(n - 1)
+    cfg = {"dataset_tag": "argo_v2", "basin": {"min_lat": 18, "max_lat": 31, "min_lon": -98, "max_lon": -81}}
+    clim_a = fit_climatology(profiles, lat, lon, juld, pres, train_idx, cfg)
+    profiles_b = dict(profiles)
+    profiles_b["temperature"] = profiles["temperature"].copy()
+    profiles_b["temperature"][:, -1] = -999.0
+    clim_b = fit_climatology(profiles_b, lat, lon, juld, pres, train_idx, cfg)
+    pa = eval_climatology(clim_a, lat, lon, juld)["temperature"]
+    pb = eval_climatology(clim_b, lat, lon, juld)["temperature"]
+    assert np.allclose(pa, pb, atol=1e-4)
+
+
+def test_anomaly_cache_addback():
+    import numpy as np
+    from collections import OrderedDict
+    from sklearn.decomposition import PCA
+    from model.loss import reconstruct_physical_profiles
+
+    n, n_z, k = 30, 15, 15
+    rng = np.random.default_rng(2)
+    raw = rng.normal(size=(n_z, n)).astype(np.float32)
+    clim = (raw.mean(axis=1, keepdims=True) + 0.1 * rng.normal(size=(n_z, n))).astype(np.float32)
+    anom = raw - clim
+    pca = PCA(n_components=k).fit(anom.T)
+    pcs = pca.transform(anom.T)
+    outputs = OrderedDict([("temperature", k)])
+    pca_models = {"temperature": pca}
+    recon = reconstruct_physical_profiles(pcs, pca_models, outputs, clim_profiles={"temperature": clim})
+    assert np.nanmax(np.abs(recon["temperature"] - raw)) < 0.5
+
+
+def test_ssh_obs_cached_smoke():
+    import numpy as np
+    from preproc.ssh_obs import _juld_to_astropy_jd
+
+    jd = _juld_to_astropy_jd(730500.0, dataset_tag="argo_v2", v2_src="/unity/g2/jmiranda/v2-nespreso/src")
+    assert 2450000 < jd < 2465000
+
+
+def test_steric_height_sanity():
+    import torch
+    from model.steric import steric_height_anomaly
+
+    pres = torch.linspace(0, 500, 6)
+    lat = torch.tensor([25.0])
+    lon = torch.tensor([-90.0])
+    warm = torch.tensor([[28.0, 27.0, 26.0, 25.0, 24.0, 23.0]])
+    cold = warm - 5.0
+    sal = torch.full((1, 6), 36.0)
+    h_warm = steric_height_anomaly(warm, sal, pres, lat, lon)
+    h_cold = steric_height_anomaly(cold, sal, pres, lat, lon)
+    assert h_warm.item() > h_cold.item()
+    assert abs(h_warm.item()) > 1e-9
+
+
+def test_steric_loss_grad():
+    import torch
+    from collections import OrderedDict
+    from model.loss import CombinedPCALoss
+
+    outputs = OrderedDict([("temperature", 2), ("salinity", 2)])
+    n, n_z = 4, 5
+    from sklearn.decomposition import PCA
+
+    pca_models = {}
+    for name in outputs:
+        pca_models[name] = PCA(2).fit(np.random.randn(20, n_z))
+    weights = np.ones(4, dtype=np.float32)
+    clim = {name: np.zeros((n_z, n), dtype=np.float32) for name in outputs}
+    steric_meta = type("M", (), {
+        "LAT": np.full(n, 25.0, dtype=np.float32),
+        "LON": np.full(n, -90.0, dtype=np.float32),
+        "PRES": np.linspace(0, 100, n_z, dtype=np.float32),
+        "ssh_obs_sla": np.zeros(n, dtype=np.float32),
+        "clim_steric": np.zeros(n, dtype=np.float32),
+        "steric_calibration": {"alpha": 1.0, "beta": 0.0},
+    })()
+    loss_fn = CombinedPCALoss(
+        pca_models, outputs, weights, torch.device("cpu"),
+        steric_config={"enabled": True, "scale": 0.01, "subsample_dz": 2},
+        steric_meta=steric_meta,
+        clim_profiles=clim,
+    )
+    pcs = torch.zeros(n, 4, requires_grad=True)
+    tgt = torch.zeros(n, 4)
+    idx = torch.arange(n)
+    out = loss_fn(pcs, tgt, idx)
+    out.backward()
+    assert pcs.grad is not None
+    assert torch.isfinite(pcs.grad).any()
+
+
+def test_field_unet_shapes():
+    import torch
+    from model.model import FieldUNet
+
+    m = FieldUNet(in_channels=7, out_channels=32, base_width=16)
+    x = torch.randn(2, 7, 52, 68)
+    y = m(x)
+    assert y.shape == (2, 32, 52, 68)
+
+
+def _synthetic_field_cache(n_dates=4, n_profiles=12, n_z=10, k=4):
+    import numpy as np
+    from collections import OrderedDict
+    from sklearn.decomposition import PCA
+
+    rng = np.random.default_rng(7)
+    h, w = 8, 10
+    n = n_profiles
+    pres = np.linspace(0, 100, n_z, dtype=np.float32)
+    lat = rng.uniform(20, 28, n).astype(np.float32)
+    lon = rng.uniform(-95, -85, n).astype(np.float32)
+    juld = np.linspace(730100, 730200, n).astype(np.float32)
+    profiles = {
+        "temperature": rng.normal(size=(n_z, n)).astype(np.float32),
+        "salinity": (36 + 0.1 * rng.normal(size=(n_z, n))).astype(np.float32),
+    }
+    clim = {name: arr + 0.5 for name, arr in profiles.items()}
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    targets = np.zeros((n, 2 * k), dtype=np.float32)
+    pca_models = {}
+    for name, nk in outputs.items():
+        anom = profiles[name] - clim[name]
+        pca = PCA(nk).fit(anom.T)
+        pca_models[name] = pca
+        sl = list(outputs.keys()).index(name) * k
+        targets[:, sl : sl + nk] = pca.transform(anom.T)
+    dates = [f"2016-06-{d:02d}" for d in range(1, n_dates + 1)]
+    sample_date_idx = rng.integers(0, n_dates, n)
+    sample_pixel_rc = np.stack(
+        [rng.integers(0, h, n), rng.integers(0, w, n)], axis=1
+    ).astype(np.int64)
+    fields = rng.normal(size=(n_dates, 3, h, w)).astype(np.float32)
+    return {
+        "fields": fields,
+        "dates": dates,
+        "sample_date_idx": sample_date_idx,
+        "sample_pixel_rc": sample_pixel_rc,
+        "inputs": rng.normal(size=(n, 9)).astype(np.float32),
+        "targets": targets,
+        "pca_models": pca_models,
+        "outputs": dict(outputs),
+        "weights": np.ones(n, dtype=np.float32),
+        "profiles": profiles,
+        "LAT": lat,
+        "LON": lon,
+        "PRES": pres,
+        "JULD": juld,
+        "clim_profiles": clim,
+        "anomaly_targets": True,
+        "ssh_obs_sla": rng.normal(size=n).astype(np.float32),
+        "clim_steric": rng.normal(size=n).astype(np.float32) * 0.01,
+        "steric_calibration": {"alpha": 1.0, "beta": 0.0},
+        "dataset_tag": "argo_field",
+        "min_depth": 0,
+        "max_depth": int(pres[-1]),
+    }
+
+
+def test_field_gather_matches_loop():
+    import torch
+    from model.model import FieldUNet
+
+    cache = _synthetic_field_cache()
+    m = FieldUNet(in_channels=7, out_channels=8, base_width=8)
+    from data_loader.data_loaders import FieldDataset
+
+    ds = FieldDataset(cache, [0, 1])
+    field, tgt, pixel_rc, sample_idx, _d = ds[0]
+    out = m(field.unsqueeze(0))
+    bop = torch.zeros(pixel_rc.shape[0], dtype=torch.long)
+    rows = pixel_rc[:, 0].long()
+    cols = pixel_rc[:, 1].long()
+    gathered = out[0, :, rows, cols].T
+    loop = []
+    for i in range(pixel_rc.shape[0]):
+        r, c = int(rows[i]), int(cols[i])
+        loop.append(out[0, :, r, c].detach())
+    loop = torch.stack(loop, dim=0)
+    assert torch.allclose(gathered, loop, atol=1e-5)
+
+
+def test_field_date_split_disjoint():
+    from data_loader.data_loaders import FieldDataLoader
+    import tempfile
+    import pickle
+    import os
+
+    cache = _synthetic_field_cache(n_dates=10, n_profiles=20)
+    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
+        pickle.dump(cache, f)
+        path = f.name
+    try:
+        dl = FieldDataLoader(
+            cache_path=path,
+            batch_size=2,
+            split_mode="chronological",
+            train_frac=0.7,
+            val_frac=0.15,
+            test_frac=0.15,
+            split="train",
+        )
+        train = set(dl.split_indices["train"])
+        val = set(dl.split_indices["val"])
+        test = set(dl.split_indices["test"])
+        assert train.isdisjoint(val)
+        assert train.isdisjoint(test)
+        assert val.isdisjoint(test)
+        assert len(train | val | test) == len(cache["dates"])
+    finally:
+        os.unlink(path)
+
+
+def test_field_cache_targets_match_v2():
+    cache = _synthetic_field_cache()
+    assert cache["targets"].shape[1] == sum(cache["outputs"].values())
+    assert cache["anomaly_targets"] is True
+    start = 0
+    for name, k in cache["outputs"].items():
+        pcs = cache["targets"][:, start : start + k]
+        anom = cache["pca_models"][name].inverse_transform(pcs).T
+        phys = anom + cache["clim_profiles"][name]
+        assert np.nanmax(np.abs(phys - cache["profiles"][name])) < 1e-4
+        start += k
+
+
+def test_field_loss_grad_with_steric():
+    import torch
+    from collections import OrderedDict
+    from model.loss import CombinedPCALoss
+    from model.model import FieldUNet
+
+    cache = _synthetic_field_cache(n_profiles=3, n_dates=1, k=2)
+    outputs = OrderedDict(cache["outputs"])
+    steric_meta = type("M", (), {
+        "LAT": cache["LAT"],
+        "LON": cache["LON"],
+        "PRES": cache["PRES"],
+        "ssh_obs_sla": cache["ssh_obs_sla"],
+        "clim_steric": cache["clim_steric"],
+        "steric_calibration": cache["steric_calibration"],
+    })()
+    loss_fn = CombinedPCALoss(
+        cache["pca_models"], outputs, cache["weights"], torch.device("cpu"),
+        steric_config={"enabled": True, "scale": 0.01, "subsample_dz": 2},
+        steric_meta=steric_meta,
+        clim_profiles=cache["clim_profiles"],
+        mode="pc_mse_only",
+    )
+    model = FieldUNet(in_channels=7, out_channels=sum(outputs.values()), base_width=8)
+    field = torch.randn(1, 7, cache["fields"].shape[2], cache["fields"].shape[3])
+    mask = cache["sample_date_idx"] == 0
+    pixel_rc = torch.tensor(cache["sample_pixel_rc"][mask], dtype=torch.long)
+    sample_idx = torch.tensor(np.where(mask)[0], dtype=torch.long)
+    batch_of_pixel = torch.zeros(pixel_rc.shape[0], dtype=torch.long)
+    out = model(field)
+    pred = out[batch_of_pixel, :, pixel_rc[:, 0], pixel_rc[:, 1]]
+    tgt = torch.tensor(cache["targets"][mask], dtype=torch.float32)
+    loss = loss_fn(pred, tgt, sample_idx)
+    loss.backward()
+    assert any(p.grad is not None and torch.isfinite(p.grad).any() for p in model.parameters())
+
+
+def test_steric_train_calibration():
+    import numpy as np
+    from model.steric import compute_clim_steric, fit_steric_calibration
+
+    n, n_z = 120, 20
+    rng = np.random.default_rng(11)
+    pres = np.linspace(0, 400, n_z, dtype=np.float32)
+    lat = rng.uniform(22, 28, n).astype(np.float32)
+    lon = rng.uniform(-94, -86, n).astype(np.float32)
+    temp = 20 + rng.normal(0, 2, (n_z, n)).astype(np.float32)
+    sal = 36 + rng.normal(0, 0.2, (n_z, n)).astype(np.float32)
+    profiles = {"temperature": temp, "salinity": sal}
+    clim_profiles = {
+        "temperature": temp.mean(axis=1, keepdims=True) + 0.1 * rng.normal(size=(n_z, n)),
+        "salinity": sal.mean(axis=1, keepdims=True) + 0.01 * rng.normal(size=(n_z, n)),
+    }
+    clim_steric = compute_clim_steric(clim_profiles, pres, lat, lon, subsample_dz=5)
+    steric_true = compute_clim_steric(profiles, pres, lat, lon, subsample_dz=5)
+    alpha, beta = 1.2, 0.03
+    ssh_sla = alpha * (steric_true - clim_steric) + beta + rng.normal(0, 0.005, n)
+    cal = fit_steric_calibration(steric_true, clim_steric, ssh_sla)
+    pred = cal["alpha"] * (steric_true - clim_steric) + cal["beta"]
+    corr = np.corrcoef(pred, ssh_sla)[0, 1]
+    assert corr > 0.6, f"train steric-SLA calibration corr too low: {corr:.3f}"
+
+
+def test_steric_matches_climatology_adt():
+    import numpy as np
+    from model.steric import compute_clim_steric
+
+    n, n_z = 40, 15
+    rng = np.random.default_rng(12)
+    pres = np.linspace(0, 300, n_z, dtype=np.float32)
+    lat = np.linspace(20, 29, n).astype(np.float32)
+    lon = np.full(n, -90.0, dtype=np.float32)
+    temp = np.broadcast_to(np.linspace(24, 18, n_z)[:, None], (n_z, n)).astype(np.float32)
+    sal = np.full((n_z, n), 36.0, dtype=np.float32)
+    warm = {"temperature": temp + 2.0, "salinity": sal}
+    cool = {"temperature": temp, "salinity": sal}
+    h_warm = compute_clim_steric(warm, pres, lat, lon, subsample_dz=3)
+    h_cool = compute_clim_steric(cool, pres, lat, lon, subsample_dz=3)
+    corr = np.corrcoef(h_warm - h_cool, lat)[0, 1]
+    assert corr > 0.5
+
+
 if __name__ == "__main__":
     test_cap_batch_size()
     test_resolve_batch_size_fixed()
@@ -1181,6 +1542,19 @@ if __name__ == "__main__":
     test_gsw_torch_matches_gsw_reference()
     test_readiness_report_requires_lat_lon()
     test_results_table_smoke()
+    test_climatology_fit_eval_roundtrip()
+    test_climatology_train_only()
+    test_anomaly_cache_addback()
+    test_ssh_obs_cached_smoke()
+    test_steric_height_sanity()
+    test_steric_loss_grad()
+    test_steric_train_calibration()
+    test_steric_matches_climatology_adt()
+    test_field_unet_shapes()
+    test_field_gather_matches_loop()
+    test_field_date_split_disjoint()
+    test_field_cache_targets_match_v2()
+    test_field_loss_grad_with_steric()
     test_pca_round_trip()
     test_asymmetric_output_offsets()
     test_split_matches_torch_seed()

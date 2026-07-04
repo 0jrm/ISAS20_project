@@ -22,7 +22,9 @@ from model.loss import get_pca_weights, true_profiles_numpy
 from preproc.basin_stats import compute_basin_daily_means
 from preproc.export_v2_cache import _refit_pca_from_profiles
 from preproc.preproc_isas_sat import (
+    apply_train_standardization,
     build_argo_l4_input_matrix,
+    build_residual_feature_names,
     compute_argo_l4_input_dim,
     config_hash,
     extract_sat_values,
@@ -141,7 +143,27 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
     if inputs.shape[1] != expected:
         raise ValueError(f"input dim {inputs.shape[1]} != expected {expected}")
 
+    if bool(io_cfg.get("standardize_inputs", False)):
+        feature_names = build_residual_feature_names(
+            input_params,
+            spatial_pad,
+            temporal_pad,
+            include_bathy_scalar=bool(input_params.get("bathy_depth")),
+            center_relative=False,
+        )
+        inputs, input_standardization = apply_train_standardization(
+            inputs,
+            juld,
+            config,
+            feature_names,
+            dataset_tag=io_cfg.get("dataset_tag", "argo_l4"),
+            v2_src=io_cfg.get("v2_src"),
+        )
+    else:
+        input_standardization = None
+
     refit_pca = bool(io_cfg.get("refit_pca", True))
+    use_anom = bool(io_cfg.get("anomaly_targets"))
     target_cols = []
     pcs_by_name = {}
     pca_models = {}
@@ -159,19 +181,24 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
             prof = prof[:, :n]
         else:
             prof = prof[..., :n]
-        if n_comp != pca.n_components_:
-            if not refit_pca:
-                raise ValueError(f"{name}: need refit_pca for {n_comp} components")
-            pca, pcs = _refit_pca_from_profiles(prof, n_comp)
-        else:
-            pcs = pcs[:, :n]
-        pca_models[name] = pca
-        pcs_by_name[name] = pcs
-        target_cols.append(pcs.T.astype(np.float32))
-        profiles[name] = np.ascontiguousarray(prof[:, :n].astype(np.float32))
+        if not use_anom:
+            if n_comp != pca.n_components_:
+                if not refit_pca:
+                    raise ValueError(f"{name}: need refit_pca for {n_comp} components")
+                pca, pcs = _refit_pca_from_profiles(prof, n_comp)
+            else:
+                pcs = pcs[:, :n]
+            pca_models[name] = pca
+            pcs_by_name[name] = pcs
+            target_cols.append(pcs.T.astype(np.float32))
+        profiles[name] = np.ascontiguousarray(prof[:, :n].astype(np.float32) if prof.shape[0] != n else prof.astype(np.float32))
 
-    targets = np.hstack(target_cols).astype(np.float32)
-    weights = get_pca_weights(pca_models, pcs_by_name, list(outputs.keys()))
+    if use_anom:
+        targets = None
+        weights = None
+    else:
+        targets = np.hstack(target_cols).astype(np.float32)
+        weights = get_pca_weights(pca_models, pcs_by_name, list(outputs.keys()))
     pres = np.arange(int(ds.min_depth), int(ds.max_depth) + 1, dtype=np.float32)
     patch_shape = sat_patch_shape(
         spatial_pad,
@@ -181,6 +208,29 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
         use_mask_channels=use_mask_channels,
     )
 
+    profiles_dm = {}
+    for name in outputs:
+        p = np.asarray(profiles[name], dtype=np.float32)
+        profiles_dm[name] = np.ascontiguousarray(p if p.shape[1] == n else p.T)
+
+    anom = None
+    if io_cfg.get("anomaly_targets"):
+        from preproc.climatology import build_anomaly_targets_block
+
+        anom = build_anomaly_targets_block(
+            profiles_dm,
+            lat,
+            lon,
+            juld,
+            pres,
+            outputs,
+            config,
+        )
+        targets = anom["targets"]
+        pca_models = anom["pca_models"]
+        pcs_by_name = anom["pcs_by_name"]
+        weights = anom["weights"]
+
     payload = {
         "inputs": inputs,
         "targets": targets,
@@ -188,7 +238,7 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
         "pcs_by_name": pcs_by_name,
         "outputs": outputs,
         "weights": weights,
-        "profiles": profiles,
+        "profiles": profiles_dm,
         "true_profiles": true_profiles_numpy(targets, pca_models, outputs),
         "LAT": lat,
         "LON": lon,
@@ -208,6 +258,25 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
         "bathy_truncation": True,
         "use_mask_channels": use_mask_channels,
     }
+    if input_standardization is not None:
+        payload["input_standardization"] = input_standardization
+        payload["feature_names"] = input_standardization.get("feature_names", [])
+    if anom is not None:
+        payload.update(
+            {
+                k: anom[k]
+                for k in (
+                    "climatology",
+                    "clim_profiles",
+                    "anomaly_targets",
+                    "ssh_obs_adt",
+                    "ssh_obs_sla",
+                    "clim_steric",
+                    "steric_calibration",
+                )
+                if k in anom
+            }
+        )
     return write_train_cache(payload, cache_dir, chash)
 
 

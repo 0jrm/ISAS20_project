@@ -330,6 +330,188 @@ class PatchMaskConvMLP(BaseModel):
         return self.head(h)
 
 
+def _zero_init_linear(layer: nn.Linear) -> None:
+    nn.init.zeros_(layer.weight)
+    if layer.bias is not None:
+        nn.init.zeros_(layer.bias)
+
+
+def _load_warmstart_state(module: nn.Module, ckpt_path: str, *, prefix: str = "") -> None:
+    """Load compatible weights from a checkpoint into ``module``."""
+    import os
+
+    if not ckpt_path or not os.path.isfile(ckpt_path):
+        return
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    state = ckpt.get("state_dict", ckpt.get("model_state_dict", ckpt))
+    own = module.state_dict()
+    mapped = {}
+    for key, val in state.items():
+        k = key
+        if k.startswith("module."):
+            k = k[len("module.") :]
+        if prefix and not k.startswith(prefix):
+            target = prefix + k
+        else:
+            target = k
+        if target in own and own[target].shape == val.shape:
+            mapped[target] = val
+    module.load_state_dict(mapped, strict=False)
+
+
+class ResidualPatchEncoder(nn.Module):
+    """Small Conv3d trunk preserving coarse spatial structure."""
+
+    def __init__(
+        self,
+        patch_shape,
+        conv_channels=None,
+        pool_output=None,
+        d_model=128,
+        conv_norm_groups=8,
+        dropout_prob=0.2,
+    ):
+        super().__init__()
+        if conv_channels is None:
+            conv_channels = [16, 32]
+        if pool_output is None:
+            pool_output = [2, 3, 3]
+        self.patch_shape = tuple(patch_shape)
+        self.pool_output = tuple(pool_output)
+        c, t, h, w = self.patch_shape
+        layers = []
+        in_ch = c
+        for out_ch in conv_channels:
+            layers.extend(
+                [
+                    nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1),
+                    nn.GroupNorm(conv_norm_groups, out_ch),
+                    nn.ReLU(inplace=True),
+                ]
+            )
+            in_ch = out_ch
+        layers.append(nn.AdaptiveAvgPool3d(self.pool_output))
+        self.conv3d = nn.Sequential(*layers)
+        pool_flat = conv_channels[-1] * math.prod(self.pool_output)
+        self.proj = nn.Sequential(
+            nn.Linear(pool_flat, d_model),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_prob),
+        )
+
+    def forward(self, sat_flat: torch.Tensor) -> torch.Tensor:
+        b = sat_flat.size(0)
+        c, t, h, w = self.patch_shape
+        per_ch = t * h * w
+        vol = sat_flat.view(b, c, per_ch).view(b, c, t, h, w)
+        feat = self.conv3d(vol).view(b, -1)
+        return self.proj(feat)
+
+
+class ResidualPatchModel(BaseModel):
+    """
+    Point-anchored residual patch model: ``Output = Base + g * ΔPC``.
+
+    Base branch is a warm-startable ``PatchConvMLP`` in point mode.
+    Patch branch emits a zero-initialized residual correction.
+    """
+
+    def __init__(
+        self,
+        input_dim=534,
+        output_dim=32,
+        base_dim=9,
+        patch_offset=9,
+        patch_shape=None,
+        d_model=128,
+        dropout_prob=0.2,
+        conv_channels=None,
+        pool_output=None,
+        head_hidden=256,
+        head_depth=2,
+        gate_per_pc=False,
+        freeze_base=False,
+        warmstart_ckpt=None,
+        warmstart_patch_ckpt=None,
+        base_head_layers=None,
+        conv_norm_groups=8,
+        n_enc=6,
+        n_sat=3,
+        **kwargs,
+    ):
+        super().__init__()
+        if base_head_layers is None:
+            base_head_layers = [1024, 1024]
+        if patch_shape is None:
+            raise ValueError("ResidualPatchModel requires patch_shape")
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.base_dim = int(base_dim)
+        self.patch_offset = int(patch_offset)
+        self.patch_shape = tuple(patch_shape)
+        self.gate_per_pc = bool(gate_per_pc)
+
+        self.base = PatchConvMLP(
+            input_dim=base_dim,
+            output_dim=output_dim,
+            dropout_prob=dropout_prob,
+            d_model=d_model,
+            head_layers=base_head_layers,
+            patch_shape=None,
+            n_enc=n_enc,
+            n_sat=n_sat,
+        )
+        self.patch_enc = ResidualPatchEncoder(
+            patch_shape=self.patch_shape,
+            conv_channels=conv_channels or [16, 32],
+            pool_output=pool_output or [2, 3, 3],
+            d_model=d_model,
+            conv_norm_groups=conv_norm_groups,
+            dropout_prob=dropout_prob,
+        )
+        widths = [head_hidden] * head_depth
+        head = []
+        prev = d_model
+        for width in widths:
+            head.extend([nn.Linear(prev, width), nn.ReLU(), nn.Dropout(dropout_prob)])
+            prev = width
+        self.patch_head_hidden = nn.Sequential(*head) if head else nn.Identity()
+        self.patch_head_out = nn.Linear(prev if widths else d_model, output_dim)
+        _zero_init_linear(self.patch_head_out)
+
+        if gate_per_pc:
+            self.gate = nn.Parameter(torch.zeros(output_dim))
+        else:
+            self.gate = nn.Parameter(torch.zeros(1))
+
+        if warmstart_ckpt:
+            _load_warmstart_state(self.base, warmstart_ckpt)
+        if warmstart_patch_ckpt:
+            _load_warmstart_state(self.patch_enc, warmstart_patch_ckpt, prefix="patch_enc.")
+
+        self.set_freeze_base(freeze_base)
+
+    def set_freeze_base(self, freeze: bool = True) -> None:
+        for param in self.base.parameters():
+            param.requires_grad = not freeze
+
+    def forward_base(self, x: torch.Tensor) -> torch.Tensor:
+        return self.base(x[:, : self.base_dim])
+
+    def forward_delta(self, x: torch.Tensor) -> torch.Tensor:
+        feat = self.patch_enc(x[:, self.patch_offset :])
+        if isinstance(self.patch_head_hidden, nn.Sequential) and len(self.patch_head_hidden) > 0:
+            feat = self.patch_head_hidden(feat)
+        return self.patch_head_out(feat)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        base = self.forward_base(x)
+        delta = self.forward_delta(x)
+        if self.gate_per_pc:
+            return base + delta * self.gate
+        return base + delta * self.gate.squeeze()
+
+
 class Autoencoder(nn.Module):
     def __init__(
         self,
@@ -582,3 +764,49 @@ class KAN_Autoencoder(nn.Module):
 
     def decode(self, x, mask=None):
         return self.decoder(x, mask)
+
+
+class _UNetBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class FieldUNet(BaseModel):
+    """2-level U-Net for gridded SSH -> PCA fields (Phase C)."""
+
+    def __init__(self, in_channels=7, out_channels=32, base_width=32, **kwargs):
+        super().__init__()
+        w = int(base_width)
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.enc1 = _UNetBlock(in_channels, w)
+        self.pool = nn.MaxPool2d(2)
+        self.enc2 = _UNetBlock(w, w * 2)
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.dec1 = _UNetBlock(w * 2 + w, w)
+        self.head = nn.Conv2d(w, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        h, w = x.shape[-2:]
+        pad_h = (4 - h % 4) % 4
+        pad_w = (4 - w % 4) % 4
+        if pad_h or pad_w:
+            x = F.pad(x, (0, pad_w, 0, pad_h))
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        d1 = self.dec1(torch.cat([self.up(e2), e1], dim=1))
+        out = self.head(d1)
+        if pad_h or pad_w:
+            out = out[..., :h, :w]
+        return out

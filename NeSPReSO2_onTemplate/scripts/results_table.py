@@ -21,6 +21,11 @@ EVAL_LABELS: dict[str, str] = {
     "eval_isas_decoder16_test": "ISAS decoder16_ae",
     "eval_isas_decoder32_test": "ISAS decoder32_ae",
     "eval_isas_decoder32_res_test": "ISAS decoder32_res_ae (immature)",
+    "eval_clim_test": "Climatology-only",
+    "eval_gem_test": "Clim + SLA GEM",
+    "eval_field_test": "Field U-Net",
+    "eval_anom_point_test": "ARGO anom point",
+    "eval_anom_patch_test": "ARGO anom L4-patch",
 }
 
 

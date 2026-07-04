@@ -370,7 +370,18 @@ def profile_metrics_from_pcs(
     pca_models: Mapping,
     outputs: OrderedDict,
 ) -> dict[str, Any]:
-    pred_all = pcs_to_profiles_depth_major(pcs, pca_models, outputs)
+    if cache.get("anomaly_targets") and cache.get("clim_profiles") is not None:
+        from model.loss import reconstruct_physical_profiles
+
+        pred_all = reconstruct_physical_profiles(
+            pcs,
+            pca_models,
+            outputs,
+            clim_profiles=cache["clim_profiles"],
+            indices=np.asarray(indices, dtype=int),
+        )
+    else:
+        pred_all = pcs_to_profiles_depth_major(pcs, pca_models, outputs)
     pred = {name: pred_all[name] for name in outputs}
     return _profile_metrics_from_pred(pred, indices, cache, outputs)
 

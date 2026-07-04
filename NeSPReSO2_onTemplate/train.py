@@ -45,10 +45,18 @@ def ensure_cache(config):
         from preproc.export_l3_cache import build_argo_l3_train_cache
 
         cache_path = build_argo_l3_train_cache(config.config)
+    elif io_cfg.get("dataset_tag", "isas20") == "argo_field":
+        from preproc.export_field_cache import build_field_cache
+
+        cache_path = build_field_cache(config.config)
     elif io_cfg.get("dataset_tag", "isas20") == "argo_l4":
         from preproc.export_argo_l4_cache import build_argo_l4_cache
 
         cache_path = build_argo_l4_cache(config.config)
+    elif io_cfg.get("dataset_tag", "isas20") == "argo_residual":
+        from preproc.export_argo_residual_cache import build_argo_residual_cache
+
+        cache_path = build_argo_residual_cache(config.config)
     elif io_cfg.get("dataset_tag", "isas20") == "argo_v2":
         from preproc.export_v2_cache import build_argo_cache
 
@@ -70,13 +78,31 @@ def ensure_cache(config):
         cache = _pickle.load(f)
     if l3_cfg.get("enabled"):
         verify_l3_cache_layout(cache, l3_cfg)
-    cache_dim = cache["inputs"].shape[1]
-    if cache_dim != expected_dim:
-        raise ValueError(
-            f"cache input dim {cache_dim} != expected {expected_dim} "
-            f"(l3={l3_cfg.get('enabled')}, spatial_pad={io_cfg.get('spatial_pad')}, "
-            f"temporal_pad={io_cfg.get('temporal_pad')})"
-        )
+    elif cache.get("dataset_tag") == "argo_field":
+        fields = cache.get("fields")
+        if fields is None or np.asarray(fields).ndim != 4:
+            raise ValueError("argo_field cache must contain fields with ndim==4")
+    else:
+        cache_dim = cache["inputs"].shape[1]
+        if cache_dim != expected_dim:
+            raise ValueError(
+                f"cache input dim {cache_dim} != expected {expected_dim} "
+                f"(l3={l3_cfg.get('enabled')}, spatial_pad={io_cfg.get('spatial_pad')}, "
+                f"temporal_pad={io_cfg.get('temporal_pad')})"
+            )
+
+    steric_cfg = config.config.get("steric") or {}
+    if steric_cfg.get("enabled"):
+        for key in ("ssh_obs_sla", "clim_steric", "steric_calibration"):
+            if key not in cache:
+                raise ValueError(f"steric.enabled requires cache key {key!r}")
+        r_train = float((cache["steric_calibration"] or {}).get("r_train", float("nan")))
+        min_r = float(steric_cfg.get("min_calibration_r", 0.5))
+        if not np.isfinite(r_train) or r_train < min_r:
+            raise ValueError(
+                f"steric calibration r_train={r_train:.3f} < {min_r} — loss is mis-specified; "
+                "fix the calibration (or lower steric.min_calibration_r) before enabling steric"
+            )
 
     split_seed = config.config.get("seed", 42)
     config.config["data_loader"]["args"]["split_seed"] = split_seed
@@ -104,6 +130,12 @@ def resolve_dataloader_batch_size(config, model, criterion, cache_path, device, 
     target_key = dl_args.get("target_key", "targets")
 
     cache, inputs, targets = _load_cache_tensors(cache_path, target_key)
+    if cache.get("dataset_tag") == "argo_field":
+        if configured <= 0:
+            configured = 4
+        config.config["data_loader"]["args"]["batch_size"] = configured
+        return configured
+
     from base.split_utils import build_split_indices
 
     split_indices = build_split_indices(
@@ -168,6 +200,10 @@ def main(config):
 
     model = config.init_obj("arch", module_arch)
     logger.info(model)
+    arch_args = config.config.get("arch", {}).get("args", {})
+    if hasattr(model, "set_freeze_base") and arch_args.get("freeze_base"):
+        model.set_freeze_base(True)
+        logger.info("Residual base encoder frozen (freeze_base=true)")
     model = model.to(device)
     if performance.get("compile"):
         model = maybe_compile_model(model, True)
@@ -195,6 +231,14 @@ def main(config):
         min_depth=cache.get("min_depth", 0),
         max_depth=cache.get("max_depth", cache["targets"].shape[1] - 1 if hasattr(cache["targets"], "shape") else 0),
     )
+    steric_meta = SimpleNamespace(
+        LAT=cache["LAT"],
+        LON=cache["LON"],
+        PRES=cache.get("PRES"),
+        ssh_obs_sla=cache.get("ssh_obs_sla"),
+        clim_steric=cache.get("clim_steric"),
+        steric_calibration=cache.get("steric_calibration"),
+    )
     criterion = make_loss(
         pca_models=cache["pca_models"],
         outputs=loss_outputs,
@@ -202,6 +246,9 @@ def main(config):
         device=device,
         density_config=config.config.get("density"),
         density_meta=density_meta,
+        steric_config=config.config.get("steric"),
+        steric_meta=steric_meta,
+        clim_profiles=cache.get("clim_profiles"),
         loss_scales=config.config.get("loss_scales"),
         loss_config=loss_cfg,
         targets=cache["targets"],
@@ -243,19 +290,36 @@ def main(config):
     if data_loader.sat_patch_shape:
         checkpoint_extra["sat_patch_shape"] = data_loader.sat_patch_shape
 
-    trainer = Trainer(
-        model,
-        criterion,
-        metrics,
-        optimizer,
-        config=config,
-        device=device,
-        data_loader=data_loader,
-        valid_data_loader=valid_data_loader,
-        lr_scheduler=lr_scheduler,
-        checkpoint_extra=checkpoint_extra,
-        performance=performance,
-    )
+    if cache.get("dataset_tag") == "argo_field":
+        from trainer.field_trainer import FieldTrainer
+
+        trainer = FieldTrainer(
+            model,
+            criterion,
+            metrics,
+            optimizer,
+            config=config,
+            device=device,
+            data_loader=data_loader,
+            valid_data_loader=valid_data_loader,
+            lr_scheduler=lr_scheduler,
+            checkpoint_extra=checkpoint_extra,
+            performance=performance,
+        )
+    else:
+        trainer = Trainer(
+            model,
+            criterion,
+            metrics,
+            optimizer,
+            config=config,
+            device=device,
+            data_loader=data_loader,
+            valid_data_loader=valid_data_loader,
+            lr_scheduler=lr_scheduler,
+            checkpoint_extra=checkpoint_extra,
+            performance=performance,
+        )
 
     trainer.train()
 

@@ -21,6 +21,8 @@ CONFIG_EXPER_NAME = {
     "isas_patch": "NeSPReSO2_ISAS_GoM_patch",
     "argo_point": "NeSPReSO2_ARGO_GoM",
     "argo_patch_l4": "NeSPReSO2_ARGO_GoM_patch_l4",
+    "argo_anom_point": "NeSPReSO2_ARGO_GoM_anom",
+    "argo_anom_patch_l4": "NeSPReSO2_ARGO_GoM_patch_l4_anom",
 }
 
 
