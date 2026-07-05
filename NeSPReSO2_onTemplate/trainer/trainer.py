@@ -187,6 +187,10 @@ class Trainer(BaseTrainer):
             log["grad_norm"] = grad_norm ** 0.5
             if self.writer is not None:
                 self.writer.add_scalar("train/grad_norm", log["grad_norm"], epoch)
+            if hasattr(self.model, "gate_l1"):
+                log["gate_l1"] = float(self.model.gate_l1.detach().cpu())
+                if self.writer is not None:
+                    self.writer.add_scalar("train/gate_l1", log["gate_l1"], epoch)
 
         return log
 

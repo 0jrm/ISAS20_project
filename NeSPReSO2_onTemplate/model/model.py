@@ -810,3 +810,6 @@ class FieldUNet(BaseModel):
         if pad_h or pad_w:
             out = out[..., :h, :w]
         return out
+
+
+from model.residual import PointAnchoredResidual  # noqa: E402,F401

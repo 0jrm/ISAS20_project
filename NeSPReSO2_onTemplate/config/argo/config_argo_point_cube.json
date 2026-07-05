@@ -1,0 +1,111 @@
+{
+    "name": "NeSPReSO2_ARGO_GoM",
+    "n_gpu": 1,
+    "seed": 42,
+    "arch": {
+        "type": "PatchConvMLP",
+        "args": {
+            "input_dim": 9,
+            "output_dim": 32,
+            "dropout_prob": 0.2,
+            "d_model": 128,
+            "head_layers": [
+                1024,
+                1024
+            ],
+            "patch_shape": null,
+            "n_enc": 6,
+            "n_sat": 3
+        }
+    },
+    "features": {
+        "spec_version": 1,
+        "scalars": [
+            "timecos", "timesin", "latcos", "latsin", "loncos", "lonsin"
+        ],
+        "point_backbone_inputs": [
+            "sss.value@local", "sst.value@local", "ssh.value@local"
+        ],
+        "operators": [
+            {"op": "value", "channels": ["sst", "sss", "ssh"], "scales": ["local"]}
+        ]
+    },
+    "io": {
+        "dataset_tag": "argo_cube",
+        "cache_kind": "point_cube",
+        "cube_path": "data/cube/gom_cube.zarr",
+        "cache_dir": "data/cache",
+        "spatial_pad": 0,
+        "temporal_pad": 0,
+        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "refit_pca": false,
+        "pca_ckpt": "saved/models/NeSPReSO2_ARGO_GoM/argo16_scales/model_best.pth"
+    },
+    "outputs": {
+        "temperature": 16,
+        "salinity": 16
+    },
+    "loss_scales": {
+        "profile_scales": {
+            "temperature": 2.0029,
+            "salinity": 0.0313
+        },
+        "combined_pca_scale": 2.0,
+        "combined_mse_scale": 0.2174
+    },
+    "density": {
+        "enabled": false,
+        "checkpoint": "",
+        "stats_path": "",
+        "stab_weight": 0.0,
+        "smooth_weight": 0.0
+    },
+    "data_loader": {
+        "type": "NeSPReSODataLoader",
+        "args": {
+            "cache_path": "",
+            "batch_size": 512,
+            "shuffle": true,
+            "split_mode": "chronological",
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": false
+        }
+    },
+    "loss": "combined_pca_loss",
+    "loss_config": {
+        "mode": "combined"
+    },
+    "metrics": [
+        "profile_rmse"
+    ],
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": 100000,
+            "gamma": 1.0
+        }
+    },
+    "trainer": {
+        "epochs": 8000,
+        "save_dir": "saved/",
+        "save_period": 1,
+        "log_interval": 10,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": 500,
+        "tensorboard": true
+    }
+}

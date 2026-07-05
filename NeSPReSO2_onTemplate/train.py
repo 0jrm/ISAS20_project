@@ -61,6 +61,13 @@ def ensure_cache(config):
         from preproc.export_v2_cache import build_argo_cache
 
         cache_path = build_argo_cache(config.config)
+    elif io_cfg.get("dataset_tag", "isas20") == "argo_cube":
+        from preproc.features.export_feature_cache import build_feature_cache, build_point_cube_cache
+
+        if io_cfg.get("cache_kind") == "point_cube":
+            cache_path = build_point_cube_cache(config.config)
+        else:
+            cache_path = build_feature_cache(config.config)
     else:
         cache_path = build_train_cache(config.config)
 

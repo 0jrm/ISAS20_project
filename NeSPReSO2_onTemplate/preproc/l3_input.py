@@ -153,6 +153,11 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         arch_args["out_channels"] = sum(config["outputs"].values())
         arch_args["base_width"] = int(field_cfg.get("base_width", 32))
         expected_dim = arch_args["in_channels"]
+    elif io_cfg.get("cache_kind") == "point_cube":
+        expected_dim = int(arch_args.get("input_dim", 9))
+        arch_args["n_enc"] = int(arch_args.get("n_enc", 6))
+        arch_args["n_sat"] = int(arch_args.get("n_sat", 3))
+        arch_args["patch_shape"] = None
     elif arch.get("type") in ("PatchConvMLP", "PatchMaskConvMLP"):
         from preproc.preproc_isas_sat import (
             compute_input_dim,
@@ -217,6 +222,18 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         arch_args["n_enc"] = count_encoding_dims(input_params)
         arch_args["n_sat"] = 3
         arch_args["patch_shape"] = list(patch_shape)
+    elif arch.get("type") == "PointAnchoredResidual":
+        features = config.get("features") or {}
+        from preproc.features.sampler import expand_feature_names
+
+        feat_dim = len(expand_feature_names(features))
+        base_dim = int(arch_args.get("base_dim", 9))
+        arch_args["base_dim"] = base_dim
+        arch_args["feat_dim"] = feat_dim
+        arch_args["feat_offset"] = base_dim
+        arch_args["n_enc"] = 6
+        arch_args["n_sat"] = 3
+        expected_dim = base_dim + feat_dim
     else:
         from preproc.preproc_isas_sat import compute_input_dim
 

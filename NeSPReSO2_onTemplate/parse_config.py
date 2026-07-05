@@ -78,6 +78,9 @@ def validate_config(config):
         from preproc.l4_augment import VALID_L4_MODES
 
         assert float(l4.get("noise_scale", 1.0)) >= 0, "io.l4.noise_scale must be >= 0"
+    io = config.get("io", {})
+    if io.get("dataset_tag") == "argo_cube" and io.get("refit_pca"):
+        raise ValueError("argo_cube configs must set io.refit_pca=false (reuse point PCA basis)")
         mode = str(l4.get("mode", "mask_augment"))
         assert mode in VALID_L4_MODES, f"io.l4.mode must be one of {VALID_L4_MODES}, got {mode!r}"
         assert l3 and l3.get("enabled"), "io.l4.enabled requires io.l3.enabled"
