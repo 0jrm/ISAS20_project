@@ -134,33 +134,6 @@ def _parse_file_date(spec_name: str, path: Path) -> date | None:
     return datetime.strptime(token, spec.date_fmt).date()
 
 
-def _read_hyperslab_plane(
-    path: str,
-    spec_name: str,
-    lat_slice: tuple[int, int],
-    lon_slice: tuple[int, int],
-    time_idx: int | None = None,
-) -> np.ndarray:
-    spec = PRODUCT_SPECS[spec_name]
-    with nc.Dataset(path, "r") as ds:
-        var = ds.variables[spec.source_var]
-        var.set_auto_maskandscale(False)
-        if var.ndim == 2:
-            slab = var[lat_slice[0] : lat_slice[1], lon_slice[0] : lon_slice[1]]
-        elif var.ndim == 3:
-            t = 0 if time_idx is None else time_idx
-            slab = var[t, lat_slice[0] : lat_slice[1], lon_slice[0] : lon_slice[1]]
-        elif var.ndim == 4:
-            t = 0 if time_idx is None else time_idx
-            slab = var[t, 0, lat_slice[0] : lat_slice[1], lon_slice[0] : lon_slice[1]]
-        else:
-            raise ValueError(f"unexpected ndim {var.ndim} for {spec.source_var} in {path}")
-        data = _decode_array(slab, var)
-        if spec.transform is not None:
-            data = spec.transform(data)
-        return np.squeeze(data).astype(np.float32)
-
-
 def _pick_reference_file(spec_name: str) -> Path:
     """Prefer an archive file on the cube time axis (avoids legacy 0–360° SSS headers)."""
     files = _list_product_files(spec_name)
@@ -188,22 +161,41 @@ def _indices_for_file(path: str, spec_name: str) -> tuple[int, int, int, int]:
     return i0, i1, j0, j1
 
 
-def _slice_coords(
-    path: str,
-    spec_name: str,
-    lat_slice: tuple[int, int],
-    lon_slice: tuple[int, int],
-) -> tuple[np.ndarray, np.ndarray]:
+def _read_daily_bundle(
+    path: str, spec_name: str, time_idx: int | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read one day's plane plus its sliced source coords with a single NetCDF open."""
+    lat_min, lat_max, lon_min, lon_max = domain_bounds(spec_name)
     spec = PRODUCT_SPECS[spec_name]
-    i0, i1 = lat_slice
-    j0, j1 = lon_slice
     with nc.Dataset(path, "r") as ds:
         lat_name, lon_name = _coord_names(ds, spec)
-        src_lats = np.asarray(ds.variables[lat_name][i0:i1], dtype=np.float64)
-        src_lons = np.asarray(ds.variables[lon_name][j0:j1], dtype=np.float64)
+        full_lat = np.asarray(ds.variables[lat_name][:], dtype=np.float64)
+        full_lon = np.asarray(ds.variables[lon_name][:], dtype=np.float64)
+        i0, i1 = slice_indices(full_lat, lat_min, lat_max)
+        j0, j1 = lon_slice_indices(full_lon, lon_min, lon_max)
+
+        var = ds.variables[spec.source_var]
+        var.set_auto_maskandscale(False)
+        if var.ndim == 2:
+            slab = var[i0:i1, j0:j1]
+        elif var.ndim == 3:
+            t = 0 if time_idx is None else time_idx
+            slab = var[t, i0:i1, j0:j1]
+        elif var.ndim == 4:
+            t = 0 if time_idx is None else time_idx
+            slab = var[t, 0, i0:i1, j0:j1]
+        else:
+            raise ValueError(f"unexpected ndim {var.ndim} for {spec.source_var} in {path}")
+        data = _decode_array(slab, var)
+        if spec.transform is not None:
+            data = spec.transform(data)
+        plane = np.squeeze(data).astype(np.float32)
+
+        src_lats = full_lat[i0:i1]
+        src_lons = full_lon[j0:j1]
     if src_lons.size and src_lons.min() >= 0 and src_lons.max() > 180:
         src_lons = ((src_lons + 180.0) % 360.0) - 180.0
-    return src_lats, src_lons
+    return plane, src_lats, src_lons
 
 
 def _regrid_plane(
@@ -213,7 +205,20 @@ def _regrid_plane(
     dst_lats: np.ndarray,
     dst_lons: np.ndarray,
 ) -> np.ndarray:
-    """Bilinear regrid onto the cube SST lat/lon vectors."""
+    """Bilinear regrid onto the cube SST lat/lon vectors.
+
+    Deliberately kept as a per-day ``RegularGridInterpolator`` rebuild rather than
+    a precomputed sparse-weight fast path: a precomputed-weights version was tried
+    and found to silently diverge from this near coastlines. scipy's linear
+    interpolator sums all 4 hypercube corners unconditionally (0 * nan == nan, no
+    zero-weight short-circuit — see ``RegularGridInterpolator._evaluate_linear``),
+    and its bracket selection at exact grid-line alignment treats the query point
+    as the *left* edge of the next cell rather than the right edge of the previous
+    one. Both of those are undocumented implementation details that are load-bearing
+    for correctness near NaN/land boundaries; replicating them by hand is fragile
+    enough that it isn't worth the risk for real science data. The safe wins from
+    this refactor are the single-open read and the chunk-aligned buffered writes.
+    """
     plane = np.asarray(plane, dtype=np.float32)
     dst_lats = np.asarray(dst_lats, dtype=np.float64)
     dst_lons = np.asarray(dst_lons, dtype=np.float64)
@@ -249,23 +254,17 @@ def _regrid_plane(
 
 def _worker_read_daily(args: tuple[str, str, str]) -> tuple[str, np.ndarray, np.ndarray, np.ndarray]:
     path, spec_name, date_str = args
-    i0, i1, j0, j1 = _indices_for_file(path, spec_name)
-    lat_slice, lon_slice = (i0, i1), (j0, j1)
-    plane = _read_hyperslab_plane(path, spec_name, lat_slice, lon_slice, time_idx=0)
-    src_lats, src_lons = _slice_coords(path, spec_name, lat_slice, lon_slice)
+    plane, src_lats, src_lons = _read_daily_bundle(path, spec_name, time_idx=0)
     return date_str, plane, src_lats, src_lons
 
 
 def _worker_read_ssh_day(args: tuple[str, str]) -> tuple[str, np.ndarray, np.ndarray, np.ndarray]:
     path, date_str = args
     d = date.fromisoformat(date_str)
-    i0, i1, j0, j1 = _indices_for_file(path, "ssh")
-    lat_slice, lon_slice = (i0, i1), (j0, j1)
     with nc.Dataset(path, "r") as ds:
         times = nc.num2date(ds.variables["time"][:], ds.variables["time"].units)
         idx = min(range(len(times)), key=lambda i: abs((_time_to_date(times[i]) - d).days))
-        plane = _read_hyperslab_plane(path, "ssh", lat_slice, lon_slice, time_idx=idx)
-    src_lats, src_lons = _slice_coords(path, "ssh", lat_slice, lon_slice)
+    plane, src_lats, src_lons = _read_daily_bundle(path, "ssh", time_idx=idx)
     return date_str, plane, src_lats, src_lons
 
 
@@ -431,6 +430,30 @@ def _date_matches_pattern(date_str: str, pattern: str) -> bool:
     return date_str == pattern
 
 
+def _flush_chunked_writes(zarr_arr: zarr.Array, chunk_t: int, pending: dict[int, np.ndarray]) -> None:
+    """Write buffered ``{t_idx: plane}`` entries as chunk-aligned slabs: one
+    read-modify-write per touched time chunk instead of one per day. Writing a
+    single day at a time into a wide time chunk (e.g. 64 days) forces zarr to
+    decompress-modify-recompress the whole chunk on every write; batching by
+    chunk removes that amplification. Reads the existing slab first so any
+    previously-written days in the same chunk (e.g. from a ``--resume`` run
+    that only touched some dates) are preserved, not clobbered.
+    """
+    if not pending:
+        return
+    n_times = zarr_arr.shape[0]
+    by_chunk: dict[int, dict[int, np.ndarray]] = {}
+    for t_idx, plane in pending.items():
+        by_chunk.setdefault(t_idx // chunk_t, {})[t_idx] = plane
+    for c, entries in by_chunk.items():
+        t0 = c * chunk_t
+        t1 = min(t0 + chunk_t, n_times)
+        slab = zarr_arr[t0:t1]
+        for t_idx, plane in entries.items():
+            slab[t_idx - t0] = plane
+        zarr_arr[t0:t1] = slab
+
+
 def build_product(
     spec_name: str,
     *,
@@ -502,6 +525,7 @@ def build_product(
     worker_fn = _worker_read_ssh_day if spec.is_yearly else _worker_read_daily
     task_by_date = {task[-1]: task for task in tasks}
     written = 0
+    pending: dict[int, np.ndarray] = {}
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(worker_fn, task): task[-1] for task in tasks}
         for fut in tqdm(as_completed(futures), total=len(futures), desc=f"build {spec_name}"):
@@ -510,7 +534,7 @@ def build_product(
                 date_str, plane, src_lats, src_lons = fut.result()
                 t_idx = time_index_of(date.fromisoformat(date_str))
                 plane = _regrid_plane(plane, src_lats, src_lons, lats, lons)
-                zarr_arr[t_idx, :, :] = plane
+                pending[t_idx] = plane
                 src = task_by_date[date_str][0]
                 key = f"{spec_name}:{date_str}"
                 manifest.setdefault("entries", {})[key] = {
@@ -521,6 +545,8 @@ def build_product(
                 written += 1
             except Exception as exc:
                 print(f"WARN {spec_name} {ds_str}: {exc}", file=sys.stderr)
+
+    _flush_chunked_writes(zarr_arr, spec.chunk_t, pending)
 
     # Explicit NaN planes for whitelisted missing days
     allowed = set(ALLOWED_MISSING_DAYS)
