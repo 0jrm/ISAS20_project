@@ -210,6 +210,19 @@ def time_index_axis() -> np.ndarray:
     return np.arange(TIME_START, end_exclusive, dtype="datetime64[D]")
 
 
+def time_indices_of_days(days: np.ndarray) -> np.ndarray:
+    """Vectorized map from ``datetime64[D]`` array to cube time indices; raises if any out of range."""
+    days = np.asarray(days, dtype="datetime64[D]")
+    idx = (days - TIME_START).astype(np.int64)
+    bad = (idx < 0) | (days > TIME_END)
+    if np.any(bad):
+        bad_days = days[bad]
+        raise IndexError(
+            f"date(s) {bad_days.ravel()[:5].tolist()} not on cube time axis [{TIME_START}, {TIME_END}]"
+        )
+    return idx
+
+
 def time_index_of(dt: date | datetime | np.datetime64) -> int:
     """Map calendar date to cube time index; raises if out of range."""
     if isinstance(dt, datetime):
@@ -218,11 +231,7 @@ def time_index_of(dt: date | datetime | np.datetime64) -> int:
         d = np.datetime64(dt, "D")
     else:
         d = np.datetime64(dt, "D")
-    axis = time_index_axis()
-    hits = np.where(axis == d)[0]
-    if hits.size == 0:
-        raise IndexError(f"date {d} not on cube time axis [{TIME_START}, {TIME_END}]")
-    return int(hits[0])
+    return int(time_indices_of_days(np.array([d]))[0])
 
 
 def slice_indices(coord: np.ndarray, vmin: float, vmax: float) -> tuple[int, int]:

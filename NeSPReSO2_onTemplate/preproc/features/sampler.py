@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-import sys
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -26,12 +26,40 @@ from preproc.cube.cube_schema import (  # noqa: E402
     PRODUCT_SPECS,
     default_cube_path,
     time_index_of,
+    time_indices_of_days,
 )
-from preproc.features.operators import apply_operator  # noqa: E402
+from preproc.features.operators import GRAVITY, apply_operator  # noqa: E402
+
+EARTH_ROTATION_RATE = 7.2921e-5
 
 
 class MissingCubePlaneError(ValueError):
     """Raised when sampling a whitelisted missing cube day (explicit NaN plane)."""
+
+
+class _LRUDict(OrderedDict):
+    """Bounded cache: evicts the least-recently-used entry past ``maxsize``.
+
+    Derived cube planes are large (float32 grids); an unbounded dict here is a
+    memory-growth risk on full-dataset exports (thousands of unique days).
+    """
+
+    def __init__(self, maxsize: int = 256):
+        super().__init__()
+        self.maxsize = maxsize
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.maxsize:
+            oldest = next(iter(self))
+            del self[oldest]
+
+    def __getitem__(self, key: Any) -> Any:
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
 
 
 class FieldProvider(Protocol):
@@ -50,6 +78,13 @@ def time_index_of_jd(jd: float) -> int:
     """Convert astropy Julian date to cube time index."""
     dt = Time(jd, format="jd").datetime
     return time_index_of(dt)
+
+
+def time_indices_of_jd(dates_jd: np.ndarray) -> np.ndarray:
+    """Vectorized batch of ``time_index_of_jd`` — one astropy conversion for all dates."""
+    jd = np.asarray(dates_jd, dtype=np.float64)
+    days = Time(jd, format="jd").datetime64.astype("datetime64[D]")
+    return time_indices_of_days(days)
 
 
 def time_index_of_matlab_datenum(datenum: float) -> int:
@@ -185,7 +220,14 @@ def expand_feature_names(features_cfg: Mapping[str, Any]) -> list[tuple[str, str
 class CubeProvider:
     """Sample named features from a Zarr cube."""
 
-    def __init__(self, cube_path: Path | str | None = None):
+    def __init__(
+        self,
+        cube_path: Path | str | None = None,
+        *,
+        plane_cache_size: int = 512,
+        stack_cache_size: int = 128,
+        derived_cache_size: int = 512,
+    ):
         if cube_path is None or str(cube_path).strip() == "":
             self.cube_path = default_cube_path(_ROOT)
         else:
@@ -194,9 +236,14 @@ class CubeProvider:
         if not self.cube_path.exists():
             raise FileNotFoundError(f"cube not found: {self.cube_path}")
         self.root = zarr.open(str(self.cube_path), mode="r")
+        self.plane_cache_size = plane_cache_size
+        self.stack_cache_size = stack_cache_size
+        self.derived_cache_size = derived_cache_size
         self._weights: dict[str, sparse.csr_matrix] = {}
         self._missing_days = set(self.root.attrs.get("missing_days", []))
         self._allowed_missing = set(cube_schema.ALLOWED_MISSING_DAYS)
+        self._basin_mask_cache: dict[tuple, np.ndarray] = {}
+        self._basin_cache: dict[tuple[str, int], float] = {}
 
     def grid_coords(self, channel: str) -> tuple[np.ndarray, np.ndarray]:
         lats = np.asarray(self.root[f"coords/{channel}_lat"], dtype=np.float64)
@@ -227,15 +274,49 @@ class CubeProvider:
     def bathy_depth_plane(self) -> np.ndarray:
         return np.asarray(self.root["bathy"], dtype=np.float32)
 
+    def _basin_mask_for(self, channel: str, basin_cfg: Mapping[str, Any]) -> np.ndarray:
+        key = (channel, tuple(sorted(basin_cfg.items())))
+        if key not in self._basin_mask_cache:
+            lats, lons = self.grid_coords(channel)
+            self._basin_mask_cache[key] = basin_mask(lats, lons, basin_cfg)
+        return self._basin_mask_cache[key]
+
     def basin_mean(self, channel: str, t_idx: int, basin_cfg: Mapping[str, Any] | None = None) -> float:
         basin_cfg = basin_cfg or DEFAULT_BASIN_CFG
-        lats, lons = self.grid_coords(channel)
-        mask = basin_mask(lats, lons, basin_cfg)
+        mask = self._basin_mask_for(channel, basin_cfg)
         plane = self.plane(channel, t_idx)
         vals = plane[mask]
         if vals.size == 0 or not np.any(np.isfinite(vals)):
             raise ValueError(f"missing basin mean for {channel} at t={t_idx}")
         return float(np.nanmean(vals))
+
+    def _read_tendency_stack(self, ch: str, t_idx: int, window: int) -> np.ndarray:
+        """Stack of ``window`` consecutive daily planes ending at ``t_idx`` (oldest first).
+
+        Contiguous ranges are read as a single chunk-aligned slab instead of one
+        ``plane()`` call per day. Falls back to the clamped per-day loop only near
+        the start of the cube time axis, matching the original boundary behavior.
+        """
+        if t_idx - window + 1 >= 0:
+            for t_chk in range(t_idx - window + 1, t_idx + 1):
+                self._assert_plane_available(ch, t_chk)
+            return np.asarray(self.root[ch][t_idx - window + 1 : t_idx + 1], dtype=np.float32)
+        planes = []
+        for k in range(window - 1, -1, -1):
+            t_k = max(0, t_idx - k)
+            self._assert_plane_available(ch, t_k)
+            planes.append(self.plane(ch, t_k))
+        return np.stack(planes, axis=0)
+
+    @staticmethod
+    def _group_by_t_idx(time_idx: np.ndarray) -> list[tuple[int, np.ndarray]]:
+        """Profile indices grouped by cube day, ascending — one group per unique day."""
+        order = np.argsort(time_idx, kind="stable")
+        sorted_t = time_idx[order]
+        boundaries = np.flatnonzero(np.diff(sorted_t)) + 1
+        starts = np.concatenate(([0], boundaries))
+        ends = np.concatenate((boundaries, [len(order)]))
+        return [(int(sorted_t[s]), order[s:e]) for s, e in zip(starts, ends)]
 
     def sample(
         self,
@@ -251,7 +332,8 @@ class CubeProvider:
         valid = np.zeros((n, len(names)), dtype=bool)
         units = ["1"] * len(names)
 
-        time_idx = np.array([time_index_of_jd(float(d)) for d in dates_jd], dtype=int)
+        time_idx = time_indices_of_jd(np.asarray(dates_jd, dtype=np.float64))
+        t_groups = self._group_by_t_idx(time_idx)
 
         # Scalars
         for j, (name, op, ch, _scale, _param) in enumerate(expanded):
@@ -270,19 +352,16 @@ class CubeProvider:
             elif name.startswith("basin_"):
                 ch_map = {"basin_sss": "sss", "basin_sst": "sst", "basin_ssh": "ssh"}
                 channel = ch_map[name]
-                basin_cache: dict[tuple[str, int], float] = getattr(self, "_basin_cache", {})
-                for i in range(n):
-                    t_idx = int(time_idx[i])
+                for t_idx, idx_arr in t_groups:
                     bkey = (channel, t_idx)
-                    if bkey not in basin_cache:
-                        basin_cache[bkey] = self.basin_mean(channel, t_idx)
-                    values[i, j] = basin_cache[bkey]
-                    valid[i, j] = True
-                self._basin_cache = basin_cache
+                    if bkey not in self._basin_cache:
+                        self._basin_cache[bkey] = self.basin_mean(channel, t_idx)
+                    values[idx_arr, j] = self._basin_cache[bkey]
+                    valid[idx_arr, j] = True
 
-        plane_cache: dict[tuple[str, int], np.ndarray] = {}
-        stack_cache: dict[tuple[str, int, int], np.ndarray] = {}
-        derived_planes: dict[tuple, np.ndarray] = {}
+        plane_cache: _LRUDict = _LRUDict(maxsize=self.plane_cache_size)
+        stack_cache: _LRUDict = _LRUDict(maxsize=self.stack_cache_size)
+        derived_planes: _LRUDict = _LRUDict(maxsize=self.derived_cache_size)
 
         def _field_plane(ch: str, t_idx: int) -> np.ndarray:
             key = (ch, t_idx)
@@ -299,61 +378,42 @@ class CubeProvider:
             print(f"[sampler] feature {op_idx}/{n_ops}: {name}", file=sys.stderr, flush=True)
             grid_step = PRODUCT_SPECS[ch].grid_step_deg
             glat, glon = self.grid_coords(ch)
+            w_full = self.weights_for(ch, lats, lons)
 
-            for i in range(n):
-                t_idx = int(time_idx[i])
-                lat_i = float(lats[i])
+            for t_idx, idx_arr in t_groups:
                 if op == "tendency":
                     window = int(param)
-                    dkey = (name, ch, t_idx, window)
-                elif op == "geo_uv":
-                    dkey = (name, ch, t_idx, scale_lbl, round(lat_i, 3))
+                    dkey = ("tendency", ch, t_idx, window)
+                elif op in ("grad", "geo_uv"):
+                    # geo_uv reuses grad's gx/gy planes; f(lat) is applied per-profile after sampling.
+                    dkey = ("grad", ch, t_idx, scale_lbl)
                 else:
-                    dkey = (name, ch, t_idx, scale_lbl)
+                    dkey = (op, ch, t_idx, scale_lbl)
 
                 if dkey not in derived_planes:
                     if op == "tendency":
                         window = int(param)
                         skey = (ch, t_idx, window)
                         if skey not in stack_cache:
-                            planes = []
-                            for k in range(window - 1, -1, -1):
-                                t_k = max(0, t_idx - k)
-                                self._assert_plane_available(ch, t_k)
-                                planes.append(self.plane(ch, t_k))
-                            stack_cache[skey] = np.stack(planes, axis=0)
+                            stack_cache[skey] = self._read_tendency_stack(ch, t_idx, window)
                         derived_planes[dkey] = apply_operator(
                             "tendency", _field_plane(ch, t_idx), stack=stack_cache[skey], window_days=window
                         )
                     else:
                         scale_deg = resolve_scale_deg(ch, scale_lbl, feature_spec)
                         field = _field_plane(ch, t_idx)
-                        if op == "grad":
-                            gx, gy = apply_operator(
+                        if op in ("grad", "geo_uv"):
+                            derived_planes[dkey] = apply_operator(
                                 "grad", field, lats=glat, lons=glon, scale_deg=scale_deg, grid_step_deg=grid_step
                             )
-                            derived_planes[dkey] = gx if ".grad_x@" in name else gy
-                        elif op == "geo_uv":
-                            u, v = apply_operator(
-                                "geo_uv",
-                                field,
-                                lats=glat,
-                                lons=glon,
-                                scale_deg=scale_deg,
-                                grid_step_deg=grid_step,
-                                profile_lat=lat_i,
-                            )
-                            derived_planes[dkey] = u if ".geo_u@" in name else v
                         elif op == "value":
                             derived_planes[dkey] = apply_operator(
                                 "value", field, lats=glat, lons=glon, scale_deg=scale_deg, grid_step_deg=grid_step
                             )
                         elif op == "value_centered":
                             bkey = (ch, t_idx)
-                            vc_cache: dict[tuple[str, int], float] = getattr(self, "_basin_cache", {})
-                            if bkey not in vc_cache:
-                                vc_cache[bkey] = self.basin_mean(ch, t_idx)
-                            self._basin_cache = vc_cache
+                            if bkey not in self._basin_cache:
+                                self._basin_cache[bkey] = self.basin_mean(ch, t_idx)
                             derived_planes[dkey] = apply_operator(
                                 "value_centered",
                                 field,
@@ -361,7 +421,7 @@ class CubeProvider:
                                 lons=glon,
                                 scale_deg=scale_deg,
                                 grid_step_deg=grid_step,
-                                basin_value=vc_cache[bkey],
+                                basin_value=self._basin_cache[bkey],
                             )
                         elif op == "laplacian":
                             derived_planes[dkey] = apply_operator(
@@ -370,12 +430,32 @@ class CubeProvider:
                         else:
                             raise ValueError(f"unknown op {op}")
 
-                w = self.weights_for(ch, lats, lons)
-                flat = np.asarray(derived_planes[dkey], dtype=np.float64).reshape(-1)
-                wt = w.getrow(i)
-                val = float((wt @ flat).sum())
-                wsum = float((wt @ np.isfinite(flat).astype(np.float64)).sum())
-                values[i, j] = val
-                valid[i, j] = wsum >= 0.5
+                w_group = w_full[idx_arr]
+                if op == "grad":
+                    gx, gy = derived_planes[dkey]
+                    plane_pick = gx if ".grad_x@" in name else gy
+                    sampled, val_w = sample_plane(w_group, plane_pick)
+                    values[idx_arr, j] = sampled
+                    valid[idx_arr, j] = val_w
+                elif op == "geo_uv":
+                    gx, gy = derived_planes[dkey]
+                    lat_group = lats[idx_arr].astype(np.float64)
+                    f = 2.0 * EARTH_ROTATION_RATE * np.sin(np.radians(lat_group))
+                    f = np.where(np.abs(f) < 1e-8, 1e-8, f)
+                    if ".geo_u@" in name:
+                        # u = (-g/f) * gy — validity tracks gy alone, matching the pre-refactor
+                        # single-plane cache (op_geo_uv returned u/v; isfinite(u) == isfinite(gy)).
+                        gy_s, gy_valid = sample_plane(w_group, gy)
+                        sampled = ((-GRAVITY / f) * gy_s).astype(np.float32)
+                        valid[idx_arr, j] = gy_valid
+                    else:
+                        gx_s, gx_valid = sample_plane(w_group, gx)
+                        sampled = ((GRAVITY / f) * gx_s).astype(np.float32)
+                        valid[idx_arr, j] = gx_valid
+                    values[idx_arr, j] = sampled
+                else:
+                    sampled, val_w = sample_plane(w_group, derived_planes[dkey])
+                    values[idx_arr, j] = sampled
+                    valid[idx_arr, j] = val_w
 
         return FeatureTable(names=names, values=values, units=units, valid_mask=valid)
