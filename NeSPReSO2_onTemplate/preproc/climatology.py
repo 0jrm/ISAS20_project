@@ -29,10 +29,9 @@ def _normalize_coords(lat: np.ndarray, lon: np.ndarray, basin: Mapping[str, floa
 
 
 def _day_of_year_accurate(juld: np.ndarray, *, dataset_tag: str, v2_src: str | None) -> np.ndarray:
-    from datetime import date
-
     dates = sample_dates(juld, dataset_tag=dataset_tag, v2_src=v2_src)
-    return np.array([date.fromisoformat(str(d)[:10]).timetuple().tm_yday for d in dates], dtype=np.float64)
+    years = dates.astype("datetime64[Y]")
+    return (dates - years).astype("timedelta64[D]").astype(np.float64) + 1.0
 
 
 def design_matrix(
@@ -74,16 +73,33 @@ def design_matrix(
     return (time_terms[:, :, None] * space_terms[:, None, :]).reshape(n, 30)
 
 
-def _ridge_solve(X: np.ndarray, y: np.ndarray, alpha: float) -> np.ndarray:
-    """Ridge coefficients for one depth level."""
-    valid = np.isfinite(y)
-    if valid.sum() < X.shape[1] + 1:
-        return np.zeros(X.shape[1], dtype=np.float64)
-    Xv = X[valid]
-    yv = y[valid]
-    XtX = Xv.T @ Xv
-    reg = alpha * np.eye(XtX.shape[0], dtype=np.float64)
-    return np.linalg.solve(XtX + reg, Xv.T @ yv)
+def _ridge_solve_multi_depth(X: np.ndarray, Y: np.ndarray, alpha: float) -> np.ndarray:
+    """Ridge coefficients for all depth levels, grouping identical valid-masks.
+
+    Depth levels that share an identical NaN pattern across training samples
+    (common — e.g. a fixed set of stations shallower than a given depth) share
+    one ``Xv``/``XtX`` factorization and are solved as one multi-RHS
+    ``np.linalg.solve`` call instead of one solve per depth. Falls back to a
+    singleton group (one solve) per depth when every mask is unique, so this is
+    never worse than the original per-depth loop, only faster when masks repeat.
+    """
+    n_z = Y.shape[1]
+    beta = np.zeros((X.shape[1], n_z), dtype=np.float64)
+    groups: dict[bytes, list[int]] = {}
+    for iz in range(n_z):
+        key = np.packbits(np.isfinite(Y[:, iz])).tobytes()
+        groups.setdefault(key, []).append(iz)
+
+    for idxs in groups.values():
+        valid = np.isfinite(Y[:, idxs[0]])
+        if valid.sum() < X.shape[1] + 1:
+            continue  # beta columns already zero-initialized
+        Xv = X[valid]
+        Yv = Y[np.ix_(valid, idxs)]
+        XtX = Xv.T @ Xv
+        reg = alpha * np.eye(XtX.shape[0], dtype=np.float64)
+        beta[:, idxs] = np.linalg.solve(XtX + reg, Xv.T @ Yv)
+    return beta
 
 
 def _smooth_coef_vertical(coef: np.ndarray, window: int) -> np.ndarray:
@@ -130,10 +146,7 @@ def fit_climatology(
         arr = np.asarray(prof, dtype=np.float64)
         if arr.ndim != 2:
             raise ValueError(f"profiles[{var}] must be 2-D depth-major, got {arr.shape}")
-        n_z = arr.shape[0]
-        beta = np.zeros((30, n_z), dtype=np.float64)
-        for iz in range(n_z):
-            beta[:, iz] = _ridge_solve(X_train, arr[iz, train_idx], alpha)
+        beta = _ridge_solve_multi_depth(X_train, arr[:, train_idx].T, alpha)
         if smooth_window > 1:
             beta = _smooth_coef_vertical(beta.T, smooth_window).T
         coef[var] = beta.astype(np.float32)

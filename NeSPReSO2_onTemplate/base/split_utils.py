@@ -11,6 +11,8 @@ from torch.utils.data import Subset, random_split
 
 
 EPOCH_1950 = datetime(1950, 1, 1)
+_EPOCH_1950_64 = np.datetime64("1950-01-01")
+_ORDINAL_1_64 = np.datetime64("0001-01-01")  # == datetime.fromordinal(1)
 
 
 def _parse_iso_date(s: str) -> date:
@@ -39,11 +41,25 @@ def sample_dates(
     dataset_tag: str,
     v2_src: str | None = None,
 ) -> np.ndarray:
-    """Per-sample calendar dates as datetime64[D]."""
-    out = []
-    for v in np.asarray(juld).ravel():
-        out.append(juld_to_datetime(float(v), dataset_tag=dataset_tag, v2_src=v2_src).date())
-    return np.array(out, dtype="datetime64[D]")
+    """Per-sample calendar dates as datetime64[D].
+
+    Vectorized affine calendar arithmetic — equivalent to calling
+    ``juld_to_datetime(v).date()`` per element (verified against that loop on real
+    caches + exhaustive synthetic edge cases), but avoids one Python datetime
+    object per sample. ``v2_src`` is accepted for signature compatibility but
+    unused: date-only truncation never needs the external ``nespreso`` import.
+    """
+    d = np.asarray(juld, dtype=np.float64).ravel()
+    if dataset_tag == "isas20":
+        days_from_epoch = d
+        epoch64 = _EPOCH_1950_64
+    else:
+        # MATLAB datenum: datetime.fromordinal(int(d) - 366) + timedelta(days=d % 1)
+        # == datetime.fromordinal(1) + (d - 367) days, for d > 0 (int(d) + d % 1 == d).
+        days_from_epoch = d - 367.0
+        epoch64 = _ORDINAL_1_64
+    micros = np.round(days_from_epoch * 86_400_000_000).astype(np.int64)
+    return (epoch64 + micros.astype("timedelta64[us]")).astype("datetime64[D]")
 
 
 def _split_lengths(n: int, train_frac: float, val_frac: float, test_frac: float) -> tuple[int, int, int]:

@@ -7,6 +7,7 @@ import json
 import os
 import pickle
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -157,6 +158,7 @@ def compute_basin_daily_means(
     cache_dir: str = "../data/cache",
     v2_src: str | None = None,
     force: bool = False,
+    max_workers: int = 8,
 ) -> dict[str, np.ndarray]:
     """
     Per-station basin means aligned with ``juld`` (MATLAB datenum or day-of-year float).
@@ -182,10 +184,23 @@ def compute_basin_daily_means(
                 dt = datetime(2000, 1, 1) + __import__("datetime").timedelta(days=day)
             unique_days[float(t)] = dt
         lookup: dict[str, dict[float, float]] = {k: {} for k in ("sss", "sst", "ssh")}
-        for day_key, dt in unique_days.items():
-            for out_key, (product, var) in PRODUCT_VAR.items():
-                var_key = out_key.replace("basin_", "")
-                lookup[var_key][day_key] = _field_mean_for_date(product, var, dt, basin_cfg)
+        # I/O-bound (netCDF opens over NFS) — each (day, product) mean is independent,
+        # so threads parallelize the actual wait time without touching shared state
+        # (select_candidate_file/get_product_files are lru_cache-backed and thread-safe).
+        tasks = [
+            (day_key, dt, out_key, product, var)
+            for day_key, dt in unique_days.items()
+            for out_key, (product, var) in PRODUCT_VAR.items()
+        ]
+
+        def _run(task):
+            day_key, dt, out_key, product, var = task
+            var_key = out_key.replace("basin_", "")
+            return day_key, var_key, _field_mean_for_date(product, var, dt, basin_cfg)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            for day_key, var_key, mean in ex.map(_run, tasks):
+                lookup[var_key][day_key] = mean
         with open(path, "wb") as f:
             pickle.dump({"lookup": lookup, "basin_cfg": dict(basin_cfg)}, f)
 

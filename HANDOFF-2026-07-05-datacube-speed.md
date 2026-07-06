@@ -9,8 +9,9 @@ put the right python first on `PATH` — if `import astropy`/`import zarr` fails
 directly: `/conda/jmiranda/miniconda/envs/nespreso/bin/python3`.
 
 User asked to execute the full plan (Phases 0–5). **Phases 0, 1, and 2 are done, verified, committed,
-and pushed to `origin/residual_cube`.** Phases 3–5 are not started. Nothing is mid-flight — this is a
-clean stopping point.
+and pushed to `origin/residual_cube`.** Phase 3 is skipped for now (no raw L3/L4 data in this
+environment, per below). **Phase 4 is done and verified in this session but not yet committed** —
+working tree has changes pending review/commit. Phase 5 not started.
 
 ```
 d7519b7 Phase 2 datacube speed: single NetCDF open per read, chunk-aligned buffered writes
@@ -18,7 +19,14 @@ d7519b7 Phase 2 datacube speed: single NetCDF open per read, chunk-aligned buffe
 2cc6c2c cube first draft and runs
 ```
 
-Working tree is clean (`git status` has nothing pending) as of this handoff.
+Phase 4 changes (uncommitted, `git diff --stat`):
+```
+NeSPReSO2_onTemplate/base/split_utils.py    | 26 +++++++++++++---
+NeSPReSO2_onTemplate/preproc/basin_stats.py | 23 +++++++++++---
+NeSPReSO2_onTemplate/preproc/climatology.py | 47 ++++++++++++++++++-----------
+NeSPReSO2_onTemplate/preproc/overlap.py     | 34 +++++++++------------
+NeSPReSO2_onTemplate/preproc/ssh_obs.py     | 23 +++++++++++---
+```
 
 ---
 
@@ -111,9 +119,7 @@ python3 -m pytest tests/test_sampler.py tests/test_cube_validate.py -q   # 11 pa
 
 ---
 
-## Not started: Phases 3–5
-
-Per the plan (`PLAN_datacube_speed.md`):
+## Skipped: Phase 3
 
 - **Phase 3 — L3/L4 rasterization** (`preproc/l3_rasterize.py`, `preproc/l4_rasterize.py`).
   Vectorize `rasterize_era5_wind_for_target` (triple nested Python loop over time×lat×lon),
@@ -127,19 +133,83 @@ Per the plan (`PLAN_datacube_speed.md`):
   end-to-end against real raw files in this environment yet. **Confirm with the user whether to
   invest here now (synthetic-only validation) or wait for the L3/L4 raw downloads.**
 
-- **Phase 4 — auxiliary exporters.** `preproc/climatology.py::_ridge_solve` solves one ridge
-  regression per depth level in a loop; plan suggests factoring `XtX + αI` once and solving
-  multi-RHS when NaN patterns allow (needs a "group depths by identical valid-mask" step first, since
-  masks can differ per depth). `preproc/basin_stats.py::compute_basin_daily_means` already dedupes to
-  unique days but processes them sequentially (I/O bound — `ThreadPoolExecutor` candidate).
-  `preproc/overlap.py::days_since_1950` loops per-element through
-  `nespreso.utils.time.datenum_to_datetime` (external repo, `/unity/g2/jmiranda/v2-nespreso/src`) —
-  vectorizable as a pure affine transform, **but** note the original's
-  `timedelta(days=datenum % 1)` rounds to microsecond precision, so a fully vectorized version would
-  be *more* precise than the original by sub-microsecond amounts — verify this is within tolerance
-  for downstream matched-eval code before landing it. `preproc/ssh_obs.py::sample_ssh_obs` is
-  I/O-bound against `retrieve_satellite_data` — lower priority, not easily vectorizable without
-  changing that API.
+## Done: Phase 4 (auxiliary exporters) — uncommitted this session
+
+All changes verified against real `data/cache/train_ready_*.pkl` caches (13 files, dataset_tag
+`argo_cube`, 4145 real ARGO profile timestamps) by running old vs new implementations side by side
+via `git stash` and diffing outputs — same methodology as Phase 2. No `operator_versions` bump: all
+changes are bit-identical (or identical after the float32 cast the pipeline already applies).
+
+**1. `base/split_utils.py::sample_dates`** — was a per-element Python loop
+(`juld_to_datetime(v).date()` per sample, including an import + branch per call). Replaced with a
+vectorized numpy `datetime64` affine transform: `isas20` is `epoch64 + juld` days; the MATLAB-datenum
+branch (`argo_v2`/`argo_cube`/anything else) reduces to `datetime.fromordinal(1) + (d - 367)` days,
+derived from `datetime.fromordinal(int(d) - 366) + timedelta(days=d % 1)` collapsing to a pure affine
+shift for positive `d` (`int(d) + d % 1 == d`). No more `nespreso.utils.time` import needed for this
+path. Verified 0 mismatches on all 13 real caches + exhaustive synthetic edge cases (near-midnight
+fractional days, multiple leap/non-leap years). `v2_src` kept in the signature for compatibility but
+unused.
+
+**2. `preproc/climatology.py::_day_of_year_accurate`** — used to re-loop over the `sample_dates`
+output doing `date.fromisoformat(str(d)[:10]).timetuple().tm_yday` per sample (a wasteful
+datetime64 → string → date round trip). Now a direct vectorized `(dates - dates.astype('Y'))` day
+offset. Verified against the old loop across every day of 10 years (leap and non-leap) — 0
+mismatches.
+
+**3. `preproc/overlap.py::days_since_1950`** — same affine-collapse idea as #1, applied directly
+(this function bypasses `sample_dates`/`juld_to_datetime` and had its own loop + `_v2_datenum_to_datetime`
+helper, now deleted as dead code along with the now-unused `sys`/`timedelta`/`_V2_SRC` imports).
+Verified bit-identical (`max_abs_diff = 0.0`) on all 13 real caches.
+
+**4. `preproc/ssh_obs.py`** — `sample_ssh_obs` called `_juld_to_astropy_jd` once per profile, each
+call constructing its own `astropy.time.Time` object (~0.1ms overhead each, measured). **Did not**
+apply the same affine-collapse trick here: verified empirically that astropy's UTC-scale JD is *not*
+perfectly affine across leap-second days (e.g. 2015-06-30) — a naive `juld -> jd` formula disagreed
+by up to ~0.94s there, a real algorithmic effect, not float noise. Instead added
+`_juld_array_to_astropy_jd`, which builds the list of `datetime` objects (same per-element step as
+before, still needed for correctness) but passes the whole list to **one** batched `Time(list).jd`
+call instead of N separate `Time(scalar)` calls — ~50x faster construction, and bit-identical output
+(same underlying erfa/leap-second-aware conversion, just batched). `sample_ssh_obs` now precomputes
+the full JD array once instead of per-row inside the batch loop. `_juld_to_astropy_jd` (scalar) is
+kept as-is since `selfcheck.py::test_ssh_obs_cached_smoke` calls it directly.
+
+**5. `preproc/climatology.py::fit_climatology`** — replaced the per-depth-level `_ridge_solve` loop
+(one `np.linalg.solve` per depth, `n_z` solves per variable) with `_ridge_solve_multi_depth`, which
+groups depth levels by identical valid-mask (`np.packbits(np.isfinite(col)).tobytes()` as the group
+key) and solves one shared `(XtX + alpha*I)` factorization per group as a multi-RHS system. Falls
+back to one solve per group when every depth has a unique mask (no worse than before). Real cache
+data (`true_profiles`) turned out to have zero NaNs (already gap-filled), so it exercises the
+best-case single-group path there; separately stress-tested with synthetic data across 5 NaN
+patterns (dense, uniform, per-depth-varying/simulating variable max-depth profiles, fully-unique
+masks, sparse-train) — multi-RHS vs per-depth-loop differ by ~1e-16 (float64 solve-order noise from
+LAPACK batching multiple RHS through one factorization) which **fully disappears** after the
+`.astype(np.float32)` cast `fit_climatology` already applies to `coef` (confirmed bit-identical
+post-cast across 5 random seeds). End-to-end `fit_climatology`/`eval_climatology` roundtrip on 3 real
+caches: bit-identical to the old per-depth loop. The old `_ridge_solve` (single-depth) function was
+deleted as dead code (no longer called, not referenced by any test).
+
+**6. `preproc/basin_stats.py::compute_basin_daily_means`** — was a sequential double loop (unique
+days × 3 products), each iteration doing an I/O-bound `xr.open_dataset` over NFS. Now flattens to a
+`(day, product)` task list and runs it through a `ThreadPoolExecutor(max_workers=8)` (new keyword
+arg, default 8); `retrieve_sat.select_candidate_file`/`get_product_files` are `functools.lru_cache`-backed
+and read-only, so this is thread-safe. Verified identical output dict on real satellite files across
+6 real dates (three from the file's own `_selfcheck()`, plus 3 more spanning different years) — 4x
+wall-clock speedup (12.6s → 3.1s) in that test.
+
+**Verification note:** `selfcheck.py` run top-to-bottom aborts early at `test_combined_pca_loss_v2`
+(line 326, a `CombinedPCALoss` golden-value assertion) — confirmed **pre-existing** on the
+unmodified `residual_cube` HEAD (reproduced by `git stash`-ing all Phase 4 changes and re-running
+just that test), unrelated to this work. Since `selfcheck.py` has no per-test isolation, the 14
+tests actually relevant to Phase 4 (`test_climatology_*`, `test_anomaly_cache_addback`,
+`test_ssh_obs_cached_smoke`, `test_steric_*`, `test_field_date_split_disjoint`,
+`test_field_cache_targets_match_v2`, `test_split_matches_torch_seed`,
+`test_chronological_split_no_leakage`, `test_overlap_pairs`, `test_cache_schema_keys`) were run
+individually and all pass. `pytest tests/test_sampler.py tests/test_cube_validate.py` (Phase 1/2's
+regression gate) still passes, unaffected.
+
+**Not committed yet** — working tree has the 5 modified files pending user review.
+
+## Not started: Phase 5
 
 - **Phase 5 — ingestion format split** (lowest priority per the plan — "fixed per-run cost, not
   per-sample"). `data_loader/data_loaders.py::NeSPReSODataLoader.__init__` does one `pickle.load()`
@@ -181,6 +251,7 @@ python3 -m pytest tests/test_sampler.py tests/test_cube_validate.py -q
 python3 scripts/bench_datacube_speed.py --n-profiles 300 --check-golden
 ```
 
-Next step for a fresh session: ask the user whether to proceed into Phase 3 (and if so, whether to
-scope it to synthetic-data validation only, given no raw L3/L4 archives are present), or to jump to
-Phase 4/5, or stop here.
+Next step for a fresh session: Phase 4 changes are implemented and verified but **uncommitted** —
+review `git diff` first. Then ask the user whether to (a) commit Phase 4, (b) proceed into Phase 5
+(cache format split — needs finding the writer side first, see above), (c) proceed into Phase 3
+(synthetic-only validation, since no raw L3/L4 archives are present), or (d) stop here.

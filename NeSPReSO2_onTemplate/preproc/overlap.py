@@ -4,36 +4,32 @@ from __future__ import annotations
 
 import hashlib
 import pickle
-import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-# ponytail: v2 only for matlab datenum → datetime on ARGO TIME
-_V2_SRC = Path(__file__).resolve().parents[2]  # repo root guess — overridden by caller config
-
-
-def _v2_datenum_to_datetime(matlab_datenum: float) -> datetime:
-    try:
-        from nespreso.utils.time import datenum_to_datetime
-    except ImportError:
-        sys.path.insert(0, str(_V2_SRC))
-        from nespreso.utils.time import datenum_to_datetime
-    return datenum_to_datetime(float(matlab_datenum))
+_EPOCH_1950_ORDINAL = datetime(1950, 1, 1).toordinal()
 
 
 def days_since_1950(juld: np.ndarray, *, dataset_tag: str) -> np.ndarray:
-    """ISAS JULD is already days since 1950-01-01; ARGO stores MATLAB datenum."""
-    epoch = datetime(1950, 1, 1)
+    """ISAS JULD is already days since 1950-01-01; ARGO stores MATLAB datenum.
+
+    Vectorized affine transform for the ARGO branch — MATLAB datenum ``d`` maps to
+    ``datetime.fromordinal(int(d) - 366) + timedelta(days=d % 1)``, which for
+    positive ``d`` collapses to ``date.fromordinal(1) + (d - 367)`` days (since
+    ``int(d) + d % 1 == d``). Subtracting the 1950-01-01 ordinal gives days-since-1950
+    directly, with no per-element datetime construction. Verified bit-identical
+    against the old per-element loop on real caches; introduces at most ~1e-11 day
+    of extra precision relative to the original's microsecond-rounded ``timedelta``,
+    far below the ``dt_max_days``/``grid_deg`` matching tolerances used downstream.
+    """
     if dataset_tag == "isas20":
         return juld.astype(np.float64)
-    return np.array(
-        [(_v2_datenum_to_datetime(d) - epoch).total_seconds() / 86400.0 for d in juld],
-        dtype=np.float64,
-    )
+    d = np.asarray(juld, dtype=np.float64)
+    return d - 366.0 - _EPOCH_1950_ORDINAL
 
 
 def load_cache(path: str | Path) -> dict[str, Any]:
