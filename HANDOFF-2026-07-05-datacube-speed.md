@@ -8,18 +8,19 @@
 put the right python first on `PATH` — if `import astropy`/`import zarr` fails, call the interpreter
 directly: `/conda/jmiranda/miniconda/envs/nespreso/bin/python3`.
 
-User asked to execute the full plan (Phases 0–5). **Phases 0, 1, and 2 are done, verified, committed,
-and pushed to `origin/residual_cube`.** Phase 3 is skipped for now (no raw L3/L4 data in this
-environment, per below). **Phase 4 is done and verified in this session but not yet committed** —
-working tree has changes pending review/commit. Phase 5 not started.
+User asked to execute the full plan (Phases 0–5). **Phases 0, 1, 2, and 4 are done, verified, and
+committed.** Phase 3 is skipped for now (no raw L3/L4 data in this environment, per below). **Phase 5
+was investigated (see below) and the user deliberately chose to stop the track rather than take on
+its real scope** — not implemented, not planned for this branch unless revisited later.
 
 ```
+2c18164 Phase 4 datacube speed: vectorize datenum/JD conversions, multi-RHS ridge solve, threaded basin means
 d7519b7 Phase 2 datacube speed: single NetCDF open per read, chunk-aligned buffered writes
 64053bd Phase 1 datacube speed: fix geo_uv cache-key bug, batch sampling by day
 2cc6c2c cube first draft and runs
 ```
 
-Phase 4 changes (uncommitted, `git diff --stat`):
+Phase 4 changes (committed in `2c18164`, `git show --stat 2c18164`):
 ```
 NeSPReSO2_onTemplate/base/split_utils.py    | 26 +++++++++++++---
 NeSPReSO2_onTemplate/preproc/basin_stats.py | 23 +++++++++++---
@@ -207,19 +208,58 @@ tests actually relevant to Phase 4 (`test_climatology_*`, `test_anomaly_cache_ad
 individually and all pass. `pytest tests/test_sampler.py tests/test_cube_validate.py` (Phase 1/2's
 regression gate) still passes, unaffected.
 
-**Not committed yet** — working tree has the 5 modified files pending user review.
+**Committed** as `2c18164` ("Phase 4 datacube speed: vectorize datenum/JD conversions, multi-RHS
+ridge solve, threaded basin means").
 
-## Not started: Phase 5
+## Phase 5 — investigated, then deliberately stopped (not implemented)
 
-- **Phase 5 — ingestion format split** (lowest priority per the plan — "fixed per-run cost, not
-  per-sample"). `data_loader/data_loaders.py::NeSPReSODataLoader.__init__` does one `pickle.load()`
-  of the entire train-ready cache including eval-only payloads (`profiles`, `true_profiles`,
-  `clim_profiles`, PCA models) alongside `inputs`/`targets`/`JULD` needed by every consumer. Plan
-  wants these split into an mmap-able core (`.npz` or small zarr) with eval-only payloads lazily
-  loaded from a sidecar, keeping the pickle writer as a compatibility path. **Not investigated this
-  session** — need to find the cache *writer* side first (likely
-  `preproc/preproc_isas_sat.py::write_train_cache` or similar) before touching the loader, since both
-  ends need to agree on format.
+A background research pass (before writing any code) found the actual scope is far larger than the
+plan's "~1-2 days, optional" estimate, and the user decided to stop the datacube-speed track here
+rather than take on that scope. Findings, preserved in case this is revisited later:
+
+- **Seven distinct writer functions** produce `train_ready_*.pkl`, each with a different key set and
+  one of **three incompatible hash schemes** for the cache filename: `config_hash()`
+  (`preproc/preproc_isas_sat.py:247-256`, used by `build_train_cache`, `build_argo_cache`,
+  `build_argo_l4_cache`, `build_argo_residual_cache`, `build_field_cache`); the cube-family
+  `_hash_payload()`/`cube_feature_hash()`/`point_cube_cache_hash()`
+  (`preproc/features/export_feature_cache.py:54-94`, used by `build_feature_cache` and
+  `build_point_cube_cache` — this is the writer that produced the real caches in `data/cache/`,
+  `dataset_tag="argo_cube"`); and the L3 composite `l3_{config_hash}_{l3_config_hash}` tag
+  (`preproc/export_l3_cache.py:250-310`).
+- **`pca_models` and `clim_profiles` are not eval-only.** `train.py:221-268` reads them (and
+  conditionally `true_profiles`, `bottom_depth`) *before* constructing the `DataLoader`, to build the
+  training-loss criterion. A naive "core = train-loop keys, sidecar = eval keys" split doesn't hold —
+  those two keys would need to be forced eagerly at train-setup time anyway, so splitting them out
+  buys no laziness, only extra bookkeeping.
+- Multiple consumers do **read-whole → mutate → re-pickle-whole** round trips that would each need to
+  load and re-merge both a core and a sidecar file, or silently drop whatever moved into the sidecar:
+  `preproc/export_l3_cache.py:291` (`payload = dict(base)` on an already-loaded base cache),
+  `preproc/export_field_cache.py:71-197` (`_load_source_cache` then copies `pca_models`/`profiles`/etc.
+  into a new payload), `scripts/export_ae_latents.py:76-118` (loads full cache, cross-references a
+  core key against a sidecar key, mutates, re-pickles the *entire* merged dict back to the same
+  path — the sharpest risk of the bunch), and `diagnostics/stale_sat/make_std_cache.py:16-33` (same
+  pattern, lower stakes).
+- `selfcheck.py:652-677` (`test_cache_schema_keys`) asserts several keys co-exist in one loaded dict;
+  a split would need that test (and any equivalent real-code path) to load-and-merge core+sidecar
+  before the assertion still means anything.
+- `inputs`/`targets` are sample-major (axis 0 = N) but `profiles`/`true_profiles` are depth-major
+  (axis 1 = N, per an explicit comment at `preproc/preproc_isas_sat.py:837-839`) — several consumers
+  already do ad hoc axis detection for this; any core/sidecar indexing scheme has to preserve the
+  asymmetry rather than assume uniform `arr[idx]`.
+- One piece of good news if this is revisited: no consumer re-validates the in-pickle `config_hash`
+  against a freshly computed hash at load time — it's write-only metadata today, so a split doesn't
+  need to solve a "hash mismatch" runtime-correctness problem, only a "did both the core and sidecar
+  file get written together" existence-check problem.
+
+**Decision:** given Phases 1/2/4 are the highest-value wins per the plan's own sequencing rationale
+("Phase 1 dominates... Phase 2 matters when DATA_REVISION bumps force rebuilds... Phases 3-5 are
+proportional to how much you use those paths"), and Phase 5's real footprint is a cross-cutting
+refactor across 7 writers and ~20 consumer files rather than a contained loader change, the user
+chose to stop here rather than scope down to a narrow MVP or attempt the full refactor. If Phase 5 is
+picked up in a future session, the load-bearing files to start from are:
+`preproc/preproc_isas_sat.py:259-269,247-256,755-907`, `data_loader/data_loaders.py:38-166,186-314`,
+`train.py:78-297`, `preproc/export_l3_cache.py:250-310`, `preproc/export_field_cache.py:71-197`,
+`scripts/export_ae_latents.py:24-120`, `selfcheck.py:620-677`.
 
 ---
 
@@ -246,12 +286,14 @@ regression gate) still passes, unaffected.
 ```bash
 cd /unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate
 conda activate nespreso   # if python imports fail, use /conda/jmiranda/miniconda/envs/nespreso/bin/python3 directly
-git log --oneline -5      # confirm Phase 1 (64053bd) + Phase 2 (d7519b7) are present
+git log --oneline -5      # confirm Phase 1 (64053bd), Phase 2 (d7519b7), Phase 4 (2c18164) are present
 python3 -m pytest tests/test_sampler.py tests/test_cube_validate.py -q
 python3 scripts/bench_datacube_speed.py --n-profiles 300 --check-golden
 ```
 
-Next step for a fresh session: Phase 4 changes are implemented and verified but **uncommitted** —
-review `git diff` first. Then ask the user whether to (a) commit Phase 4, (b) proceed into Phase 5
-(cache format split — needs finding the writer side first, see above), (c) proceed into Phase 3
-(synthetic-only validation, since no raw L3/L4 archives are present), or (d) stop here.
+Next step for a fresh session: the datacube-speed track was deliberately stopped after Phase 4
+(user's choice, given Phase 5's real scope — see "Phase 5 — investigated, then deliberately stopped"
+above). Nothing is pending. If picking this back up: Phase 3 needs raw L3/L4 data first (or an
+explicit decision to validate synthetic-only), and Phase 5 needs a scope decision (narrow MVP on the
+`argo_cube`/point-cube writer+loader path only, vs. the full 7-writer/~20-consumer refactor) before
+any code gets written.
