@@ -703,6 +703,37 @@ Add placeholder or partial implementations for:
 
 Add a clean interface for static-stability loss without forcing all training to use it.
 
+## **[measured 2026-07-15] Scope this to `point_cube` — it is the only model that needs it**
+
+RC-1 has now been run (`HANDOFF-2026-07-15-agentic-track0.md`). σ₀ violation rates, chronological
+test split, vs **nature's 24.70%**:
+
+| model | σ₀ profile violation | verdict |
+|---|---:|---|
+| `golden_point` | **0.00%** | constraint already slack |
+| `residual_cube` | 2.57% | already slack |
+| `anom_point` | 7.38% | already slack |
+| `anom_patch_l4` | 8.99% | already slack |
+| **`point_cube`** | **38.52%** | **the only model less stable than nature** |
+
+Four of five models are **over-smoothed, not unstable** — they reproduce PC1 at 0.97× true std but
+shrink high-order PCs to ~0.196×, and those high PCs carry the fine structure that *creates* real
+inversions. **For those four, a physics loss would penalize an already-satisfied constraint and push
+them further from nature's real roughness — do not enable it.** Turning `lambda` up on
+`golden_point` optimizes nothing and costs realism.
+
+**`point_cube` at 38.52% is the genuine target** — a 15× outlier against the other four and the one
+model that is *less* stable than the ocean. Its interface violation rate (0.0669%) is close to
+nature's (0.0586%), so the damage is **spread thinly across many profiles** rather than concentrated
+in a few bad ones — consistent with broadband noise in the cube features, not a handful of outlier
+profiles. **Diagnose the cause before reaching for a loss term:** a physics penalty on a model whose
+instability is an *input-noise* symptom treats the symptom. Compare against `residual_cube` (2.57%),
+which shares the cube feature path but anchors on the point block — that contrast is the cheapest
+available clue and should be the first thing checked.
+
+The ablation ladder below (lambda 0.0 / 0.01 / 0.1 / 1.0) stays as written, but **run it on
+`point_cube` only**, and only after the diagnosis above.
+
 ## Requirements
 
 * Configurable weight, e.g. `physics_loss_weight`.
@@ -731,6 +762,21 @@ Suggested ablation configs:
 # Phase 9 — Ensemble Support, Minimal Only
 
 Prepare support for five independent seeds using the existing PatchConvMLP/PCA path.
+
+## **[measured 2026-07-15] This phase now has a concrete, falsifiable target: under-dispersion**
+
+RC-1/RC-2 (`HANDOFF-2026-07-15-agentic-track0.md`) found the one crisp defect in the current
+models — **they are under-dispersed**. The models reproduce PC1 at 0.97× true std but shrink
+high-order PCs to **~0.196×**; the 0.00% σ₀ violation rate and the fact that predicted profiles
+*beat true profiles* at reproducing observed SLA are both symptoms of the same over-smoothing.
+
+**Prediction to test:** the spread-error ratio comes out **< 1** (over-confident), and most severely
+in the deep/fine-structure modes where the variance ratio is worst. If MC dropout or a seed ensemble
+reports spread-error ≈ 1, be suspicious of the calibration code before believing the models are
+well-calibrated — nothing else measured so far is consistent with that.
+
+This makes RC-4 the highest-value diagnostic left: it is the only one of RC-1/RC-2/RC-4 that is
+**not** already saturated or slack.
 
 ## Tasks
 

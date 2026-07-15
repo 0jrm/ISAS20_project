@@ -1,7 +1,10 @@
 # PLAN — Agentic AI on NeSPReSO: measure, then a controlled closed-loop experiment
 
 **Created:** 2026-07-15
-**Status:** approved, not started
+**Status:** **Track 0 complete (2026-07-15) — results in
+[`HANDOFF-2026-07-15-agentic-track0.md`](HANDOFF-2026-07-15-agentic-track0.md). Track A is next;
+Track B stays gated behind it.** Track 0 invalidated two of this plan's own assumptions; the
+affected sections below are revised and marked **[revised 2026-07-15]**.
 **Source brief:** [`agentic-science.html`](agentic-science.html) (deep research, July 2026)
 **Related:** [`PLAN_datacube_speed.md`](PLAN_datacube_speed.md) (Phase 5 is this plan's target),
 [`PLAN.md`](PLAN.md) Phases 8–9 (uncertainty/ensemble scaffolding)
@@ -31,6 +34,20 @@ this repo already has, largely by accident, the setup the brief describes as ide
   `tests/golden/sampler_golden_*.npz` at `atol=1e-6` with an *exact* `valid_mask` match. An agent
   cannot win by being fast and wrong — precisely the silent-fabrication failure mode the brief
   identifies as the field's most dangerous.
+  **[FALSIFIED 2026-07-15 — see [`HANDOFF-2026-07-15-agentic-track-a.md`](HANDOFF-2026-07-15-agentic-track-a.md)]**
+  The evaluator existed as *code*; it did not exist as a *trustworthy artifact*. **All three
+  goldens failed against the repo's own cube and had since 2026-07-05**, because the cube was
+  rebuilt rev 2 → rev 3 (double-decode fix) ~5 h after the goldens were saved and nothing
+  re-derived them. They asserted a **2.87–3.06 °C Gulf of Mexico** (true: 22.7–29.6 °C). The gate
+  would have **rejected every correct candidate** — and the natural response ("golden must be
+  stale, regenerate it") would have regenerated it against a *mutated* sampler, laundering an
+  unverified mutation into the baseline. The anti-silent-fabrication gate would have become the
+  fabrication mechanism. Fixed: goldens regenerated from the **committed** sampler + rev-3 cube;
+  plausibility + end-to-end tests added so the gate cannot rot silently again.
+  **Read this together with Track 0's finding that `readiness.py` had never run and shipped two
+  silent-wrong-number bugs: *both* evaluators this plan counted on as existing assets were broken.*
+  The brief's thesis ("the evaluator, not the agent") is *strengthened* — the plan's assumption that
+  we already had one is what was wrong.
 - **A control condition already exists.** `PLAN_datacube_speed.md` Phases 1–4 were done *by hand*
   and committed, with measured before/after (271→185s, 60→27s, 22→4.2s). Phase 5 is scoped and
   unclaimed.
@@ -41,6 +58,14 @@ this repo already has, largely by accident, the setup the brief describes as ide
 - **The science evaluators exist and have never been run.** `diagnostics/readiness.py` computes σ₀
   static-stability violation rates *and* steric-height-vs-observed-SLA RMSE/correlation. No
   `readiness_*.json` exists anywhere on disk.
+  **[revised 2026-07-15]** Run. `saved/readiness/readiness_*.{json,md}` now exist for all five
+  scratch models. "Never been run" was load-bearing in a way this plan did not anticipate: the
+  script carried **two latent bugs that returned plausible-looking wrong numbers rather than
+  errors** — it fed anomalies (~0 °C / ~0 PSU) into GSW on any `*_anom` config, and RC-2 was never
+  wired at all, always reporting `status:"ok"` with a null RMSE. A never-run evaluator is not a
+  free asset; it is an *unvalidated* one. This is the brief's own silent-fabrication warning
+  landing on our own diagnostic code — the same class of defect Track A exists to prevent in the
+  speed evaluator, found here by accident. Both fixed; selfchecks pass.
 
 Intended outcome, in priority order:
 
@@ -52,31 +77,158 @@ Intended outcome, in priority order:
 
 ---
 
-## Track 0 — Measure what already exists (~half a day, no agents)
+## Track 0 — Measure what already exists — **DONE 2026-07-15**
 
-Cheapest, highest-information work in the plan. Every item is an existing script producing a
-currently-unknown number.
+Cheapest, highest-information work in the plan, and it paid off: it produced the two unknown
+numbers *and* invalidated two assumptions this plan was built on. Full detail and controls in
+[`HANDOFF-2026-07-15-agentic-track0.md`](HANDOFF-2026-07-15-agentic-track0.md).
 
-1. **Run `diagnostics/readiness.py` on the from-scratch checkpoints** (`scratch_0705_204716_*`,
-   manifest at `notebooks/scratch_outputs/scratch_manifest.json`). CLI takes `-c/--config`,
-   `-r/--resume`, `--split`, `--out`, `--md-out`; ~1 GPU-minute. Yields two unknowns:
-   - RC-1 σ₀ violation rate (`readiness.py:75`) — is it 0.1% or 40%? This single number should
-     decide how much weight physical realism deserves in any future objective.
-   - RC-2 steric-vs-SLA RMSE + correlation (`readiness.py:159`) — the "matching observations"
-     score, already coded and calibrated (alpha 0.88, r_train 0.81).
-2. **Re-derive loss scales on the anomaly cache** — `scripts/derive_loss_scales.py --update-config`.
-   Seconds on CPU. The open scoreboard item ("anom point below parity, suspect `loss_scales` tuned
-   for raw-PC magnitudes") is likely closed by this, *not* by a search: the scales are analytic
-   (zero the predicted PCs, measure reconstruction MSE), so searching them is a category error.
-   Record before/after.
-3. **Record what Track 0 found** in `HANDOFF.md`.
+**Prediction vs. outcome, recorded honestly** — the plan guessed wrong twice, which is the point of
+measuring first:
 
-**Exit:** σ₀ violation rate and steric-vs-SLA correlation are written down. Anomaly loss-scale
-question is closed or escalated with evidence.
+| Plan said | Reality |
+|---|---|
+| RC-1 "is it 0.1% or 40%?" | **0.00%** (0 / 1,121,400 interfaces) for `golden_point` — *below* the plan's optimistic bound. Nature is 24.7%. |
+| RC-2 = the "matching observations" score to optimize | **Saturated.** Model r=0.8299 vs true-profile ceiling r=0.8297. |
+| Loss-scale item "likely closed by this" | Diagnosis **confirmed exactly**, but effect is only a 9.7% T:S rebalance. **Escalated, not closed.** |
+
+1. **RC-1 σ₀ violation rate — `readiness.py` run on all five scratch models.**
+   `golden_point` **0.00%**, `residual_cube` 2.57%, `anom_point` 7.38%, `anom_patch_l4` 8.99%,
+   **`point_cube` 38.52%**. True ARGO profiles: **24.70%**.
+   The models are **over-smoothed, not unstable** — verified by three controls (detector is
+   sensitive; not a PCA artifact, since true PCs through the same PCA-16 basis still violate at
+   24.7%; predictions are sane at T RMSE 0.53). Mechanism: PC1 is reproduced at 0.97× true std but
+   **high-order PCs are shrunk to ~0.196×** — MSE-optimal regression to the mean. The high PCs
+   carry the fine structure that *creates* real inversions.
+   **Answer to "how much weight does physical realism deserve": ~none, for 4 of 5 models** — the
+   constraint is already slack, and penalizing instability would push the model *further* from
+   nature's real roughness. **`point_cube` is the sole exception and the only genuine candidate for
+   a stability penalty.**
+2. **RC-2 steric-vs-SLA — wired up (it never ran) and measured.** `anom_point` **r=0.8299 /
+   RMSE 0.130 m**; true ARGO profiles through the identical pipeline **r=0.8297 / RMSE 0.141 m**;
+   climatology floor RMSE 0.234 m ≈ obs SLA std 0.223 m. The model *equals and marginally beats
+   truth* — smoothing removes profile noise that does not project onto SLA (same mechanism as
+   RC-1; **RC-1 and RC-2 are two views of one fact**). The residual ~13 cm is irreducible: deep
+   steric below 1800 m, barotropic signal, DUACS retrieval + collocation error.
+   Computable on **anomaly caches only** — they alone carry `clim_steric` / `ssh_obs_sla` /
+   `steric_calibration` (alpha 0.885, r_train 0.808).
+3. **Loss scales — hypothesis confirmed, magnitude small.** `config_argo_anom.json` held
+   T 2.0029 / S 0.0313, **byte-identical** to the raw cache's derived scales: copied from
+   `config_argo.json` and never re-derived. The only stale config of five. Corrected to
+   **T 1.3998 / S 0.0240** (mse 0.1561). The plan's instinct that this is analytic and not
+   searchable was right. **But** profile_scales are *divisors*, so the error is a 0.733× global
+   rescale (Adam is gradient-scale invariant and absorbs it) **+ only a 9.7% relative
+   over-weighting of salinity** (T:S 63.99 → 58.32). **Unlikely to close the parity gap alone.**
+   *Note:* `--update-config` reflows the whole JSON into expanded form; edit the numbers in place
+   to keep the repo's compact style, or a 3-number change drowns in reformatting churn.
+
+**Exit: met.** σ₀ and steric-vs-SLA are written down; the loss-scale question is **escalated with
+evidence** and the deciding retrain is now **in flight** (Track 0.4).
+
+### Track 0.4 — `anom_point` retrain, IN FLIGHT (launched 2026-07-15 15:10, tmux `anom_retune`)
+
+Runs **in parallel with Track A** — it is GPU-bound on an idle A100 (GPU 2) while Track A is
+numpy/Zarr CPU work, so there is no contention. This is the only thing that closes Track 0.2.
+
+- **Launch:** `scripts/run_anom_loss_scale_retune.sh` → `tmux attach -t anom_retune`
+- **Log:** `saved/readiness/retune_retune_0715_anom_point.log`
+- **Checkpoint:** `saved/models/NeSPReSO2_ARGO_GoM_anom/retune_0715_anom_point/`
+  (the original `scratch_0705_204716_anom_point` is untouched)
+- **Controlled:** seed 42 + chronological split are pinned in the config, so `loss_scales`
+  (T 2.0029/S 0.0313 → **1.3998/0.0240**) is the *only* difference from the baseline run.
+- **Baselines** (chronological test, n=623, T/S RMSE): ANOM-point **0.680/0.104** → beat this;
+  point raw 0.537/0.090; golden 0.514/0.083. Prior run: best epoch 3067, ~40 min, early_stop 500.
+- **On completion:** `eval` for RMSE **and** re-run `diagnostics/readiness.py` on the new checkpoint
+  — RC-1/RC-2 are now cheap and the σ₀ rate is a free second read on whether a 9.7% T:S rebalance
+  changes the smoothing behaviour at all.
+- **Pre-registered prediction (falsifiable):** this **will not reach parity**. The stale scales were
+  a 0.733× global rescale (Adam absorbs it) + a 9.7% salinity over-weighting. If T RMSE moves from
+  0.680 to ≈0.537 on a 10% rebalance, that is *surprising* and means the gap was never about scales.
+  Most likely outcome: a small improvement that leaves the anomaly reframing still unexplained —
+  in which case **stop blaming loss_scales and look elsewhere.**
+
+### Track 0.5 — `point_cube` σ₀ violation rate, **SCOPED** (was: unscoped finding)
+
+`point_cube` violates static stability at **38.52%** against nature's 24.70% — the **only** model
+less stable than the ocean, and a 15× outlier against the other four (0.00–8.99%). This is a real
+defect Track 0 surfaced and this plan did not anticipate. Scoped, not deferred.
+
+**The shape of the defect is already informative:** its *interface* violation rate (0.0669%) is
+close to nature's (0.0586%), so violations are **spread thinly across many profiles** rather than
+concentrated in a few bad ones — the signature of broadband noise in the cube features, not a
+handful of outlier profiles.
+
+Cheapest first move, before any physics-loss term: **contrast against `residual_cube` (2.57%)**,
+which shares the cube feature path but anchors on the point block. A 15× stability gap across that
+one architectural difference localizes the cause. Note [[residual-anchor-standardization]] — the
+residual cache's point block is z-scored; check whether the cube features feeding `point_cube` are
+standardized comparably, since unstandardized broadband features would produce exactly this
+thin-spread instability.
+
+**Do not reach for `PLAN.md` Phase 8's physics loss first.** If the instability is an input-noise
+symptom, a σ₀ penalty treats the symptom and buys a smoother model that is wrong for a second
+reason. `PLAN.md` Phase 8 is now scoped to `point_cube` **only**, and gated behind this diagnosis.
 
 ---
 
-## Track A — Harden the evaluator (~1 day, the real deliverable)
+## Track A — Harden the evaluator — **DONE 2026-07-15**
+
+Full detail: [`HANDOFF-2026-07-15-agentic-track-a.md`](HANDOFF-2026-07-15-agentic-track-a.md).
+
+The suspicion recorded here — *"assume `bench_datacube_speed.py` has the same class of defect as
+`readiness.py` until the negative control proves otherwise"* — **was correct, and understated.** The
+defect was not in the code but in the **golden data**: it asserted a 3 °C Gulf of Mexico and failed
+against HEAD's own cube (see the falsified bullet in Context). Every defect in the table below is
+now fixed, plus that one, which the table did not anticipate.
+
+**Delivered:**
+
+| | |
+|---|---|
+| **Noise floor** | **σ = 0.305 s = 7.36% of median** (ppd50, n=500, 10 cold repeats; min 3.809 / median 4.145; spread min→max ≈ 26%) |
+| Memory | peak RSS 332 MB against an asserted 8192 MB ceiling |
+| JSON | `{verdict, peak_rss_mb, results:[{elapsed_min, elapsed_median, sigma, sigma_pct, golden, cache_state, …}]}` |
+| Exit codes | `0` pass, `1` golden drift / RSS breach, `2` traceback (hard reject) |
+| Cascade | stage 1 ppd50 (~4 s) filter → stage 2 (v1 + ppd5 + ppd50) gate |
+| Tests | `tests/test_sampler.py` **20 passed**, incl. end-to-end analytic + golden-plausibility + weights-key regression |
+
+**Negative controls — both gate paths verified (the plan asked for one):**
+
+| control | result |
+|---|---|
+| values drift (stale rev-2 golden vs rev-3 cube) | **caught** — `max abs diff = 2.78e+01` on `sst.value@local` |
+| `valid_mask` drift (Gaussian filter stubbed to identity — "fast + wrong") | **caught** — `valid_mask differs in 73 cells` |
+
+**Three findings that change Track B's design:**
+
+1. **σ = 7.4% means single-shot fitness cannot resolve anything under ~20%** — precisely the range
+   of the Phase-5 targets. **Use `min` of N ≥ 5** (minimum is the least-contaminated timing
+   estimator; interference is one-sided). Treat sub-10% wins as unproven.
+2. **The cascade is upside-down: its cheap filter is its noisiest stage. [revises the Cascade
+   section above]** Measured σ per config (`--cascade --repeat 3`, all goldens pass):
+
+   | config | wall | sigma |
+   |---|---:|---:|
+   | ppd50 (stage-1 filter) | ~4 s | **1.8–17.3%** (7.4% over 10 repeats) |
+   | ppd5 | ~23 s | 5.2% |
+   | `v1` (stage-2) | ~173 s | **1.3%** |
+
+   Short benchmarks are dominated by fixed overhead and jitter. So **stage 1 cannot do fine speed
+   discrimination** — tune it as a *catastrophe* filter only (multiples-slower, or golden failure,
+   which is exact and noise-free). **Stage 1 is a correctness filter that happens to be cheap; it is
+   not a speed filter.** Real speed discrimination exists only at `v1` (σ 1.3%) at ~173 s → ~15 min
+   per candidate at N=5. That is the true budget, well above this plan's estimate, and it undercuts
+   the "~500 candidates ≈ $25" framing below: the loop is **evaluator-bound far harder than
+   assumed** — which, note, *reinforces* the plan's own "volume beats brilliance" caveat pointing
+   the wrong way. Re-cost Track B before launching.
+3. **The `operators.py` "largest untapped win" is unverified.** Stubbing `normalized_gaussian_filter`
+   to identity entirely — deleting the work the plan wants optimized — **did not speed up ppd50**
+   (4.51 s vs 4.15 s baseline). At high profiles-per-day the double-float64 filter is not the
+   bottleneck. **Profile before committing Track B's mutable set to that hypothesis.**
+
+**Carry into Track B:** the failure mode found here was **provenance, not code**. Any future cube
+rebuild silently invalidates the goldens again. Record `data_revision` in the golden `.meta.json`
+and assert it at check time — that turns a 10-day silent rot into a one-second failure.
 
 `scripts/bench_datacube_speed.py` is 80% of an evaluator but is **not loop-ready**. Fix in place:
 
@@ -103,7 +255,41 @@ before this is true** — an evolutionary loop on a noisy fitness function optim
 
 ---
 
-## Track B — The two-arm experiment (~1 week)
+## Track B — The two-arm experiment — **RETIRED, not run (decided 2026-07-15)**
+
+Retired on Track A's measurements, by this plan's own gate ("an evolutionary loop on a noisy fitness
+function optimizes noise"). Revivable, not deleted — the design below stands if the economics change.
+
+**Why it was not run:**
+
+1. **The cascade is upside-down.** Its cheap stage-1 filter (ppd50, ~4 s) is its *noisiest*
+   (σ 1.8–17.3%; 7.4% over 10 repeats), while the expensive `v1` (~173 s) is the quietest (σ 1.3%).
+   Short benchmarks are dominated by fixed overhead and jitter. Stage 1 therefore **cannot
+   discriminate speed** — it is a *correctness* filter that happens to be cheap.
+2. **Real cost is ~15 min/candidate**, since fine discrimination exists only at `v1` at min-of-5 —
+   against the "~500 candidates ≈ $25 … the loop is evaluator-bound, not token-bound" estimate
+   below. It is evaluator-bound *far harder than assumed*. This plan's own reasoning, run on
+   measured numbers, argues against running it.
+3. **The mutable set's premise is unverified.** Stubbing `normalized_gaussian_filter` to identity —
+   deleting the very work called "the largest untapped win" — **did not speed up ppd50** (4.51 s vs
+   4.15 s baseline).
+
+**What the experiment answered anyway — and it is the more useful answer.** The question was whether
+an agentic loop beats a competent assistant on a 461-line file with a known plan. Tracks 0 and A
+found something better-grounded: **on this codebase, both evaluators assumed to exist were broken.**
+`readiness.py` had never run and shipped two silent-wrong-number bugs; the golden gate asserted a
+**3 °C Gulf of Mexico** and failed against HEAD's own cube for 10 days. A loop launched on the
+stated premise would have failed 100% of candidates, and the natural fix ("regenerate the golden")
+would have laundered an unverified mutation into the baseline permanently.
+
+The brief's thesis — *"the evaluator, not the agent"* — comes out **strengthened**. What failed was
+this plan's assumption that a trustworthy evaluator already existed. That is a falsifiable,
+publishable-adjacent result about agentic-science infrastructure, and it cost **$0 in API spend**.
+
+The durable deliverable is the hardened evaluator + correct goldens (Track A), which stand on their
+own regardless of whether a loop ever runs against them.
+
+**Original design, preserved below for revival.**
 
 Mutable set: **`preproc/features/sampler.py` + `preproc/features/operators.py`**. Including
 `operators.py` unlocks the largest untapped win: `normalized_gaussian_filter` /
@@ -140,7 +326,12 @@ publishable-adjacent and answer the actual question.
 
 ## Track C — Unblock DA prerequisites, then stop (~2 days)
 
-1. **MC dropout ensemble.** `dropout_prob: 0.2` is live in `config/argo/config_argo.json` and
+1. **MC dropout ensemble.** **[priority raised 2026-07-15]** Track 0 found the models are
+   **under-dispersed** (high-order PCs at 0.196× true std; 0.00% σ₀ violations as the symptom), so
+   this is no longer just a DA prerequisite — it is the track that targets the one crisp defect
+   Track 0 actually measured. Expect the spread-error ratio to come out **< 1** (over-confident);
+   that is the hypothesis to test.
+   `dropout_prob: 0.2` is live in `config/argo/config_argo.json` and
    `nn.Dropout` is in the head (`model/model.py:157`). Keep dropout on at inference → ensemble
    spread with **zero retraining**. Fills `uncertainty_calibration_hook` (`readiness.py:218`),
    whose interface is already specified (`ensemble_mean`, `ensemble_spread`, `target`, `depth`,
@@ -160,13 +351,28 @@ publishable-adjacent and answer the actual question.
 - **No LiteLLM / Langfuse / vLLM.** The brief's Phase 0 is an institutional answer to a problem a
   single researcher with public data does not have. API-indifference removes the sovereignty
   argument; the 256 idle cores remove the self-hosting argument. YAGNI (ponytail).
-- **No evolutionary search over `loss_scales`.** Analytic, not tunable. See Track 0.2. The only
-  real knob there is the T:S *ratio* (currently 64:1) — a scientific choice wearing a
-  normalization constant's clothes.
+- **No evolutionary search over `loss_scales`.** Analytic, not tunable. See Track 0.2 — **confirmed
+  2026-07-15**: the scales were simply stale (raw-cache values on the anomaly cache) and one
+  `derive_loss_scales.py` run fixed them. A search would have burned budget rediscovering a
+  closed-form answer. The only real knob is the T:S *ratio* (**measured: 63.99 stale → 58.32
+  correct**) — a scientific choice wearing a normalization constant's clothes.
 - **No search against val-split RMSE.** The multiple-comparisons trap. One split-confusion
-  incident is already on record (`0.416` random-split headlined against chronological `0.514`). If
-  a science loop ever happens, the objective should be **steric-vs-observed-SLA** — a held-out
-  *observation type*, not a held-out sample, and far harder to overfit.
+  incident is already on record (`0.416` random-split headlined against chronological `0.514`).
+- **No science loop against steric-vs-observed-SLA either. [revised 2026-07-15]**
+  This plan originally proposed that if a science loop ever happens, its objective should be
+  **steric-vs-observed-SLA** — a held-out *observation type*, not a held-out sample, and far harder
+  to overfit. **The reasoning still stands; this specific metric does not.** Track 0 measured it and
+  it is **saturated**: `anom_point` scores r=0.8299 against a true-profile ceiling of r=0.8297. The
+  model is already at the observational limit, so the only thing left to optimize is the ~13 cm
+  irreducible residual — deep steric below 1800 m, barotropic signal, DUACS retrieval and
+  collocation error. **A loop pointed at this metric would optimize noise**, and worse, would be
+  *rewarded* for over-smoothing (smoothing is why the model beats truth here). Any future science
+  loop needs a different objective. Note this does **not** touch Tracks A/B, which optimize
+  **speed** against a golden correctness gate.
+- **The real open problem is under-dispersion, not realism or SLA skill. [added 2026-07-15]**
+  The one crisp, measurable defect Track 0 found is the **0.196 variance ratio in the high-order
+  PCs** (and 0.00% σ₀ violations as its symptom). It is not addressable by either objective above.
+  It strengthens Track C's MC-dropout ensemble, which targets spread directly.
 - **No manuscript generation.**
 
 ## Governance
@@ -178,8 +384,16 @@ policy — it's not having documented it contemporaneously.
 
 ## Verification
 
-- **Track 0:** `readiness_*.json` and `.md` exist with real numbers; `scripts/results_table.py`
-  reflects any loss-scale change.
+- **Track 0: DONE.** `saved/readiness/readiness_*.{json,md}` exist with real numbers for all five
+  scratch models; `config_argo_anom.json` scales re-derived and `validate_config` passes; readiness
+  selfchecks (`test_static_stability_readiness_synthetic`, `test_readiness_report_requires_lat_lon`)
+  pass. **Still outstanding:** `scripts/results_table.py` does not yet reflect the loss-scale change
+  — that needs the `anom_point` retrain, which is the escalation, not a verification gap.
+  *Method note worth carrying into Track A:* the RC-1 result (0 violations in 1.12M interfaces) was
+  only trustworthy **because** it was checked against a working detector, a
+  not-a-PCA-artifact control, and sane-prediction evidence. A suspiciously clean number is a
+  hypothesis, not a result — the same standard the negative control below applies to the speed
+  evaluator.
 - **Track A:** run the hardened evaluator 10× on unmodified `HEAD` — σ must be small relative to the
   speedups being chased. Deliberately inject a wrong-but-fast `sample()` and confirm the golden gate
   rejects it (a negative control for the evaluator itself — the brief's central warning).

@@ -7,7 +7,12 @@
 
 **Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).  
 **L3 download homework (user):** [`L3-DOWNLOAD-HOMEWORK.md`](L3-DOWNLOAD-HOMEWORK.md)
-**Agentic AI experiment (2026-07-15, approved / not started):** [`PLAN-agentic-ai-experiment.md`](PLAN-agentic-ai-experiment.md) — measure `readiness.py` (never run), harden `bench_datacube_speed.py` into a real evaluator, then a controlled hand-vs-OpenEvolve comparison on `PLAN_datacube_speed.md` Phase 5. Source brief: [`agentic-science.html`](agentic-science.html)
+**NEXT-STEPS PLAN (2026-07-15):** [`PLAN-agentic-close-out.md`](PLAN-agentic-close-out.md) — close Track 0.2 (retrain done, evaluate it), **retire Track B**, then RC-4 MC-dropout ensemble → `point_cube` σ₀ diagnosis → `export_field_product.py` fixes → anomaly parity gap. Start here.
+**Agentic AI experiment (2026-07-15, Tracks 0 + A DONE, B retired):** [`PLAN-agentic-ai-experiment.md`](PLAN-agentic-ai-experiment.md) — measure `readiness.py` (never run), harden `bench_datacube_speed.py` into a real evaluator, then a controlled hand-vs-OpenEvolve comparison on `PLAN_datacube_speed.md` Phase 5. Source brief: [`agentic-science.html`](agentic-science.html)
+**Track 0 results (2026-07-15):** [`HANDOFF-2026-07-15-agentic-track0.md`](HANDOFF-2026-07-15-agentic-track0.md) — RC-1/RC-2 measured for the first time. **Two plan assumptions invalidated:** σ₀ stability is already slack (models are *over-smoothed*, 0.00% violations vs nature's 24.7%; except `point_cube` at 38.5%), and **steric-vs-SLA is saturated** (model r=0.8299 vs true-profile ceiling r=0.8297) — so it is *not* a usable science-loop objective. Fixed two latent `readiness.py` bugs that returned plausible-looking wrong numbers. Anom loss scales re-derived (raw-PC scales confirmed, but only a 9.7% T:S effect).
+**Track A results (2026-07-15):** [`HANDOFF-2026-07-15-agentic-track-a.md`](HANDOFF-2026-07-15-agentic-track-a.md) — **the golden gate was BROKEN at HEAD and had been for 10 days.** All three goldens failed against the repo's own cube: they were saved 07-05 14:24–15:28, the cube was rebuilt rev2→rev3 (double-decode fix) at 07-06T00:47Z, and nothing re-derived them. They asserted a **2.87–3.06 °C Gulf of Mexico** (true 22.7–29.6 °C) — the gate would have rejected every *correct* candidate. Goldens regenerated from the **committed** sampler + rev-3 cube; `data_revision` now stamped in `.meta.json` and asserted at check time; plausibility + end-to-end tests added. **Evaluator noise floor: σ = 7.36%** of median → Track B must use min-of-N≥5 and treat sub-10% wins as noise.
+**RUNNING now (2026-07-15 15:10):** `anom_point` loss-scale retrain in tmux **`anom_retune`** (GPU 2) — closes the loss-scale question; parallel to Track A. Log: `NeSPReSO2_onTemplate/saved/readiness/retune_retune_0715_anom_point.log`. Beat ANOM-point 0.680/0.104. *Predicted not to reach parity* — a 9.7% T:S rebalance is a small lever.
+**Scoped from Track 0:** `point_cube` σ₀ **38.5%** vs nature's 24.7% — the only model less stable than the ocean. Now `PLAN-agentic-ai-experiment.md` Track 0.5 + `PLAN.md` Phase 8 (scoped to `point_cube` only). Diagnose (contrast vs `residual_cube` 2.57%; check cube-feature standardization) **before** any physics-loss term.
 **Latest session handoff (2026-07-05):** [`HANDOFF-2026-07-05-full-scratch-notebook.md`](HANDOFF-2026-07-05-full-scratch-notebook.md) — from-scratch all-models notebook (cube rebuild rev 3 + retrain incl. cube-native) running in tmux `scratch_nb`
 **Previous (2026-07-03):** [`HANDOFF-2026-07-03-l4-stale-sat.md`](HANDOFF-2026-07-03-l4-stale-sat.md) — L4 patch root cause (stale satellite ≥2021-01), gap downloads running in tmux `satdl`
 
@@ -32,8 +37,9 @@ GoM dissertation NeSPReSO: **ARGO/CORA subsurface targets**, **mask-native L3 su
 | 4 L4 augmentation | 10 | **Done** | `preproc/l4_augment.py`, `preproc/l4_rasterize.py`, `io.l4` wired in `export_l3_cache.py` |
 | 5 L3 model channels | 11 | **Done** | `l3_input.sync_arch_with_io`, `verify_l3_cache_layout`, checkpoint L3 metadata |
 | 6 Stratified eval | 12 | **Done** | `eval_stratified.py` — RMSE/bias by L3 coverage, track distance, census year subsets |
-| 7 Readiness diagnostics | 13 | **Done** | `diagnostics/readiness.py` — `gsw_torch` σ₀ static-stability on saved predictions |
-| 8+ Physics / ensemble | 14–15 | **Pending** | — |
+| 7 Readiness diagnostics | 13 | **Done + RUN 2026-07-15** | `diagnostics/readiness.py` → `saved/readiness/readiness_*.{json,md}` (5 models). RC-1 σ₀ **measured**; RC-2 steric-vs-SLA **wired + measured** (was never wired). Two silent-wrong-number bugs fixed. |
+| 8 Physics loss | 14 | **Pending — now scoped to `point_cube` only** | RC-1 says 4 of 5 models are *over-smoothed, not unstable* (0.00–8.99% vs nature's 24.70%) → physics loss unmotivated for them. **`point_cube` 38.52%** is the sole target; diagnose before adding a loss term. |
+| 9 Ensemble / RC-4 | 15 | **Pending — highest-value diagnostic left** | The only RC not saturated or slack. Models are **under-dispersed** (high PCs at 0.196× true std) → predict spread-error ratio **< 1**. |
 
 ### Merged from `nespreso-v2-port` (legacy ISAS appendix)
 
@@ -187,10 +193,13 @@ git worktree remove ../ISAS20_project-phase3-commit
 
 ## Next coding tasks (priority order)
 
-1. Download real L3 SSH + L4 DUACS + ERA5 for 2020 window; rebuild caches with `--force`; verify non-zero mask cells.
-2. SST L3U / SMAP (post-MVP).
-3. Steric SSH consistency (RC-2) and uncertainty calibration hook (RC-4) in `diagnostics/readiness.py`.
-4. Physics-loss hook (Phase 8) and ensemble aggregation (Phase 9).
+1. **[running]** `anom_point` loss-scale retrain — tmux `anom_retune`; then eval + readiness on the new checkpoint.
+2. **Track A** — harden `scripts/bench_datacube_speed.py` into a loop-ready evaluator (`PLAN-agentic-ai-experiment.md`).
+3. **`point_cube` σ₀ 38.5%** — diagnose vs `residual_cube` (2.57%); check cube-feature standardization. Gates Phase 8.
+4. **RC-4 / MC-dropout ensemble** (Phase 9) — now the highest-value diagnostic; predict spread-error < 1.
+5. Download real L3 SSH + L4 DUACS + ERA5 for 2020 window; rebuild caches with `--force`; verify non-zero mask cells.
+6. SST L3U / SMAP (post-MVP).
+7. ~~Steric SSH consistency (RC-2)~~ **done 2026-07-15** — wired + measured; **saturated**, not a usable objective.
 
 ---
 
