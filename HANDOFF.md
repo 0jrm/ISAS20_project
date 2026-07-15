@@ -7,7 +7,9 @@
 
 **Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).  
 **L3 download homework (user):** [`L3-DOWNLOAD-HOMEWORK.md`](L3-DOWNLOAD-HOMEWORK.md)
-**Latest session handoff (2026-07-03):** [`HANDOFF-2026-07-03-l4-stale-sat.md`](HANDOFF-2026-07-03-l4-stale-sat.md) — L4 patch root cause (stale satellite ≥2021-01), gap downloads running in tmux `satdl`
+**Agentic AI experiment (2026-07-15, approved / not started):** [`PLAN-agentic-ai-experiment.md`](PLAN-agentic-ai-experiment.md) — measure `readiness.py` (never run), harden `bench_datacube_speed.py` into a real evaluator, then a controlled hand-vs-OpenEvolve comparison on `PLAN_datacube_speed.md` Phase 5. Source brief: [`agentic-science.html`](agentic-science.html)
+**Latest session handoff (2026-07-05):** [`HANDOFF-2026-07-05-full-scratch-notebook.md`](HANDOFF-2026-07-05-full-scratch-notebook.md) — from-scratch all-models notebook (cube rebuild rev 3 + retrain incl. cube-native) running in tmux `scratch_nb`
+**Previous (2026-07-03):** [`HANDOFF-2026-07-03-l4-stale-sat.md`](HANDOFF-2026-07-03-l4-stale-sat.md) — L4 patch root cause (stale satellite ≥2021-01), gap downloads running in tmux `satdl`
 
 **Conda env:** `nespreso` (has `netCDF4`, `copernicusmarine`; use for selfcheck/train).
 
