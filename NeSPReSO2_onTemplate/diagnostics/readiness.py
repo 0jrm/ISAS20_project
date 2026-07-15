@@ -187,18 +187,28 @@ def steric_ssh_diagnostic(
     with torch.no_grad():
         steric = steric_height_anomaly(temp_t, sal_t, pres_t, lat_t, lon_t, subsample_dz=5).numpy()
 
-    cal = calibration or {"alpha": 1.0, "beta": 0.0}
+    # RC-2 is only meaningful against the train-split affine fit that absorbs deep steric,
+    # barotropic and DUACS offsets. Without clim_steric + calibration, pred_sla would be an
+    # absolute steric height compared to an anomaly — a plausible-looking, meaningless number.
+    if clim_steric is None or calibration is None:
+        return {
+            "status": "unavailable",
+            "reason": "cache lacks clim_steric and/or steric_calibration (rebuild with steric_at_build)",
+            "method": "gsw_torch.steric_height_anomaly",
+            "n_profiles": int(n_samples),
+            "steric_height_m": steric.tolist(),
+        }
+
+    cal = calibration
     alpha = float(cal.get("alpha", 1.0))
     beta = float(cal.get("beta", 0.0))
-    if clim_steric is not None:
-        steric_anom = steric - np.asarray(clim_steric, dtype=np.float64).ravel()
-    else:
-        steric_anom = steric
+    steric_anom = steric - np.asarray(clim_steric, dtype=np.float64).ravel()
     pred_sla = alpha * steric_anom + beta
 
     out: dict[str, Any] = {
         "status": "ok",
         "method": "gsw_torch.steric_height_anomaly",
+        "calibration": {k: float(v) for k, v in cal.items()},
         "n_profiles": int(n_samples),
         "steric_height_m": steric.tolist(),
         "calibrated_sla_m": pred_sla.tolist(),
@@ -237,6 +247,8 @@ def readiness_report(
     latitude: np.ndarray | None = None,
     longitude: np.ndarray | None = None,
     ssh: np.ndarray | None = None,
+    clim_steric: np.ndarray | None = None,
+    steric_calibration: Mapping[str, float] | None = None,
     tol_kgm3: float = DEFAULT_STABILITY_TOL_KGM3,
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -261,7 +273,14 @@ def readiness_report(
             tol_kgm3=tol_kgm3,
         ),
         "steric_ssh": steric_ssh_diagnostic(
-            temperature, salinity, pressure, latitude, longitude, ssh=ssh
+            temperature,
+            salinity,
+            pressure,
+            latitude,
+            longitude,
+            ssh=ssh,
+            clim_steric=clim_steric,
+            calibration=steric_calibration,
         ),
         "uncertainty_calibration": uncertainty_calibration_hook(),
     }
@@ -277,16 +296,27 @@ def readiness_from_checkpoint(
 ) -> dict[str, Any]:
     from collections import OrderedDict
 
-    from nb_metrics import depth_meters, pcs_to_profiles_depth_major, run_inference
+    from model.loss import reconstruct_physical_profiles
+    from nb_metrics import depth_meters, run_inference
 
     inf = run_inference(config, checkpoint_path, split=split)
     idx = np.asarray(inf["indices"], dtype=int)
     outputs: OrderedDict = inf["outputs"]
-    pred = pcs_to_profiles_depth_major(inf["pcs"], inf["pca_models"], outputs)
     cache = inf["cache"]
+
+    # Anomaly caches predict anomaly PCs: climatology must be added back before GSW, or σ₀ is
+    # computed on ~0 °C / ~0 PSU and the whole report is silently wrong. No-op on raw caches.
+    clim_profiles = cache.get("clim_profiles")
+    pred = reconstruct_physical_profiles(
+        inf["pcs"], inf["pca_models"], outputs, clim_profiles=clim_profiles, indices=idx
+    )
     z = depth_meters(cache)
     lat = np.asarray(cache["LAT"], dtype=np.float64)[idx]
     lon = np.asarray(cache["LON"], dtype=np.float64)[idx]
+
+    def _sel(key: str) -> np.ndarray | None:
+        arr = cache.get(key)
+        return None if arr is None else np.asarray(arr, dtype=np.float64)[idx]
 
     meta = {
         "checkpoint": str(checkpoint_path),
@@ -295,6 +325,7 @@ def readiness_from_checkpoint(
         "split": split,
         "n_samples": int(inf["n_samples"]),
         "variables": list(outputs.keys()),
+        "anomaly_cache": clim_profiles is not None,
     }
     return readiness_report(
         pred["temperature"],
@@ -302,6 +333,9 @@ def readiness_from_checkpoint(
         pressure=z,
         latitude=lat,
         longitude=lon,
+        ssh=_sel("ssh_obs_sla"),
+        clim_steric=_sel("clim_steric"),
+        steric_calibration=cache.get("steric_calibration"),
         tol_kgm3=tol_kgm3,
         metadata=meta,
     )
@@ -336,12 +370,26 @@ def to_markdown(report: Mapping[str, Any]) -> str:
             continue
         mag_s = f"{mag:.4f}" if mag is not None else "n/a"
         lines.append(f"| {z:.0f} | {cnt} | {mag_s} |")
+    steric = report["steric_ssh"]
+    lines.extend(["", "## Steric SSH vs observed SLA (RC-2)", "", f"- Status: `{steric['status']}`"])
+    if steric["status"] == "ok":
+        cal = steric.get("calibration", {})
+        rmse, corr = steric.get("rmse_m"), steric.get("correlation")
+        lines.extend(
+            [
+                f"- Calibration: alpha={cal.get('alpha', float('nan')):.4f}, "
+                f"beta={cal.get('beta', float('nan')):.4f}, r_train={cal.get('r_train', float('nan')):.4f}",
+                f"- RMSE vs observed SLA: **{rmse:.4f} m**" if rmse is not None else "- RMSE: n/a",
+                f"- Correlation: **{corr:.4f}**" if corr is not None else "- Correlation: n/a",
+            ]
+        )
+    else:
+        lines.append(f"- Reason: {steric.get('reason', 'n/a')}")
     lines.extend(
         [
             "",
-            "## Steric SSH / uncertainty",
+            "## Uncertainty",
             "",
-            f"- Steric SSH: `{report['steric_ssh']['status']}`",
             f"- Uncertainty calibration: `{report['uncertainty_calibration']['status']}`",
         ]
     )
