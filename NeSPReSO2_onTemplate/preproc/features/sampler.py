@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -227,6 +228,7 @@ class CubeProvider:
         plane_cache_size: int = 512,
         stack_cache_size: int = 128,
         derived_cache_size: int = 512,
+        weights_cache_size: int = 8,
     ):
         if cube_path is None or str(cube_path).strip() == "":
             self.cube_path = default_cube_path(_ROOT)
@@ -239,7 +241,10 @@ class CubeProvider:
         self.plane_cache_size = plane_cache_size
         self.stack_cache_size = stack_cache_size
         self.derived_cache_size = derived_cache_size
-        self._weights: dict[str, sparse.csr_matrix] = {}
+        self.weights_cache_size = weights_cache_size
+        # Bounded: now keyed on lats/lons content, so a long export with many distinct profile
+        # batches would grow an unbounded dict of sparse matrices.
+        self._weights: _LRUDict = _LRUDict(maxsize=weights_cache_size)
         self._missing_days = set(self.root.attrs.get("missing_days", []))
         self._allowed_missing = set(cube_schema.ALLOWED_MISSING_DAYS)
         self._basin_mask_cache: dict[tuple, np.ndarray] = {}
@@ -251,7 +256,18 @@ class CubeProvider:
         return lats, lons
 
     def weights_for(self, channel: str, lats: np.ndarray, lons: np.ndarray) -> sparse.csr_matrix:
-        key = channel
+        # Key on the *contents* of lats/lons, not just the channel: the weights are a function of
+        # the query points, so a provider reused across two different profile sets would otherwise
+        # get the first set's weights back and silently sample the wrong locations. Hashing is
+        # O(n) on a small float array — negligible against build_bilinear_weights.
+        lat_arr = np.ascontiguousarray(lats, dtype=np.float64)
+        lon_arr = np.ascontiguousarray(lons, dtype=np.float64)
+        key = (
+            channel,
+            lat_arr.shape,
+            hashlib.blake2b(lat_arr.tobytes(), digest_size=16).digest(),
+            hashlib.blake2b(lon_arr.tobytes(), digest_size=16).digest(),
+        )
         if key not in self._weights:
             glat, glon = self.grid_coords(channel)
             self._weights[key] = build_bilinear_weights(glat, glon, lats, lons)

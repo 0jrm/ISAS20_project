@@ -11,7 +11,8 @@ from typing import Any, Callable, Mapping
 import numpy as np
 
 CUBE_SCHEMA_VERSION = 1
-DATA_REVISION = 2
+# rev 3: rebuild with single scale/offset decode (pre-fix rev-2 store was double-decoded)
+DATA_REVISION = 3
 
 # Core GoM domain (degrees)
 CORE_LAT_MIN = 18.0

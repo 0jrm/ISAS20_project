@@ -1,5 +1,7 @@
 {
   "n_profiles": 500,
   "seed": 0,
-  "elapsed_s": 22.139150359027553
+  "elapsed_s": 3.9233978469856083,
+  "data_revision": 3,
+  "profiles_per_day": 50
 }
