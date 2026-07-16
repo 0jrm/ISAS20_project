@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import gsw
 import numpy as np
+
+from evalphys.gsw_backend import get_gsw
 
 _SA_BOUNDS = (30.0, 40.0)
 _CT_BOUNDS = (-2.0, 35.0)
@@ -19,12 +20,14 @@ def sigma0_spice_from_ts(
     lon: np.ndarray,
     lat: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
+    gsw = get_gsw()
     sa = gsw.SA_from_SP(S, p, lon, lat)
     ct = gsw.CT_from_t(sa, T, p)
     return gsw.sigma0(sa, ct), gsw.spiciness0(sa, ct)
 
 
 def _F(sa: np.ndarray, ct: np.ndarray, s0: np.ndarray, tau: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    gsw = get_gsw()
     return gsw.sigma0(sa, ct) - s0, gsw.spiciness0(sa, ct) - tau
 
 
@@ -39,6 +42,7 @@ def ts_from_sigma0_spice(
     ct0: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Vectorized Newton inversion; returns T, S, converged mask."""
+    gsw = get_gsw()
     shape = np.broadcast_shapes(sigma0_tgt.shape, spice_tgt.shape, p.shape, lon.shape, lat.shape)
     s0 = np.broadcast_to(sigma0_tgt, shape).astype(np.float64).copy()
     tau = np.broadcast_to(spice_tgt, shape).astype(np.float64).copy()

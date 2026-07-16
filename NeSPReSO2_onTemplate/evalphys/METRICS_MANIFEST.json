@@ -1,17 +1,28 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "frozen_date": "2026-07-16",
   "N2_TOL": 1e-08,
+  "SIGMA0_TOL": 0.0,
+  "gsw_backend_headline": "gsw",
+  "gsw_versions": {
+    "gsw": "3.6.19",
+    "gsw_torch": "0.1.1"
+  },
   "thresholds": {
     "ence_max": 0.2,
-    "rc1_note": "hard constraint \u21d2 0 by construction in Phase 3; report cost in RMSE/sharpness instead"
+    "rc1_note": "hard constraint guarantees \u03c3\u2080 monotonicity on the control grid; residual N\u00b2 violations are expected to be small and must be reported (see PLAN \u00a73.2 note). Report cost in RMSE/sharpness."
   },
-  "git_sha": "820e598ff88442854614468096b3160a58b23950",
+  "git_sha": "7f9a043953361931db671903c5bbee2744b7b8fe",
   "changelog": [
     {
       "version": "1.0.0",
       "date": "2026-07-16",
       "note": "Initial frozen evalphys package (PLAN-v2-recovery Phase 0)."
+    },
+    {
+      "version": "1.1.0",
+      "date": "2026-07-16",
+      "note": "Additive: \u03c3\u2080-monotonicity violation metric; configurable gsw backend (headline pinned to reference gsw); exclude_top_m semantics fixed."
     }
   ]
 }

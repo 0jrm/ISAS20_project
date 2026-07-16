@@ -1,10 +1,9 @@
-"""Physical profile metrics — reference ``gsw`` only (GSW-Torch is training-time)."""
+"""Physical profile metrics — headline path uses reference ``gsw`` via ``get_gsw()``."""
 
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-import gsw
 import numpy as np
 
 from evalphys.constants import (
@@ -15,7 +14,9 @@ from evalphys.constants import (
     N2_TOL,
     N2_TOL_SWEEP,
     RHO0_KGM3,
+    SIGMA0_TOL,
 )
+from evalphys.gsw_backend import get_gsw
 
 
 def _as_profiles_levels(x: np.ndarray) -> np.ndarray:
@@ -42,6 +43,7 @@ def to_teos10(
     z = np.asarray(depth, dtype=np.float64).reshape(-1)
     if z.shape[0] != n_lev:
         raise ValueError(f"depth length {z.shape[0]} != n_levels {n_lev}")
+    gsw = get_gsw()
     lat_v = np.asarray(lat, dtype=np.float64).reshape(n_prof, 1)
     lon_v = np.asarray(lon, dtype=np.float64).reshape(n_prof, 1)
     p = gsw.p_from_z(-np.broadcast_to(z, (n_prof, n_lev)), lat_v)
@@ -51,6 +53,7 @@ def to_teos10(
 
 
 def sigma0_profiles(T: np.ndarray, S: np.ndarray, depth: np.ndarray, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    gsw = get_gsw()
     sa, ct, _ = to_teos10(T, S, depth, lat, lon)
     return gsw.sigma0(sa, ct)
 
@@ -81,6 +84,7 @@ def static_stability_violations(
     T = _as_profiles_levels(T)
     S = _as_profiles_levels(S)
     n_prof, n_lev = T.shape
+    gsw = get_gsw()
     sa, ct, p = to_teos10(T, S, depth, lat, lon)
     lat_v = np.asarray(lat, dtype=np.float64).reshape(n_prof)
 
@@ -96,7 +100,8 @@ def static_stability_violations(
 
     finite = np.isfinite(n2) & np.isfinite(T[:, :-1].T) & np.isfinite(T[:, 1:].T)
     if exclude_top_m is not None:
-        finite &= z_mid < float(exclude_top_m)
+        # Keep interfaces at/below exclude_top_m (drop the near-surface band).
+        finite &= z_mid >= float(exclude_top_m)
 
     viol = finite & (n2 < -float(n2_tol))
     prof_viol = np.any(viol, axis=0)
@@ -126,6 +131,45 @@ def _stratify_violation_rate(viol: np.ndarray, finite: np.ndarray, z_iface: np.n
         den = int(m.sum())
         out[label] = float(viol[m].sum() / den) if den else None
     return out
+
+
+def sigma0_monotonicity_violations(
+    T: np.ndarray,
+    S: np.ndarray,
+    depth: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    *,
+    sigma0_tol: float = SIGMA0_TOL,
+    exclude_top_m: float | None = None,
+) -> dict[str, Any]:
+    """σ₀-space stability: violation iff Δσ₀ < −tol with depth increasing (PLAN §3.2 constraint space)."""
+    T = _as_profiles_levels(T)
+    S = _as_profiles_levels(S)
+    n_prof = T.shape[0]
+    z = np.asarray(depth, dtype=np.float64).reshape(-1)
+    sig = sigma0_profiles(T, S, depth, lat, lon)
+    dsig = np.diff(sig, axis=1)  # (n_prof, n_iface); stable ⇒ dsig >= 0
+    z_mid = _interface_depth_m(z)
+    finite = np.isfinite(dsig) & np.isfinite(T[:, :-1]) & np.isfinite(T[:, 1:])
+    if exclude_top_m is not None:
+        finite &= z_mid[None, :] >= float(exclude_top_m)
+    viol = finite & (dsig < -float(sigma0_tol))
+    prof_viol = np.any(viol, axis=1)
+    n_iface = int(finite.sum())
+    n_viol = int(viol.sum())
+    return {
+        "sigma0_tol": float(sigma0_tol),
+        "exclude_top_m": exclude_top_m,
+        "violation_rate_profile": float(np.mean(prof_viol)) if n_prof else 0.0,
+        "violation_rate_level": float(n_viol / n_iface) if n_iface else 0.0,
+        "n_profiles": n_prof,
+        "n_interfaces_checked": n_iface,
+        "n_violations": n_viol,
+        "by_depth_band": {
+            "violation_rate_level": _stratify_violation_rate(viol.T, finite.T, z_mid),
+        },
+    }
 
 
 def static_stability_tolerance_sweep(
@@ -290,6 +334,7 @@ def steric_height_cm(
     S_clim: np.ndarray | None = None,
 ) -> np.ndarray:
     """Steric height anomaly [cm] relative to climatology (or zero if clim absent)."""
+    gsw = get_gsw()
     sa, ct, p = to_teos10(T, S, depth, lat, lon)
     rho = gsw.rho(sa, ct, p)
     if T_clim is not None and S_clim is not None:
@@ -344,6 +389,7 @@ def summarize_physical(
     return {
         "static_stability_pred": stab,
         "static_stability_pred_exclude_top15m": stab_excl,
+        "sigma0_monotonicity_pred": sigma0_monotonicity_violations(T_pred, S_pred, depth, lat, lon),
         "ts_rmse": ts_rmse_by_band(T_pred, S_pred, T_true, S_true, depth),
         "drhodz_rmse": drhodz_rmse(T_pred, S_pred, T_true, S_true, depth, lat, lon),
         "mld": {"pred_vs_true": _rmse_bias(mld_p, mld_t)},

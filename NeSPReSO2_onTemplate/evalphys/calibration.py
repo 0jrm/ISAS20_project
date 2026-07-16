@@ -163,17 +163,42 @@ def apply_strata(
 ) -> dict[str, Any]:
     """Run ``metric_fn`` on full data and per-stratum subsets.
 
-    ``strata`` keys: ``depth_band`` (uses level axis), ``season`` (per profile),
-    ``input_error_tercile`` (per profile; skipped when None).
+    ``strata`` keys: ``depth_band`` (boolean mask over levels, or label→mask dict),
+    ``season`` (per profile), ``input_error_tercile`` (per profile; skipped when None —
+    never faked).
     """
     full = metric_fn(**kwargs)
     out: dict[str, Any] = {"all": full}
     n_prof = None
+    n_lev = None
     for k in ("mu", "y", "T_pred"):
         if k in kwargs and kwargs[k] is not None:
             a = np.asarray(kwargs[k])
-            n_prof = a.shape[0] if a.ndim >= 2 else a.size
+            if a.ndim >= 2:
+                n_prof, n_lev = a.shape[0], a.shape[1]
+            else:
+                n_prof = a.size
             break
+    depth_band = strata.get("depth_band")
+    if depth_band is not None and n_lev is not None:
+        by_band: dict[str, Any] = {}
+        bands = depth_band if isinstance(depth_band, Mapping) else {"band": depth_band}
+        for label, mask in bands.items():
+            m = np.asarray(mask, dtype=bool).reshape(-1)
+            if m.size != n_lev or not np.any(m):
+                continue  # skip missing/empty strata
+            sliced = {}
+            for key, val in kwargs.items():
+                if isinstance(val, np.ndarray) and val.ndim >= 2 and val.shape[1] == n_lev:
+                    sliced[key] = val[:, m]
+                else:
+                    sliced[key] = val
+            if "depth" in sliced and isinstance(sliced["depth"], np.ndarray):
+                d = np.asarray(sliced["depth"]).reshape(-1)
+                if d.size == n_lev:
+                    sliced["depth"] = d[m]
+            by_band[str(label)] = metric_fn(**sliced)
+        out["by_depth_band"] = by_band
     season = strata.get("season")
     if season is not None and n_prof is not None:
         by_season: dict[str, Any] = {}
@@ -186,7 +211,9 @@ def apply_strata(
             by_season[label] = metric_fn(**sliced)
         out["by_season"] = by_season
     terc = strata.get("input_error_tercile")
-    if terc is not None and n_prof is not None:
+    if terc is None:
+        pass  # Phase 2 provides this; skip — do not fake
+    elif n_prof is not None:
         by_terc: dict[str, Any] = {}
         for label in ("low", "mid", "high"):
             m = terc == label

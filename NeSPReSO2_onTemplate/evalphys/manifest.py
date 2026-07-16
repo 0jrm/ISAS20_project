@@ -7,7 +7,8 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
-from evalphys.constants import ENCE_MAX, N2_TOL, VERSION
+from evalphys.constants import ENCE_MAX, GSW_BACKEND_HEADLINE, N2_TOL, SIGMA0_TOL, VERSION
+from evalphys.gsw_backend import package_versions
 
 _PKG_DIR = Path(__file__).resolve().parent
 MANIFEST_PATH = _PKG_DIR / "METRICS_MANIFEST.json"
@@ -27,24 +28,37 @@ def _git_sha() -> str | None:
 
 
 def default_manifest() -> dict:
+    vers = package_versions()
     return {
         "version": VERSION,
         "frozen_date": date.today().isoformat(),
         "N2_TOL": N2_TOL,
+        "SIGMA0_TOL": SIGMA0_TOL,
+        "gsw_backend_headline": GSW_BACKEND_HEADLINE,
+        "gsw_versions": vers,
         "thresholds": {
             "ence_max": ENCE_MAX,
             "rc1_note": (
-                "hard constraint ⇒ 0 by construction in Phase 3; "
-                "report cost in RMSE/sharpness instead"
+                "hard constraint guarantees σ₀ monotonicity on the control grid; "
+                "residual N² violations are expected to be small and must be reported "
+                "(see PLAN §3.2 note). Report cost in RMSE/sharpness."
             ),
         },
         "git_sha": _git_sha(),
         "changelog": [
             {
-                "version": VERSION,
-                "date": date.today().isoformat(),
+                "version": "1.0.0",
+                "date": "2026-07-16",
                 "note": "Initial frozen evalphys package (PLAN-v2-recovery Phase 0).",
-            }
+            },
+            {
+                "version": "1.1.0",
+                "date": date.today().isoformat(),
+                "note": (
+                    "Additive: σ₀-monotonicity violation metric; configurable gsw backend "
+                    "(headline pinned to reference gsw); exclude_top_m semantics fixed."
+                ),
+            },
         ],
     }
 
