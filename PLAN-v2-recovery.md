@@ -8,6 +8,7 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-16 | T1 escalate → R1: Phase 3.2 monotone head. Mechanism update: **truncation itself** (not T/S separateness) drives σ₀ violations — B joint EOF ≈ A under historical ruler; only hard constraint cuts 21.51%→0.48%. Residual post-inversion violations ⇒ Phase 3 tracks **inversion fidelity** as first-class. Phase 2.1 satisfied; R4 golden root-cause is a **Phase 5 prerequisite**. | Human accepted audit Decision R1; B/C historical rows complete the record. |
 | 2026-07-16 | §3.2 / §0.1: hard constraint guarantees **σ₀ monotonicity**; residual **N²** violations are expected to be small and must be **reported**, not assumed zero. Additive `sigma0_monotonicity_violations` in evalphys v1.1.0. | Audit C.2: monotone σ₀ control-grid + PCHIP does not imply N²≡0 after (σ₀,τ)→(T,S) inversion (locally referenced N²). |
 | 2026-07-16 | Headline metrics always use reference `gsw` via `evalphys.gsw_backend.get_gsw()`; `io.gsw_backend` / `--gsw-backend` select training / equivalence only. | Audit F: `diagnostics/readiness.py` aliases `gsw_torch as gsw`; evalphys must not silently substitute. |
 
@@ -194,7 +195,7 @@ Depth control grid: `K = 64` levels, log-spaced in depth over [0, z_max] (denser
 ```
 `Δz̃_j` = control-grid spacing normalized to mean 1 (keeps softplus outputs O(1)). Because `softplus > 0`, σ̂₀ is strictly increasing on the control grid ⇒ **zero σ₀-space inversions by construction** (see `evalphys.sigma0_monotonicity_violations`). Upsample control grid → native 1801 levels with **PCHIP** (`scipy.interpolate.PchipInterpolator`; monotone data ⇒ monotone interpolant, so the σ₀ guarantee survives upsampling — add a test asserting this on 1000 random draws). Torch-side, implement linear interpolation for the training loss (monotonicity also preserved by linear interp) and reserve PCHIP for eval/export.
 
-**σ₀ vs N² (audit 2026-07-16):** The hard constraint guarantees **σ₀ monotonicity** (depth-increasing σ₀). The Phase-0 headline physical metric remains **N²** (`gsw.Nsquared`, §0.1). Residual N² violations after inversion / on the native grid are expected to be small and must be **reported**, not assumed zero — N² uses a locally referenced density gradient and (σ₀,τ)→(T,S) inversion is not an exact isometry. Report both metrics; do not delete or alter the N² metric.
+**σ₀ vs N² (audit 2026-07-16):** The hard constraint guarantees **σ₀ monotonicity** (depth-increasing σ₀) **pre-inversion** on the control grid. The Phase-0 headline physical metric remains **N²** (`gsw.Nsquared`, §0.1). Residual violations after (σ₀,τ)→(T,S) Newton inversion (~0.3–0.5% σ₀ profile / ~0.2% N² level on T1-D) are expected and must be **reported** — they are dominated by **inversion round-trip error**, not control-grid non-monotonicity. Phase 3 therefore tracks **inversion fidelity** (round-trip |ΔT|, |ΔS|, recovered-σ₀ monotonicity, Newton fail rate) as a first-class metric alongside N². Do not delete or alter the N² metric.
 
 Note: strict monotonicity is marginally stronger than the physical requirement (neutral layers allowed). Acceptable: softplus output can be arbitrarily close to 0. Do not add an ε relaxation.
 
@@ -292,6 +293,8 @@ Frozen evalphys only. Required table: {CRPS, ENCE, PIT sup-dev, spread-skill slo
 ---
 
 ## Phase 5 — Consolidation and the ablation matrix
+
+**Prerequisite (R4 / audit):** root-cause and either re-derive or formally waive the `test_combined_pca_loss_v2` combined/weighted_mse golden drift (fails identically on pre-Phase-0 `820e598`) **before launching the matrix**. PCA recon heads still match; the unexplained combination-term drift must not propagate as a silent question mark across every matrix cell.
 
 **Objective:** one backbone, one pre-registered comparison, archive the sprawl.
 

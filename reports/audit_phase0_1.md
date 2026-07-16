@@ -17,7 +17,7 @@
 |----|----------|---------------|------------|-----|-------------------|
 | A1 | med | CRPS ensemble validation missing; PIT missing χ² | Incomplete §0.3 tests | Added ensemble CRPS + χ² p>0.01 tests | `pytest evalphys/tests` |
 | A2 | high | `exclude_top_m` inverted (`z < 15` kept top band) | Bug in `static_stability_violations` | Keep `z >= exclude_top_m`; regression test | `test_exclude_top_m_drops_near_surface` |
-| A3 | med | gsw vs gsw_torch atol widened to 1e-4 | Silent weakening | Route via `get_gsw()`; xfail on upstream drift; F.3 script | `test_gsw_vs_gsw_torch_sigma0` |
+| A3 | med | gsw vs gsw_torch atol widened to 1e-4 | Silent weakening | Route via `get_gsw()`; xfail on upstream drift; F.3 table in reports | `reports/backend_equivalence.{json,md}` |
 | A4 | high | Invalid mean T/S RMSE column | Mixed °C+PSU | Per-var × band RMSE in T1 reports | `reports/t1_basis_stability.*` |
 | A5 | high | D N²=0.0022 ≠ 0 “by construction” | (i) inversion σ₀ round-trip + (ii) N²≠σ₀ | Additive σ₀ metric; PLAN §3.2 note | T1 D diagnosis; `sigma0_monotonicity_violations` |
 | A6 | high | A=0.91% vs historical ~22% | Metric mismatch (N² level vs σ₀ profile tol=0.01) | Reconciliation table; Finding-1 **not** refuted | RAW 1.12% → A 21.51% σ₀ profile |
@@ -34,43 +34,19 @@ Historical definition (`diagnostics.readiness.static_stability_diagnostic`, σ�
 |-----|-------------:|---------------:|
 | RAW | 1.12% | 0.0013% |
 | A PCA-16 | 21.51% | 0.0821% |
+| B joint EOF-32 | **22.63%** | 0.0802% |
+| C density+spice | **21.83%** | 0.0748% |
 | D monotone | 0.48% | ~0% |
 
-Phase-0 N² level rate @ 1e-8 for A is **0.91%** — different ruler, not a refutation. Backend (f): evalphys/T1 used real `gsw`, not `gsw_torch`.
+**Mechanism update (R1):** B does not beat A — load-bearing cause is **truncation**, not T/S separateness. Soft representation changes fail; hard constraint succeeds (21.51%→0.48%).
 
-## D diagnosis
+Phase-0 N² level rate @ 1e-8 for A is **0.91%** — different ruler. Backend equivalence table: [`backend_equivalence.md`](backend_equivalence.md) / `.json` (JOSS upstream evidence).
 
-- Pre-inversion monotone σ₀: 11 Δσ₀<0 (numerical).
-- Post-inversion σ₀ level rate: **0.00317**; N² level: **0.00223**.
-- Conclusion: mostly (i) inversion imperfect σ₀ recovery + (ii) N² metric mismatch with §3.2 σ₀ constraint. Plan updated; N² metric retained.
+## Decision (R1 accepted 2026-07-16)
 
-## RMSE paradox
+Proceed Phase 3.2 monotone-density ∥ Phase 2.2 error channels. Phase 2.1 satisfied. R4 golden = Phase 5 prerequisite. Inversion fidelity = first-class Phase 3 metric.
 
-Invalid mixed column removed. D beats A on **T** in all bands and on **S** in 0–50 m; A slightly better on mid-depth S. Bases train-only; A is 16+16; C Newton fail 0%; paradox dissolved as unit-mixing + T-dominated mean.
-
-## T2 gate
-
-**OPEN** (not EMBARGOED). Detector proven with synthetic injection.
-
-## GSW forensics
-
-| location | import |
-|----------|--------|
-| `evalphys/metrics.py`, `inversion.py`, `t1_basis_stability.py` | `gsw` / now `get_gsw()` |
-| `diagnostics/readiness.py:22` | `import gsw_torch as gsw` (training/readiness only) |
-| env `import gsw` | `/…/site-packages/gsw/` v3.6.19 |
-
-## Decision needed
-
-| Option | Meaning | Recommendation |
-|--------|---------|----------------|
-| **R1** Proceed Phase 3.2 monotone-density head | T1 N² gate failed for B/C; Finding-1 holds historically; D is only material cut | **Recommend** — matches prior agent intent with corrected metrics |
-| **R2** Escalate / redesign representation chapter | Treat B/C N² failure as “violations not basis-induced” | Not recommended: contradicted by historical σ₀ 1.12%→21.5% |
-| **R3** Re-open T2 / embargo headlines | If SSS gap still in H5 | Not indicated — gap filled; detector OK |
-| **R4** Regenerate `combined_pca_loss_v2` goldens | Fix selfcheck without skip | Needs human sign-off (numerical skill) — **do not** auto-regen |
-
-**STOP conditions fired?** None of 1–3. Condition 4 avoided via additive σ₀ metric only.  
-**Do not start Phases 2–6 pending human confirmation of R1.**
+**STOP conditions fired?** None.
 
 ## Commands
 

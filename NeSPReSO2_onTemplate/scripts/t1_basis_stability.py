@@ -233,10 +233,12 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
         ),
     }
 
-    # Reconciliation vs historical Finding-1 (σ₀ profile rate, tol=0.01)
+    # Reconciliation vs historical Finding-1 (σ₀ profile rate, tol=0.01) — all variants
     recon = {
         "historical_raw_test": _historical_sigma0_profile_rate(T_te, S_te, depth, lat_te, lon_te),
         "historical_A_pca16": _historical_sigma0_profile_rate(T_a, S_a, depth, lat_te, lon_te),
+        "historical_B_joint_eof": _historical_sigma0_profile_rate(T_b, S_b, depth, lat_te, lon_te),
+        "historical_C_density_spice": _historical_sigma0_profile_rate(T_c, S_c, depth, lat_te, lon_te),
         "historical_D": _historical_sigma0_profile_rate(T_d, S_d, depth, lat_te, lon_te),
         "notes": {
             "a_profile_vs_level": (
@@ -251,6 +253,12 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
             "d_method": (
                 "Historical Finding-1 used readiness σ₀ Δσ₀<-0.01 profile rate "
                 "(~1.12% raw → ~21.8% PCA-16), not N² level rate."
+            ),
+            "mechanism_update": (
+                "B (joint EOF) does not cut historical σ₀ profile rate vs A — the load-bearing "
+                "mechanism is truncation itself, not separateness of T/S bases. Soft "
+                "representation changes do not buy stability; only the hard monotone "
+                "constraint (D) does."
             ),
             "f_backend": f"headline backend={resolve_backend(None)} (reference gsw)",
         },
@@ -349,6 +357,8 @@ def _to_md(data: dict) -> str:
         "|-----|----------------------------|----------------|",
         f"| RAW test | {rec['historical_raw_test']['violation_rate_profile']:.4f} | {rec['historical_raw_test']['violation_rate_interface']:.6f} |",
         f"| A PCA-16 | {rec['historical_A_pca16']['violation_rate_profile']:.4f} | {rec['historical_A_pca16']['violation_rate_interface']:.6f} |",
+        f"| B joint EOF-32 | {rec['historical_B_joint_eof']['violation_rate_profile']:.4f} | {rec['historical_B_joint_eof']['violation_rate_interface']:.6f} |",
+        f"| C density+spice | {rec['historical_C_density_spice']['violation_rate_profile']:.4f} | {rec['historical_C_density_spice']['violation_rate_interface']:.6f} |",
         f"| D monotone | {rec['historical_D']['violation_rate_profile']:.4f} | {rec['historical_D']['violation_rate_interface']:.6f} |",
         "",
     ]
