@@ -60,8 +60,13 @@ def validate_config(config):
         assert set(outputs.keys()) == {"density_ctrl", "spice"}, (
             "density_spice requires outputs {density_ctrl, spice}"
         )
-        assert int(outputs["density_ctrl"]) == 64 and int(outputs["spice"]) == 16, (
-            "density_spice expects density_ctrl=64, spice=16 (PLAN §3.2–3.3)"
+        assert int(outputs["spice"]) == 16, "density_spice expects spice=16 (PLAN §3.3)"
+        n_scores = int(outputs["density_ctrl"])
+        n_ctrl = int(config.get("io", {}).get("n_ctrl", 64))
+        assert n_ctrl == 64, "density_spice expects io.n_ctrl=64 (PLAN §3.2 control grid)"
+        assert 1 <= n_scores <= n_ctrl, (
+            f"density_ctrl (R={n_scores}) must be in [1, n_ctrl={n_ctrl}]; "
+            "R<K ⇒ low-rank δa (PLAN §3.6)"
         )
         assert mode == "density_spice", "representation=density_spice requires loss_config.mode=density_spice"
     dl = config.get("data_loader", {}).get("args", {})

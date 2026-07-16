@@ -52,15 +52,25 @@ def _build_density_spice_targets(
     depth: np.ndarray,
     outputs: OrderedDict,
     train_idx: np.ndarray,
+    *,
+    n_ctrl: int = 64,
 ) -> dict[str, Any]:
-    """Phase 3.1–3.3: σ₀ control-grid + spice PCA targets (train-fit stats only)."""
+    """Phase 3.1–3.3: σ₀ control-grid + spice PCA targets (train-fit stats only).
+
+    ``outputs['density_ctrl']`` is the *network* density width R (full-rank δa when
+    R==K, low-rank δa scores when R<K). Control-grid size K comes from ``n_ctrl``.
+    """
     from evalphys.inversion import sigma0_spice_from_ts
     from evalphys.gsw_backend import get_gsw
+    from model.density_spice import encode_a_from_sigma0_ctrl, project_monotone_sigma0_ctrl
 
     if set(outputs) != {"density_ctrl", "spice"}:
         raise ValueError(f"density_spice outputs must be density_ctrl+spice, got {dict(outputs)}")
-    k = int(outputs["density_ctrl"])
+    n_scores = int(outputs["density_ctrl"])
     n_spice = int(outputs["spice"])
+    k = int(n_ctrl)
+    if n_scores < 1 or n_scores > k:
+        raise ValueError(f"density_ctrl (R={n_scores}) must be in [1, K={k}]")
     T = _station_major(profiles["temperature"], lat.shape[0])
     S = _station_major(profiles["salinity"], lat.shape[0])
     n, n_z = T.shape
@@ -79,8 +89,6 @@ def _build_density_spice_targets(
         sig_ctrl[i] = np.interp(z_ctrl, depth[ok], sig[i, ok])
     # Softplus decode is always monotone; project targets the same way so the
     # loss floor isn't set by non-monotone linear-interp artefacts (deep-band fix).
-    from model.density_spice import project_monotone_sigma0_ctrl
-
     sig_ctrl = project_monotone_sigma0_ctrl(sig_ctrl, z_ctrl)
 
     tr = np.asarray(train_idx, dtype=int)
@@ -95,33 +103,52 @@ def _build_density_spice_targets(
     pca_spice = PCA(n_components=n_spice).fit(tau_z[tr])
     spice_pcs = pca_spice.transform(tau_z).astype(np.float32)  # (n, n_spice)
 
+    # Loss targets stay in σ₀_ctrl (K) + spice; network width is R (+ spice).
     targets = np.hstack([sig_ctrl_z, spice_pcs]).astype(np.float32)
     pcs_by_name = {
-        "density_ctrl": sig_ctrl_z.T,  # (K, n) for weight helper shape compat
+        "density_ctrl": sig_ctrl_z.T,  # (K, n) — target side, not network width
         "spice": spice_pcs.T,
     }
-    # Weights: uniform on density ctrl; spice explained variance via get_pca_weights
     w_rho = np.ones(k, dtype=np.float32)
     w_spice = get_pca_weights({"spice": pca_spice}, {"spice": spice_pcs.T}, ["spice"])
     weights = np.concatenate([w_rho, w_spice]).astype(np.float32)
 
+    a_clim = encode_a_from_sigma0_ctrl(mu_s, dz_tilde, z_ctrl).astype(np.float64)
+    meta = {
+        "z_ctrl": z_ctrl.astype(np.float32),
+        "dz_tilde": dz_tilde.astype(np.float32),
+        "sigma0_ctrl_mean": mu_s.astype(np.float32),
+        "sigma0_ctrl_std": sd_s.astype(np.float32),
+        "spice_mean": mu_t.astype(np.float32),
+        "spice_std": sd_t.astype(np.float32),
+        "a_clim": a_clim.astype(np.float32),
+        "K": k,
+        "n_scores": n_scores,
+        "n_spice": n_spice,
+    }
+    if n_scores < k:
+        # PLAN §3.6 (corrected): PCA on train (σ₀ − clim), NOT a-space —
+        # softplus⁻¹ makes a-space PCA a catastrophic σ₀ recon ceiling.
+        delta = np.nan_to_num(sig_ctrl[tr] - mu_s, nan=0.0)
+        pca_ds = PCA(n_components=n_scores).fit(delta)
+        meta["delta_sigma0_basis"] = pca_ds.components_.astype(np.float32)  # (R, K)
+        meta["sigma0_clim"] = (mu_s + pca_ds.mean_).astype(np.float32)
+        meta["delta_sigma0_explained_variance_ratio"] = pca_ds.explained_variance_ratio_.astype(
+            np.float32
+        )
+        meta["lowrank_target"] = "sigma0"
+        pca_models = {"spice": pca_spice, "delta_sigma0": pca_ds}
+    else:
+        pca_models = {"spice": pca_spice}
+
     return {
         "targets": targets,
-        "pca_models": {"spice": pca_spice},
+        "pca_models": pca_models,
         "pcs_by_name": pcs_by_name,
         "weights": weights,
         "targets_sigma0": sig.astype(np.float32),
         "targets_spice": tau.astype(np.float32),
-        "density_spice_meta": {
-            "z_ctrl": z_ctrl.astype(np.float32),
-            "dz_tilde": dz_tilde.astype(np.float32),
-            "sigma0_ctrl_mean": mu_s.astype(np.float32),
-            "sigma0_ctrl_std": sd_s.astype(np.float32),
-            "spice_mean": mu_t.astype(np.float32),
-            "spice_std": sd_t.astype(np.float32),
-            "K": k,
-            "n_spice": n_spice,
-        },
+        "density_spice_meta": meta,
     }
 
 
@@ -198,7 +225,13 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
             n, juld, dl_cfg, dataset_tag=dataset_tag, v2_src=v2_src
         )
         block = _build_density_spice_targets(
-            profiles_ts, lat, lon, pres, outputs, splits["train"]
+            profiles_ts,
+            lat,
+            lon,
+            pres,
+            outputs,
+            splits["train"],
+            n_ctrl=int(io_cfg.get("n_ctrl", 64)),
         )
         targets = block["targets"]
         pca_models = block["pca_models"]

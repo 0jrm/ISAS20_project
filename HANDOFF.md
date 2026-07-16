@@ -7,77 +7,65 @@
 
 ---
 
-## Status: §3.6 opt-2 gate PASS on corrected ruler — clean chrono baseline established
+## Status: low-rank δσ₀ PASS — matrix admission (inference-isotonic claim)
 
 | Phase | Status |
 |-------|--------|
 | 0–1 | Done |
-| 2 | v3 HDF5 regen advancing (batches written through 300+) |
-| 3 | **PASS** — argo16_chrono_clean + isotonic vs same-split floor (see below) |
-| 4–6 | Unblocked by gate; in-head skill recovery still the science priority |
+| 2 | v3 HDF5 regen advancing |
+| 3 | **PASS** (corrected floor) — see architecture claim below |
+| 4 | **Next** — two-stage CRPS on this μ; cov export is `Σ_ρ = V diag(σ_z²) Vᵀ` |
+| 5–6 | Pass = Phase 5 matrix admission; dissertation number = 3-seed mean±std |
 
 ---
 
-## Leakage erratum + ruler repair (2026-07-16, human-signed)
+## Architecture claim (do not silent)
 
-`argo16_scales/config.json` has **no `split_mode`** → random-trained; its train set overlaps
-the 2021–2022 chrono test era. All chrono evals of that checkpoint were leaked-optimistic
-(0.514 gate figure; density-diag mse_σ 0.21). Erratum in `reports/phase3_density_shift_diag.md`.
-The 0.458 gate floor (published-random × 1.10) also violated like-for-like splits; corrected
-floor = same-split baseline × 1.10 (`PLAN-v2-recovery.md` changelog).
-
-**Clean retrain** `saved/models/NeSPReSO2_ARGO_GoM/argo16_chrono_clean` (same config +
-`split_mode: chronological`, cache `train_ready_3adcff404b0b.pkl`, early stop ep 814):
-
-| quantity | leaked (argo16_scales) | clean (argo16_chrono_clean) |
-|----------|------------------------|------------------------------|
-| chrono raw T RMSE | 0.514 | **0.5367** |
-| density mse_σ val/test | 0.134 / 0.210 | 0.146 / **0.234** |
-| gate floor | 0.4574 (published×1.10) | **0.5903** (clean×1.10) |
-
-- Density-control verdict **survives and strengthens**: clean argo16 test mse_σ 0.234 ≪ densonly 0.913 → `representation_plumbing` stands (`reports/phase3_density_shift_diag_clean.md`).
-- Gate: clean+isotonic T 0.5367, pre-inv σ₀ = 0, proj cost 0.0014 °C → **PASS** (`reports/phase3_argo16_isotonic_gate_clean.md`). Phase 3 candidate.
+Winning path is **σ₀-space** low-rank: `σ̂₀ = clim + scores @ V`.  
+**Not** monotone in the head. Pre-isotonic test: **45.6%** profiles violate.  
+**Guarantee:** *stable by construction at inference* via mandatory isotonic
+(`project_monotone_sigma0_ctrl`) — §3.6 opt-2 / T1-D. Cost ΔT ≈ −0.0002 °C.  
+Full-rank softplus+cumsum retains the stronger "hard constraint in the head" claim.
+PLAN §3.2 updated. Eval reports `stability_guarantee: inference_isotonic`.
 
 ---
 
-## Shrinkage fix (σ₀ space)
+## Headline numbers
 
-a-space shrink≈0 contradicted densonly beating clim on val. Recomputed:
+| quantity | value |
+|----------|------:|
+| chrono T RMSE (spice_v3) | **0.562** |
+| clean chrono argo16 | 0.5367 |
+| same-split floor (×1.10) | **0.590** |
+| ratio | 1.047 |
+| pre-inv σ₀ (after isotonic) | 0 |
+| pred dens + true spice | 0.250 |
+| true dens + pred spice | 0.404 |
 
-| era | densonly σ₀-shrink | densonly mse_σ | clim mse_σ |
-|-----|--------------------|----------------|------------|
-| val | **0.318** | 0.43 | 1.14 |
-| test | **0.275** | 0.91 | 1.26 |
-
-Under-correction still true (~0.3× anomaly variance), but not “δa≈0”. Loss already post softplus+cumsum.
-
----
-
-## argo16 + isotonic gate (§3.6 opt-2) — SUPERSEDED (leaked checkpoint; see erratum above)
-
-Report: [`reports/phase3_argo16_isotonic_gate.md`](reports/phase3_argo16_isotonic_gate.md)
-
-| | chronological | random (published regime) |
-|--|---------------|---------------------------|
-| argo16 raw T | **0.514** | **0.416** |
-| +isotonic T | 0.514 | ~0.416 |
-| pre-inv σ₀ | **0.000** | 0.000 |
-| vs published 0.458 floor | FAIL | PASS skill |
-
-**Published 0.416 was random-split.** Chronological argo16 already sits above the coded floor; projection cannot invent skill. Stability half works (pre-inv σ₀=0, proj cost ~0.0015°C; post-inv profile rate at tol=0 is O(1e-6) Newton noise).
+**Ckpt:** `saved/.../lowrank_sigma0_spice_v3/model_best.pth`  
+**Cache:** `../data/cache/train_ready_0f6129b27ddb.pkl`  
+**Report:** [`reports/phase3_lowrank_sigma0_spice_eval.md`](reports/phase3_lowrank_sigma0_spice_eval.md)
 
 ---
 
-## Next (reordered)
+## Record (hygiene)
 
-1. **Low-rank δa:** PCA on train `(a_true − a_clim)` → ~16 scores → decode δa → softplus+cumsum (restore coordination argo16 gets for free). Keep v10 spice frozen.
-2. **Month-resolved / harmonic a_clim** (JJA clim mse 1.8–2.1).
-3. Confirm loss stays in σ₀ space (already does).
-4. SSH→density ablation last (argo16 already proves inputs carry signal).
-5. v3 HDF5 continues in background for Phase 4.5 when skill returns.
+| doc | role |
+|-----|------|
+| [`reports/gate_floor_provenance.md`](reports/gate_floor_provenance.md) | floor chain: leak → clean retrain → 0.5903 |
+| [`reports/finding_compress_physical_space.md`](reports/finding_compress_physical_space.md) | a-space PCA failure as citable finding (35× gap) |
+| [`reports/phase3_density_shift_diag.md`](reports/phase3_density_shift_diag.md) | leakage erratum (argo16 mse_σ 0.21) |
+| [`reports/phase3_density_shift_diag_clean.md`](reports/phase3_density_shift_diag_clean.md) | clean re-run; plumbing survives |
+| eval report `eval_hygiene.test_evals_consumed` | **2** selection evals on σ₀ family (v2→v3); forking-paths noted |
+
+---
+
+## Next
+
+1. **Phase 4** on this μ: two-stage CRPS; val-only σ recalibration for ENCE; iterate on val, one test score per matrix cell.
+2. Month-clim: defer (Phase 5 variant only if free).
+3. Merge to main: defensible **only with** inference-isotonic wiring + floor provenance in the same merge (both now in tree — commit when asked).
 
 ```bash
 tmux attach -t v3_hdf5_regen
-srun --ntasks=1 --cpus-per-task=8 conda run -n nespreso \
-  python scripts/eval_argo16_isotonic_gate.py --split-mode chronological
 ```

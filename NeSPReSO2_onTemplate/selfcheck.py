@@ -1713,11 +1713,12 @@ def test_evalphys_frozen_metrics():
 
 def test_density_spice_monotone_and_roundtrip():
     """Phase 3: softplus+PCHIP monotone; Newton round-trip on synthetic profiles."""
-    from model.density_spice import selfcheck_monotone_pchip
+    from model.density_spice import selfcheck_lowrank_delta_a, selfcheck_monotone_pchip
     from evalphys.inversion import sigma0_spice_from_ts, ts_from_sigma0_spice
     from evalphys.gsw_backend import get_gsw
 
     selfcheck_monotone_pchip(n=200)
+    selfcheck_lowrank_delta_a(n=200)
     gsw = get_gsw()
     rng = np.random.default_rng(1)
     n, nz = 40, 30
@@ -1802,6 +1803,8 @@ def test_density_spice_prob_loss_crps_backward():
         lambda_tau=1.0,
         sigma0_mean=np.zeros(64),
         sigma0_std=np.ones(64),
+        a_clim=np.zeros(64),
+        n_ctrl=64,
         prob_mode="crps",
     )
     B, D = 4, 80

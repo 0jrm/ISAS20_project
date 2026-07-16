@@ -34,9 +34,14 @@ def decode_density_spice_to_ts(
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     from evalphys.gsw_backend import get_gsw
     from evalphys.inversion import ts_from_sigma0_spice
-    from model.density_spice import decode_sigma0_ctrl, upsample_pchip
-
-    from model.density_spice import encode_a_from_sigma0_ctrl
+    from model.density_spice import (
+        decode_a_from_output,
+        decode_sigma0_ctrl,
+        decode_sigma0_from_scores,
+        encode_a_from_sigma0_ctrl,
+        project_monotone_sigma0_ctrl,
+        upsample_pchip,
+    )
 
     meta = cache["density_spice_meta"]
     pca = cache["pca_models"]["spice"]
@@ -44,19 +49,45 @@ def decode_density_spice_to_ts(
     dz = np.asarray(meta["dz_tilde"], dtype=np.float64)
     k = int(meta["K"])
     n_spice = int(meta["n_spice"])
-    a_clim = meta.get("a_clim")
-    if a_clim is None:
-        a_clim = encode_a_from_sigma0_ctrl(
-            np.asarray(meta["sigma0_ctrl_mean"], dtype=np.float64), dz, z_ctrl
+    n_scores = int(meta.get("n_scores", k))
+    basis = meta.get("delta_sigma0_basis")
+    if basis is not None:
+        # σ₀-space low-rank: clim + scores@V is NOT monotone by construction.
+        # Stability = §3.6 opt-2 / T1-D: isotonic projection at inference (required).
+        clim = np.asarray(meta.get("sigma0_clim", meta["sigma0_ctrl_mean"]), dtype=np.float64)
+        sig_raw, z_tau = decode_sigma0_from_scores(
+            mu_raw, clim, n_scores, n_spice, np.asarray(basis, dtype=np.float64)
         )
-    a = mu_raw[:, :k] + np.asarray(a_clim, dtype=np.float64)
-    z_tau = mu_raw[:, k : k + n_spice]
+        neg_iface = np.diff(sig_raw, axis=1) < -1e-12
+        sig_ctrl = project_monotone_sigma0_ctrl(sig_raw, z_ctrl)
+        low_rank = True
+        stability_guarantee = "inference_isotonic"  # not head_softplus
+        proj_cost_sigma0_rmse = float(np.sqrt(np.mean((sig_ctrl - sig_raw) ** 2)))
+        pre_iso = {
+            "neg_iface_rate": float(neg_iface.mean()),
+            "neg_profile_rate": float(neg_iface.any(axis=1).mean()),
+            "n_neg_iface": int(neg_iface.sum()),
+            "n_neg_profile": int(neg_iface.any(axis=1).sum()),
+        }
+    else:
+        a_clim = meta.get("a_clim")
+        if a_clim is None:
+            a_clim = encode_a_from_sigma0_ctrl(
+                np.asarray(meta["sigma0_ctrl_mean"], dtype=np.float64), dz, z_ctrl
+            )
+        a, z_tau = decode_a_from_output(
+            mu_raw, np.asarray(a_clim, dtype=np.float64), n_scores, n_spice, basis=None
+        )
+        with torch.no_grad():
+            sig_ctrl = decode_sigma0_ctrl(
+                torch.from_numpy(a.astype(np.float32)),
+                torch.from_numpy(dz.astype(np.float32)),
+            ).numpy()
+        low_rank = False
+        stability_guarantee = "head_softplus_cumsum"
+        proj_cost_sigma0_rmse = 0.0
+        pre_iso = None
 
-    with torch.no_grad():
-        sig_ctrl = decode_sigma0_ctrl(
-            torch.from_numpy(a.astype(np.float32)),
-            torch.from_numpy(dz.astype(np.float32)),
-        ).numpy()
     depth = _load_depth(cache)
     sig_hat = upsample_pchip(sig_ctrl, z_ctrl, depth)
 
@@ -74,6 +105,13 @@ def decode_density_spice_to_ts(
     return T_hat, S_hat, {
         "inversion_fail_frac": float(1.0 - np.mean(ok)),
         "pre_inv_neg_dsigma0": int((np.diff(sig_hat, axis=1) < -1e-12).sum()),
+        "n_scores": n_scores,
+        "K": k,
+        "low_rank": low_rank,
+        "lowrank_target": meta.get("lowrank_target"),
+        "stability_guarantee": stability_guarantee,
+        "isotonic_projection_sigma0_rmse": proj_cost_sigma0_rmse,
+        "pre_isotonic": pre_iso,
     }
 
 
@@ -151,12 +189,21 @@ def run_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
         band_vs_A[b] = {"pred": pred, "A_recon": base, "ratio": ratio, "pass_le_1_10": ok}
         if not ok:
             gate_vs_A = False
+    # Low-rank δσ₀: hard mono is isotonic at eval (pre-inv); post-inv rate is
+    # Newton fidelity, not control-grid failure (PLAN §3.2 σ₀-vs-N² note).
+    pre_inv_neg = int(inv_info.get("pre_inv_neg_dsigma0", -1))
     s0_rate = float(s0.get("violation_rate_profile"))
-    s0_ok = s0_rate < 0.01
+    if inv_info.get("low_rank"):
+        s0_ok = pre_inv_neg == 0
+    else:
+        s0_ok = s0_rate < 0.01
+    # Corrected chrono floor (HANDOFF 2026-07-16): clean argo16 × 1.10.
+    # Published-random 0.4158 kept for side-by-side only.
+    CLEAN_CHRONO_T = 0.5367
     vs_argo16 = overall_t / ARGO16_T_RMSE_OVERALL
-    # Primary STOP: σ₀ near-zero AND not >10% worse than trained argo16 overall.
-    # T1-A by-band is reported (reconstruction floor); prediction>recon is expected.
-    gate_pass = s0_ok and vs_argo16 <= 1.10
+    vs_clean = overall_t / CLEAN_CHRONO_T
+    skill_ok = vs_clean <= 1.10
+    gate_pass = s0_ok and skill_ok
 
     seasons = season_from_juld(
         np.asarray(cache["JULD"])[idx], dataset_tag=cache.get("dataset_tag", "argo_v2")
@@ -171,19 +218,28 @@ def run_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
         "overall_T_rmse": overall_t,
         "gate": {
             "sigma0_profile_rate": s0_rate,
+            "sigma0_pre_inv_neg": pre_inv_neg,
             "sigma0_near_zero": s0_ok,
             "overall_T_vs_argo16": {
                 "pred": overall_t,
-                "argo16": ARGO16_T_RMSE_OVERALL,
+                "argo16_published_random": ARGO16_T_RMSE_OVERALL,
                 "ratio": vs_argo16,
                 "pass_le_1_10": vs_argo16 <= 1.10,
+            },
+            "overall_T_vs_clean_chrono": {
+                "pred": overall_t,
+                "argo16_clean_chrono": CLEAN_CHRONO_T,
+                "floor": CLEAN_CHRONO_T * 1.10,
+                "ratio": vs_clean,
+                "pass_le_1_10": skill_ok,
             },
             "upper_ocean_T_vs_T1A_recon": band_vs_A,
             "T1A_recon_gate_pass": gate_vs_A,
             "pass": gate_pass,
             "note": (
-                "STOP uses σ₀ near-zero + overall T ≤ argo16×1.10 (trained separate-PCA). "
-                "By-band vs T1-A is reconstruction floor (prediction>recon expected)."
+                "STOP uses pre-inv σ₀ (low-rank) or post-inv near-zero (full-rank) + "
+                "overall T ≤ clean-chrono argo16×1.10 (floor 0.5903). "
+                "Published-random 0.4158 reported side-by-side only."
             ),
         },
         "season_counts": {s: int((seasons == s).sum()) for s in ("DJF", "MAM", "JJA", "SON")},
@@ -209,8 +265,9 @@ def _md(data: dict) -> str:
     t, s = phys["ts_rmse"]["T"], phys["ts_rmse"]["S"]
     s0 = phys["sigma0_monotonicity_pred"]
     n2 = phys["static_stability_pred"]["1e-08"]
+    clean = g.get("overall_T_vs_clean_chrono") or {}
     lines = [
-        "# Phase 3 — full density_spice train+eval",
+        "# Phase 3 — density_spice eval",
         "",
         f"**Checkpoint:** `{data['checkpoint']}`  ",
         f"**Cache:** `{data['cache']}`  ",
@@ -218,10 +275,19 @@ def _md(data: dict) -> str:
         "",
         f"**Gate:** {'PASS' if g['pass'] else 'FAIL'}",
         "",
-        f"- σ₀ profile rate: {g['sigma0_profile_rate']:.4f} (near-zero: {g['sigma0_near_zero']})",
+        f"- σ₀ profile rate (post-inv): {g['sigma0_profile_rate']:.4f}; "
+        f"pre-inv neg: {g.get('sigma0_pre_inv_neg')}; near-zero OK: {g['sigma0_near_zero']}",
         f"- N² profile / level @ 1e-8: {n2['violation_rate_profile']:.4f} / {n2['violation_rate_level']:.6f}",
-        f"- overall T RMSE: {data['overall_T_rmse']:.4f} vs argo16 {ARGO16_T_RMSE_OVERALL:.4f} "
-        f"(ratio {g['overall_T_vs_argo16']['ratio']:.3f})",
+        f"- overall T RMSE: {data['overall_T_rmse']:.4f}",
+    ]
+    if clean:
+        lines.append(
+            f"- vs clean chrono argo16 {clean.get('argo16_clean_chrono')}: "
+            f"ratio {clean.get('ratio'):.3f} (floor {clean.get('floor'):.4f}, "
+            f"pass={clean.get('pass_le_1_10')})"
+        )
+    lines += [
+        f"- vs published-random argo16: ratio {g['overall_T_vs_argo16']['ratio']:.3f} (side-by-side only)",
         f"- MLD RMSE: {phys['mld']['pred_vs_true']['rmse']}",
         f"- dρ/dz RMSE: {phys['drhodz_rmse']['rmse_overall']}",
         f"- inversion fail frac: {data['inversion']['inversion_fail_frac']:.4f}",

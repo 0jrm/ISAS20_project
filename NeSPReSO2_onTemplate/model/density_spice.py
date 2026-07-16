@@ -49,6 +49,31 @@ def decode_sigma0_ctrl(a: torch.Tensor, dz_tilde: torch.Tensor) -> torch.Tensor:
     return out
 
 
+def decode_a_from_output(mu_raw, a_clim, n_scores, n_spice, basis=None):
+    """Full-rank residual-δa path: ``a = a_clim + δa`` (``basis`` unused / identity).
+
+    Low-rank mode uses ``decode_sigma0_from_scores`` (σ₀-space PCA) instead —
+    a-space PCA has a catastrophic σ₀ recon ceiling (PLAN §3.6 erratum).
+    """
+    scores = mu_raw[..., :n_scores]
+    z_tau = mu_raw[..., n_scores : n_scores + n_spice]
+    delta = scores if basis is None else scores @ basis
+    return a_clim + delta, z_tau
+
+
+def decode_sigma0_from_scores(mu_raw, sigma0_clim, n_scores, n_spice, basis):
+    """Low-rank density: ``σ̂₀ = σ₀_clim + scores @ basis`` + spice slice.
+
+    ``basis`` is ``(R, K)`` from PCA on train ``(σ₀_ctrl − σ₀_clim)``. Works for
+    numpy or torch. **Not monotone by construction** — callers MUST apply
+    ``project_monotone_sigma0_ctrl`` before upsample/invert (PLAN §3.6 opt-2 /
+    T1-D). Claim is *"stable by construction at inference"*, not hard-head.
+    """
+    scores = mu_raw[..., :n_scores]
+    z_tau = mu_raw[..., n_scores : n_scores + n_spice]
+    return sigma0_clim + scores @ basis, z_tau
+
+
 def project_monotone_sigma0_ctrl(sig_ctrl: np.ndarray, z_ctrl: np.ndarray) -> np.ndarray:
     """L2-optimal increasing projection on the control grid (isotonic).
 
@@ -167,6 +192,35 @@ def selfcheck_monotone_pchip(n: int = 1000, K: int = 64, n_z: int = 201, seed: i
     assert float(np.max(np.abs(sig_rt - project_monotone_sigma0_ctrl(sig_wiggle, z_ctrl)))) < 1e-4
 
 
+def selfcheck_lowrank_delta_a(n: int = 400, K: int = 64, R: int = 16, n_z: int = 201, seed: int = 1) -> None:
+    """Low-rank δσ₀: PCA(R) on (σ₀ − clim) then isotonic stays near-monotone (PLAN §3.6)."""
+    from sklearn.decomposition import PCA
+
+    rng = np.random.default_rng(seed)
+    depth = np.linspace(0.0, 2000.0, n_z)
+    z_ctrl = make_control_grid(depth, K=K)
+    zt = (z_ctrl - z_ctrl[0]) / (z_ctrl[-1] - z_ctrl[0])
+    base = 24.0 + 3.0 * np.tanh(4.0 * zt)
+    modes = np.stack([np.cos((m + 1) * np.pi * zt) for m in range(6)], axis=0)
+    amps = rng.normal(scale=[0.3, 0.15, 0.08, 0.05, 0.03, 0.02], size=(n, 6))
+    sig = project_monotone_sigma0_ctrl(base[None, :] + amps @ modes, z_ctrl)
+    clim = sig.mean(0)
+    pca = PCA(n_components=R).fit(sig - clim)
+    basis = pca.components_.astype(np.float64)
+    clim_eff = clim + pca.mean_
+    scores = pca.transform(sig - clim).astype(np.float64)
+    mu_raw = np.hstack([scores, np.zeros((n, 1))])
+    sig_hat, z_tau = decode_sigma0_from_scores(mu_raw, clim_eff, R, 1, basis=basis)
+    assert sig_hat.shape == (n, K) and z_tau.shape == (n, 1)
+    sig_mono = project_monotone_sigma0_ctrl(sig_hat, z_ctrl)
+    rmse = float(np.sqrt(np.mean((sig_mono - sig) ** 2)))
+    rmse_clim = float(np.sqrt(np.mean((clim_eff - sig) ** 2)))
+    assert rmse < 0.1 * rmse_clim, f"σ₀-space low-rank too weak: {rmse:.4f} vs clim {rmse_clim:.4f}"
+    # round-trip identity before isotonic
+    assert float(np.max(np.abs(scores @ basis + clim_eff - sig_hat))) < 1e-6
+
+
 if __name__ == "__main__":
     selfcheck_monotone_pchip()
+    selfcheck_lowrank_delta_a()
     print("density_spice selfcheck: OK")

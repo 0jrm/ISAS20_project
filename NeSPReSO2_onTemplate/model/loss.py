@@ -622,7 +622,9 @@ class CombinedPCALoss(nn.Module):
 class DensitySpiceLoss(nn.Module):
     """Phase 3 deterministic loss: MSE(σ̂₀_ctrl, σ₀_ctrl) + MSE(ẑ_τ, z_τ); λ_f=0 for v1.
 
-    Network predicts residual δa; decode uses a = a_clim + δa (avoids softplus explosion).
+    Full-rank (R=K): residual δa → softplus+cumsum.
+    Low-rank (R<K): ``σ̂₀ = σ₀_clim + scores @ delta_sigma0_basis`` (σ₀-space PCA).
+    Targets remain K-wide standardized σ₀_ctrl + spice PCs.
     """
 
     def __init__(
@@ -636,21 +638,60 @@ class DensitySpiceLoss(nn.Module):
         sigma0_mean: np.ndarray | None = None,
         sigma0_std: np.ndarray | None = None,
         a_clim: np.ndarray | torch.Tensor | None = None,
+        delta_sigma0_basis: np.ndarray | torch.Tensor | None = None,
+        sigma0_clim: np.ndarray | torch.Tensor | None = None,
+        n_ctrl: int | None = None,
+        # legacy alias ignored if delta_sigma0_basis set
+        delta_a_basis: np.ndarray | torch.Tensor | None = None,
     ):
         super().__init__()
         self.outputs = OrderedDict(outputs)
         if "density_ctrl" not in self.outputs or "spice" not in self.outputs:
             raise ValueError("density_spice loss requires outputs density_ctrl + spice")
-        self.k = int(self.outputs["density_ctrl"])
+        self.n_scores = int(self.outputs["density_ctrl"])
         self.n_spice = int(self.outputs["spice"])
+        self.k = int(n_ctrl) if n_ctrl is not None else self.n_scores
+        if delta_a_basis is not None and delta_sigma0_basis is None:
+            raise ValueError(
+                "a-space delta_a_basis is retired (σ₀ recon ceiling); rebuild cache for delta_sigma0_basis"
+            )
+        if delta_sigma0_basis is not None:
+            basis = np.asarray(delta_sigma0_basis)
+            if basis.shape != (self.n_scores, self.k):
+                raise ValueError(
+                    f"delta_sigma0_basis shape {basis.shape} != (R={self.n_scores}, K={self.k})"
+                )
+        elif self.n_scores != self.k:
+            raise ValueError(
+                f"low-rank density_ctrl={self.n_scores} < K={self.k} requires delta_sigma0_basis"
+            )
         self.lambda_rho = float(lambda_rho)
         self.lambda_tau = float(lambda_tau)
         dz = torch.as_tensor(dz_tilde, dtype=torch.float32, device=device)
+        if dz.numel() != self.k:
+            raise ValueError(f"dz_tilde length {dz.numel()} != K={self.k}")
         self.register_buffer("dz_tilde", dz)
         if a_clim is not None:
-            self.register_buffer("a_clim", torch.as_tensor(a_clim, dtype=torch.float32, device=device))
+            ac = torch.as_tensor(a_clim, dtype=torch.float32, device=device).reshape(-1)
+            if ac.numel() != self.k:
+                raise ValueError(f"a_clim length {ac.numel()} != K={self.k}")
+            self.register_buffer("a_clim", ac)
         else:
             self.a_clim = None
+        if delta_sigma0_basis is not None:
+            self.register_buffer(
+                "delta_sigma0_basis",
+                torch.as_tensor(delta_sigma0_basis, dtype=torch.float32, device=device),
+            )
+            clim = sigma0_clim if sigma0_clim is not None else sigma0_mean
+            if clim is None:
+                raise ValueError("low-rank density_spice requires sigma0_clim or sigma0_mean")
+            self.register_buffer(
+                "sigma0_clim", torch.as_tensor(clim, dtype=torch.float32, device=device).reshape(-1)
+            )
+        else:
+            self.delta_sigma0_basis = None
+            self.sigma0_clim = None
         if sigma0_mean is not None:
             self.register_buffer(
                 "sigma0_mean", torch.as_tensor(sigma0_mean, dtype=torch.float32, device=device)
@@ -663,20 +704,30 @@ class DensitySpiceLoss(nn.Module):
             self.sigma0_mean = None
             self.sigma0_std = None
 
-    def _a_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
-        a = mu_raw[:, : self.k]
-        if self.a_clim is not None:
-            a = a + self.a_clim
-        return a
+    def _sigma0_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
+        from model.density_spice import decode_a_from_output, decode_sigma0_ctrl, decode_sigma0_from_scores
+
+        if self.delta_sigma0_basis is not None:
+            sig, _ = decode_sigma0_from_scores(
+                mu_raw,
+                self.sigma0_clim,
+                self.n_scores,
+                self.n_spice,
+                self.delta_sigma0_basis,
+            )
+            return sig
+        if self.a_clim is None:
+            raise ValueError("DensitySpiceLoss requires a_clim for full-rank residual-δa")
+        a, _ = decode_a_from_output(
+            mu_raw, self.a_clim, self.n_scores, self.n_spice, basis=None
+        )
+        return decode_sigma0_ctrl(a, self.dz_tilde)
 
     def forward(self, output, target, indices=None, inputs=None):
-        from model.density_spice import decode_sigma0_ctrl
-
-        a = self._a_from_raw(output)
-        z_tau_hat = output[:, self.k : self.k + self.n_spice]
+        z_tau_hat = output[:, self.n_scores : self.n_scores + self.n_spice]
         sig_tgt = target[:, : self.k]
         z_tau = target[:, self.k : self.k + self.n_spice]
-        sig_hat = decode_sigma0_ctrl(a, self.dz_tilde)
+        sig_hat = self._sigma0_from_raw(output)
         if self.sigma0_mean is not None:
             sig_hat = (sig_hat - self.sigma0_mean) / self.sigma0_std
         loss_rho = torch.mean((sig_hat - sig_tgt) ** 2)
@@ -698,12 +749,23 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         sigma0_mean: np.ndarray | None = None,
         sigma0_std: np.ndarray | None = None,
         a_clim: np.ndarray | torch.Tensor | None = None,
+        delta_sigma0_basis: np.ndarray | torch.Tensor | None = None,
+        sigma0_clim: np.ndarray | torch.Tensor | None = None,
+        n_ctrl: int | None = None,
+        delta_a_basis: np.ndarray | torch.Tensor | None = None,
         prob_mode: str = "crps",
         nll_beta: float = 0.5,
         sigma_min: float = 1e-3,
         freeze_sigma: bool = False,
         target_err: torch.Tensor | None = None,
     ):
+        if delta_sigma0_basis is not None or (
+            n_ctrl is not None and int(outputs["density_ctrl"]) != int(n_ctrl)
+        ):
+            # ponytail: σ on score domain needs Jacobian for CRPS/NLL in σ₀ space; defer.
+            raise NotImplementedError(
+                "prob density_spice + low-rank δσ₀ not supported yet; train deterministic first"
+            )
         super().__init__(
             outputs,
             dz_tilde,
@@ -713,6 +775,10 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
             sigma0_mean=sigma0_mean,
             sigma0_std=sigma0_std,
             a_clim=a_clim,
+            delta_sigma0_basis=delta_sigma0_basis,
+            sigma0_clim=sigma0_clim,
+            n_ctrl=n_ctrl,
+            delta_a_basis=delta_a_basis,
         )
         if prob_mode not in VALID_PROB_MODES:
             raise ValueError(f"prob_mode must be one of {VALID_PROB_MODES}, got {prob_mode!r}")
@@ -720,18 +786,15 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         self.nll_beta = float(nll_beta)
         self.sigma_min = float(sigma_min)
         self.freeze_sigma = bool(freeze_sigma)
-        self.d = self.k + self.n_spice
+        self.d = self.n_scores + self.n_spice
         if target_err is not None:
             self.register_buffer("target_err", torch.as_tensor(target_err, dtype=torch.float32, device=device))
         else:
             self.target_err = None
 
     def _mu_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
-        from model.density_spice import decode_sigma0_ctrl
-
-        a = self._a_from_raw(mu_raw)
-        z_tau = mu_raw[:, self.k : self.k + self.n_spice]
-        sig_hat = decode_sigma0_ctrl(a, self.dz_tilde)
+        z_tau = mu_raw[:, self.n_scores : self.n_scores + self.n_spice]
+        sig_hat = self._sigma0_from_raw(mu_raw)
         if self.sigma0_mean is not None:
             sig_hat = (sig_hat - self.sigma0_mean) / self.sigma0_std
         return torch.cat([sig_hat, z_tau], dim=-1)
@@ -748,7 +811,7 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         from model.prob_head import QUANTILE_TAUS, beta_nll, pinball_loss, split_mu_sigma
 
         if self.prob_mode == "mse" or self.freeze_sigma:
-            # Stage 1 / deterministic: first D cols are μ raw (a || z_τ)
+            # Stage 1 / deterministic: first D cols are μ raw (scores || z_τ)
             mu_raw = output[:, : self.d] if output.shape[-1] >= self.d else output
             mu = self._mu_from_raw(mu_raw)
             loss_rho = torch.mean((mu[:, : self.k] - target[:, : self.k]) ** 2)
@@ -765,15 +828,20 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
 
         mu_raw, sigma = split_mu_sigma(output, self.d)
         mu = self._mu_from_raw(mu_raw)
+        # Full-rank: σ predicted per ctrl level; network width == target width.
+        # Low-rank blocked in __init__.
+        if sigma.shape[-1] != target.shape[-1]:
+            raise ValueError(
+                f"prob σ width {sigma.shape[-1]} != target {target.shape[-1]} "
+                "(low-rank δa not supported for CRPS/NLL)"
+            )
         sigma = self._sigma_tot(sigma, indices)
         if self.prob_mode == "crps":
             crps = gaussian_crps_torch(mu, sigma, target, sigma_min=self.sigma_min)
-            # weight density vs spice blocks like deterministic λ
             w = torch.ones_like(crps)
             w[:, : self.k] = self.lambda_rho
             w[:, self.k :] = self.lambda_tau
             return torch.mean(w * crps)
-        # nll
         nll = beta_nll(mu, sigma, target, beta=self.nll_beta, sigma_min=self.sigma_min)
         return nll
 
@@ -820,6 +888,9 @@ def make_loss(
                 np.asarray(meta["dz_tilde"], dtype=np.float64),
                 np.asarray(meta["z_ctrl"], dtype=np.float64),
             )
+        n_ctrl = int(meta.get("K", outputs["density_ctrl"]))
+        basis = meta.get("delta_sigma0_basis")
+        sigma0_clim = meta.get("sigma0_clim", meta.get("sigma0_ctrl_mean"))
         prob_mode = cfg.get("prob_mode")
         if prob_mode:
             return DensitySpiceProbLoss(
@@ -831,6 +902,9 @@ def make_loss(
                 sigma0_mean=meta.get("sigma0_ctrl_mean"),
                 sigma0_std=meta.get("sigma0_ctrl_std"),
                 a_clim=a_clim,
+                delta_sigma0_basis=basis,
+                sigma0_clim=sigma0_clim,
+                n_ctrl=n_ctrl,
                 prob_mode=str(prob_mode),
                 nll_beta=float(cfg.get("nll_beta", 0.5)),
                 sigma_min=float(cfg.get("sigma_min", 1e-3)),
@@ -846,6 +920,9 @@ def make_loss(
             sigma0_mean=meta.get("sigma0_ctrl_mean"),
             sigma0_std=meta.get("sigma0_ctrl_std"),
             a_clim=a_clim,
+            delta_sigma0_basis=basis,
+            sigma0_clim=sigma0_clim,
+            n_ctrl=n_ctrl,
         )
 
     cached_profiles = None
