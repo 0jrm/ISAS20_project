@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "frozen_date": "2026-07-16",
+  "N2_TOL": 1e-08,
+  "thresholds": {
+    "ence_max": 0.2,
+    "rc1_note": "hard constraint \u21d2 0 by construction in Phase 3; report cost in RMSE/sharpness instead"
+  },
+  "git_sha": "820e598ff88442854614468096b3160a58b23950",
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-07-16",
+      "note": "Initial frozen evalphys package (PLAN-v2-recovery Phase 0)."
+    }
+  ]
+}

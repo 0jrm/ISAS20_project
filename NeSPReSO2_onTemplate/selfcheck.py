@@ -1660,6 +1660,60 @@ def test_steric_train_calibration():
     assert corr > 0.6, f"train steric-SLA calibration corr too low: {corr:.3f}"
 
 
+def test_evalphys_frozen_metrics():
+    """evalphys v1.0.0 synthetic checks (PLAN-v2-recovery Phase 0)."""
+    from evalphys.calibration import ence, gaussian_crps, spread_skill
+    from evalphys.constants import N2_TOL, SIGMA_MIN_DEFAULT
+    from evalphys.manifest import load_manifest
+    from evalphys.metrics import static_stability_violations
+
+    manifest = load_manifest()
+    assert manifest["version"] == "1.0.0"
+    assert manifest["N2_TOL"] == N2_TOL
+
+    depth = np.linspace(0, 400, 40)
+    lat = np.full(2, 26.0)
+    lon = np.full(2, -90.0)
+    T = np.broadcast_to(28.0 - 0.04 * depth, (2, depth.size))
+    S = np.broadcast_to(36.0 + 0.002 * depth, (2, depth.size))
+    stable = static_stability_violations(T, S, depth, lat, lon, n2_tol=N2_TOL)
+    assert stable["violation_rate_profile"] == 0.0
+
+    rng = np.random.default_rng(0)
+    n = 3000
+    mu = rng.normal(size=n)
+    sigma = rng.uniform(0.4, 1.2, size=n)
+    y = mu + rng.normal(scale=sigma)
+    assert ence(mu, sigma, y)["ence"] < 0.05
+    ss = spread_skill(mu, sigma, y)
+    assert 0.9 <= ss["slope_rmse_vs_sigma"] <= 1.1
+    crps = gaussian_crps(mu, np.full(n, SIGMA_MIN_DEFAULT), y)
+    mae = np.abs(mu - y)
+    assert np.mean(np.abs(crps - mae)) / np.mean(mae) < 0.01
+
+
+def test_stale_sat_gate_status():
+    """T2 gate wired into selfcheck — embargo if val/test stale > 5%."""
+    from diagnostics.stale_sat.split_vs_stale import STALE_GATE_FRAC, audit_splits
+    from pathlib import Path
+
+    h5 = Path(
+        "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/"
+        "data/NeSPReSO_v2_ARGO_GoM_sat/satellite_NeSPReSO_v2_ARGO_GoM.h5"
+    )
+    cache = Path(
+        "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/"
+        "data/cache/train_ready_4411c65ee518.pkl"
+    )
+    if not h5.is_file() or not cache.is_file():
+        return  # ponytail: skip on machines without dissertation data
+    out = audit_splits(h5, cache)
+    assert out["stale_gate_threshold"] == STALE_GATE_FRAC
+    assert isinstance(out["headline_metrics_embargoed"], bool)
+    if out["headline_metrics_embargoed"]:
+        print("selfcheck: T2 stale gate EMBARGOED — headline metrics blocked until Phase 2.1")
+
+
 def test_steric_matches_climatology_adt():
     import numpy as np
     from model.steric import compute_clim_steric
@@ -1715,6 +1769,8 @@ if __name__ == "__main__":
     test_steric_height_sanity()
     test_steric_loss_grad()
     test_steric_train_calibration()
+    test_evalphys_frozen_metrics()
+    test_stale_sat_gate_status()
     test_steric_matches_climatology_adt()
     test_field_unet_shapes()
     test_field_gather_matches_loop()

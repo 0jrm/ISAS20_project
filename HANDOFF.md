@@ -2,8 +2,10 @@
 
 **Branch:** `phase3-l3-rasterization` (merged `nespreso-v2-port` @ `38191d7`)  
 **Base:** legacy ISAS production on `nespreso-v2-port` — not replaced by dissertation work  
-**Updated:** 2026-06-18  
+**Updated:** 2026-07-16  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)
+
+**v2 recovery (2026-07-16):** [`PLAN-v2-recovery.md`](PLAN-v2-recovery.md) — Phase **0** (frozen `evalphys/`) and Phase **1** (T1/T2 decisive tests) **done**; see [`reports/phase1_decisive_tests.md`](reports/phase1_decisive_tests.md). T2 stale gate **OPEN**. T1: B/C did not meet 5× violation cut; **monotone σ₀ (D)** cuts level violations ~4× with lower RMSE — proceed Phase 3 on 3.2 monotone head. Tag `evalphys-v1.0.0` when committing.
 
 **Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).  
 **L3 download homework (user):** [`L3-DOWNLOAD-HOMEWORK.md`](L3-DOWNLOAD-HOMEWORK.md)

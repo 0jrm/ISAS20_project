@@ -1,0 +1,43 @@
+{
+  "cache": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_4411c65ee518.pkl",
+  "n_train": 2901,
+  "n_test": 623,
+  "variants": {
+    "A_separate_pca": {
+      "name": "A_separate_pca",
+      "violation_rate_profile": 0.7656500802568218,
+      "violation_rate_level": 0.009117174959871589,
+      "mean_rmse_ts": 0.08934739492197367,
+      "drhodz_rmse": 0.006743582791981619,
+      "mld_rmse": 36.60680076841946
+    },
+    "B_joint_eof": {
+      "name": "B_joint_eof",
+      "violation_rate_profile": 0.8860353130016051,
+      "violation_rate_level": 0.00919832352416622,
+      "mean_rmse_ts": 0.08863673590638543,
+      "drhodz_rmse": 0.006614819472776697,
+      "mld_rmse": 38.618047981243045
+    },
+    "C_density_spice_pca": {
+      "name": "C_density_spice_pca",
+      "violation_rate_profile": 0.7271268057784912,
+      "violation_rate_level": 0.00891920813269128,
+      "mean_rmse_ts": 0.0853628234521389,
+      "drhodz_rmse": 0.006787281026504634,
+      "mld_rmse": 39.435570876948425
+    },
+    "D_monotone_density": {
+      "name": "D_monotone_density",
+      "violation_rate_profile": 0.3868378812199037,
+      "violation_rate_level": 0.0022302479044052077,
+      "mean_rmse_ts": 0.06957052086690466,
+      "drhodz_rmse": 0.003206632774659736,
+      "mld_rmse": 1.34306401133899
+    }
+  },
+  "decision_rules": [
+    "ESCALATE: B_joint_eof \u2248 A \u2014 violations may not be basis-induced",
+    "ESCALATE: C_density_spice_pca \u2248 A \u2014 violations may not be basis-induced"
+  ]
+}
