@@ -1,0 +1,112 @@
+{
+  "splits": {
+    "val": {
+      "n": 621,
+      "clim_mse_sigma": 1.1386310249831892,
+      "densonly_mse_sigma": 0.4308768982369881,
+      "v10_mse_sigma": 1.1601669722345143,
+      "argo16_mse_sigma": 0.13376751352849595,
+      "var_true_delta_a": 106.46698760986328,
+      "var_std_anomaly": 0.7684100758097034,
+      "shrinkage_densonly": 0.00023358382013459746,
+      "shrinkage_v10": 0.00029066811156271436,
+      "mean_abs_delta_a_densonly": 0.15228648357174024,
+      "mean_abs_delta_a_v10": 0.22349542959503324,
+      "mean_abs_delta_a_true": 6.925913333892822
+    },
+    "test": {
+      "n": 623,
+      "clim_mse_sigma": 1.2589666066137515,
+      "densonly_mse_sigma": 0.9133098195347388,
+      "v10_mse_sigma": 1.7424437775036785,
+      "argo16_mse_sigma": 0.21013883546608825,
+      "var_true_delta_a": 93.1020736694336,
+      "var_std_anomaly": 1.1782664975387225,
+      "shrinkage_densonly": 0.00019308344852723584,
+      "shrinkage_v10": 0.0007211128014780496,
+      "mean_abs_delta_a_densonly": 0.09245607908200251,
+      "mean_abs_delta_a_v10": 0.2679630373227805,
+      "mean_abs_delta_a_true": 5.7171220779418945
+    }
+  },
+  "monthly_test": [
+    {
+      "yyyymm": 202105,
+      "n": 52,
+      "clim_mse": 0.5613291830843604,
+      "densonly_mse": 0.4338748647118979,
+      "argo16_mse": 0.19083081762286264
+    },
+    {
+      "yyyymm": 202106,
+      "n": 100,
+      "clim_mse": 1.06201655402569,
+      "densonly_mse": 0.8751184915653039,
+      "argo16_mse": 0.21579799852539902
+    },
+    {
+      "yyyymm": 202107,
+      "n": 85,
+      "clim_mse": 1.7735791325812658,
+      "densonly_mse": 1.3509166124961194,
+      "argo16_mse": 0.3974481977494698
+    },
+    {
+      "yyyymm": 202108,
+      "n": 68,
+      "clim_mse": 2.0620962408127483,
+      "densonly_mse": 1.3228778730150375,
+      "argo16_mse": 0.1984415824427631
+    },
+    {
+      "yyyymm": 202109,
+      "n": 77,
+      "clim_mse": 1.428121573285085,
+      "densonly_mse": 1.0915688099896634,
+      "argo16_mse": 0.21183142004721264
+    },
+    {
+      "yyyymm": 202110,
+      "n": 53,
+      "clim_mse": 1.072306593443982,
+      "densonly_mse": 0.8670824186279519,
+      "argo16_mse": 0.19469232877733367
+    },
+    {
+      "yyyymm": 202111,
+      "n": 51,
+      "clim_mse": 0.8895874789955821,
+      "densonly_mse": 0.670262118087555,
+      "argo16_mse": 0.11410631784356301
+    },
+    {
+      "yyyymm": 202112,
+      "n": 48,
+      "clim_mse": 1.1546324154614724,
+      "densonly_mse": 0.7810050401667624,
+      "argo16_mse": 0.128241240804665
+    },
+    {
+      "yyyymm": 202201,
+      "n": 49,
+      "clim_mse": 1.02348775974752,
+      "densonly_mse": 0.6010458550255524,
+      "argo16_mse": 0.12138912848623794
+    },
+    {
+      "yyyymm": 202202,
+      "n": 40,
+      "clim_mse": 1.0057206039675175,
+      "densonly_mse": 0.5751511154548239,
+      "argo16_mse": 0.18958964695815067
+    }
+  ],
+  "decision": {
+    "clim_test_over_val": 1.1056844394630287,
+    "argo16_test_over_val": 1.5709257795340812,
+    "densonly_test_over_val": 2.1196537184326045,
+    "argo16_beats_densonly_on_test": true,
+    "branch": "representation_plumbing",
+    "read": "argo16 density \u226a densonly on test and degrades less \u2192 signal is extractable; suspect clim-residual / softplus / month-clim / SSH\u2192density path. Keep v10 spice frozen. \u00a73.6 opt-2 still floor."
+  }
+}

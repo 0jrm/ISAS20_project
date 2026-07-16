@@ -8,6 +8,7 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-16 | **Density-shift diags (eval-only):** clim test/val 1.11; densonly 2.12; argo16 density mse_σ test 0.21 ≪ densonly 0.91. Branch = **representation_plumbing** (signal extractable). Shrinkage ≈0 (δa→clim). Keep v10 spice frozen; no merge to main. | Close schedule/interference hypotheses before retrain. |
 | 2026-07-16 | **densonly ablation (λ_τ=0):** pred σ₀+true τ = 0.547 ≈ v10 0.522 — multi-task interference **refuted**. Density chrono generalization remains the bottleneck. Next: sequential warm-start (freeze v10 spice) or EMA-normalized joint; §3.6 opt-2 still floor. | Close the interference hypothesis before more λ sweeps. |
 | 2026-07-16 | **§3.6 fallback option 2 pre-registered:** if in-head monotone skill gate still fails after branch decoupling, keep best-skill μ and enforce stability at inference via isotonic σ₀ projection + re-inversion (T1 variant-D op; RMSE cost already measured small). Preferred path remains in-head. | Floor under skill gate so Phase 5 is not a cliff. |
 | 2026-07-16 | **Phase 3/4 full runs:** density_spice + CRPS two-stage on full cache. Skill gate FAIL (T 0.72 vs argo16 0.42) with σ₀=0; CRPS Spearman 0.65 PASS / ENCE 0.33 MISS (informational). Diagnosis: spice-first λ + residual δa starved density gradients — structural decoupling next, not λ sweep. | Commit FAIL-state; recover mean before re-CRPS. |

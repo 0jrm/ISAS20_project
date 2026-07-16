@@ -7,62 +7,49 @@
 
 ---
 
-## Status: densonly ablation done — interference NOT the cause
+## Status: density-shift diags → representation plumbing (not schedule)
 
 | Phase | Status |
 |-------|--------|
 | 0–1 | Done |
-| 2 | Partial — T2 OPEN; v3 full HDF5 regen **in progress** (tmux `v3_hdf5_regen`) |
-| 3 | Soft gate **FAIL**; blame-split + densonly complete — see below |
+| 2 | Partial — T2 OPEN; v3 HDF5 regen **advancing** (batch 100–200 of 4145; not a restart) |
+| 3 | Soft gate FAIL; densonly + shift diags done — **branch = representation_plumbing** |
 | 4 | Informational — Spearman 0.65 PASS / ENCE 0.33 MISS |
 | 5–6 | Blocked until skill recovery (or §3.6 option-2) + R4 golden |
 
----
-
-## Results this session (keep)
-
-### Blame-split (v10)
-
-| Reconstruction | T RMSE |
-|----------------|--------|
-| pred both | 0.724 |
-| true σ₀ + pred τ | **0.393** (≤ gate 0.457) |
-| pred σ₀ + true τ | **0.522** |
-
-Density owns the joint gap; spice with true density already clears the skill floor.
-
-### Density-only (λ_τ=0) — [`reports/phase3_densonly_eval.md`](reports/phase3_densonly_eval.md)
-
-| Readout | densonly | v10 |
-|---------|----------|-----|
-| pred σ₀ + true τ (fair density) | **0.547** | **0.522** |
-| overall T | 1.675 (spice noise) | 0.724 |
-| σ₀ rate | 0.000 | 0.000 |
-
-**Discussion:** Turning off spice does not improve density skill. Multi-task interference / shared trunk is not the failure mode. Density still under-learns on chrono test (val mse_σ≈0.43, test≈0.91). Prefer sequential fine-tune of density with **v10 spice frozen**, or EMA-normalized joint — not another λ sweep. §3.6 option 2 (isotonic at inference) remains the pre-registered floor.
-
-Discarded negatives (in Phase 3 report): v8, v9 (spice stall), v10s2e (weight-amplify blow-up).
+**Do not merge to main until a phase gate passes.**
 
 ---
 
-## Best deterministic checkpoint (still)
+## Density-shift diagnostics (eval-only)
 
-`.../phase3_full_v10/model_best.pth` — overall T 0.724, σ₀=0, spice≈Ridge.
+Report: [`reports/phase3_density_shift_diag.md`](reports/phase3_density_shift_diag.md)
+
+| era | clim mse_σ | densonly | v10 | **argo16** |
+|-----|------------|----------|-----|------------|
+| val | 1.14 | 0.43 | 1.16 | **0.13** |
+| test | 1.26 | 0.91 | 1.74 | **0.21** |
+| test/val | **1.11** | **2.12** | 1.50 | **1.57** |
+
+**Read:**
+1. Clim hardness only +11% val→test — densonly’s 2.1× jump is **not** “the era got 2× harder vs clim.”
+2. **argo16 implied density (0.21 test) ≪ densonly (0.91)** and degrades less → signal is in the inputs and extractable. Monotone / clim-residual plumbing is the suspect, not a pure informational ceiling.
+3. Shrinkage `var(δa_pred)/var(δa_true) ≈ 0.0002` both eras; mean|δa|_pred ≈ 0.09–0.15 vs true ≈ 5.7–6.9 → Finding-2 under-correction confirmed (δa collapsed to clim).
+4. Monthly test errors (2021-05 → 2022-02): densonly tracks clim seasonality with a high floor; argo16 stays low — no flat-then-jump SSS fingerprint.
+
+**Keep v10 spice frozen** (blame-split true σ₀+pred τ = 0.393). §3.6 option 2 still the floor.
 
 ---
 
-## Next (ordered)
+## Next (no more λ / densonly retries)
 
-1. ~~Blame-split~~ DONE  
-2. ~~Density-only ablation~~ DONE — interference refuted  
-3. **Sequential:** freeze v10 spice head + trunk (or trunk+spice), train density δa only with λ_ρ=1 — without weight amplify  
-4. Or EMA-normalized dual-branch joint (procedure, not magic λ)  
-5. Re-CRPS + scalar σ calib after mean recovers  
-6. If still FAIL → §3.6 option 2 → Phase 5  
-7. After v3 HDF5: cache rebuild with `inputs_err` → Phase 4.5
+1. Input-ablation: does SSH/adt move the density branch?
+2. Month-resolved climatology so δa carries interannual only; check softplus / train-era std on test targets.
+3. Continue v3 HDF5 → error channels (still useful; not the primary density fix per argo16 control).
+4. If still stuck → best-skill + isotonic projection (§3.6 opt-2).
 
 ```bash
-# v3 regen status
 tmux attach -t v3_hdf5_regen
-tail -f data/NeSPReSO_v2_ARGO_GoM_sat/v3_err_regen.log
+srun --ntasks=1 --cpus-per-task=8 conda run -n nespreso \
+  python scripts/phase3_density_shift_diag.py
 ```
