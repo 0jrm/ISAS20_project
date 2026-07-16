@@ -1,0 +1,35 @@
+{
+  "h5_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/NeSPReSO_v2_ARGO_GoM_sat/satellite_NeSPReSO_v2_ARGO_GoM.h5",
+  "cache_path": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_4411c65ee518.pkl",
+  "stale_gate_threshold": 0.05,
+  "headline_metrics_embargoed": false,
+  "splits": [
+    {
+      "split": "train",
+      "n": 2901,
+      "date_min": "2015-03-31",
+      "date_max": "2020-12-17",
+      "stale_frac_SST": 0.0,
+      "stale_frac_SSH_adt": 0.0,
+      "stale_frac_SSS": 0.0
+    },
+    {
+      "split": "val",
+      "n": 621,
+      "date_min": "2020-12-17",
+      "date_max": "2021-05-16",
+      "stale_frac_SST": 0.0,
+      "stale_frac_SSH_adt": 0.0,
+      "stale_frac_SSS": 0.0
+    },
+    {
+      "split": "test",
+      "n": 623,
+      "date_min": "2021-05-16",
+      "date_max": "2022-02-27",
+      "stale_frac_SST": 0.0,
+      "stale_frac_SSH_adt": 0.0,
+      "stale_frac_SSS": 0.0
+    }
+  ]
+}

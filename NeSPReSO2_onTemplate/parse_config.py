@@ -84,6 +84,13 @@ def validate_config(config):
         mode = str(l4.get("mode", "mask_augment"))
         assert mode in VALID_L4_MODES, f"io.l4.mode must be one of {VALID_L4_MODES}, got {mode!r}"
         assert l3 and l3.get("enabled"), "io.l4.enabled requires io.l3.enabled"
+    if "gsw_backend" in io:
+        assert io["gsw_backend"] in ("gsw", "gsw_torch"), (
+            f"io.gsw_backend must be 'gsw' or 'gsw_torch', got {io['gsw_backend']!r}"
+        )
+        from evalphys.gsw_backend import set_config_backend
+
+        set_config_backend(io["gsw_backend"])
 
 
 class ConfigParser:
