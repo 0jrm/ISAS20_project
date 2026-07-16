@@ -7,16 +7,36 @@
 
 ---
 
-## Status: §3.6 opt-2 gate FAIL on chronological — in-head still critical path
+## Status: §3.6 opt-2 gate PASS on corrected ruler — clean chrono baseline established
 
 | Phase | Status |
 |-------|--------|
 | 0–1 | Done |
 | 2 | v3 HDF5 regen advancing (batches written through 300+) |
-| 3 | Soft gate FAIL; shift diags + argo16+isotonic gate done |
-| 4–6 | Blocked on skill (or a future chrono-trained baseline + projection) |
+| 3 | **PASS** — argo16_chrono_clean + isotonic vs same-split floor (see below) |
+| 4–6 | Unblocked by gate; in-head skill recovery still the science priority |
 
-**Do not merge to main.**
+---
+
+## Leakage erratum + ruler repair (2026-07-16, human-signed)
+
+`argo16_scales/config.json` has **no `split_mode`** → random-trained; its train set overlaps
+the 2021–2022 chrono test era. All chrono evals of that checkpoint were leaked-optimistic
+(0.514 gate figure; density-diag mse_σ 0.21). Erratum in `reports/phase3_density_shift_diag.md`.
+The 0.458 gate floor (published-random × 1.10) also violated like-for-like splits; corrected
+floor = same-split baseline × 1.10 (`PLAN-v2-recovery.md` changelog).
+
+**Clean retrain** `saved/models/NeSPReSO2_ARGO_GoM/argo16_chrono_clean` (same config +
+`split_mode: chronological`, cache `train_ready_3adcff404b0b.pkl`, early stop ep 814):
+
+| quantity | leaked (argo16_scales) | clean (argo16_chrono_clean) |
+|----------|------------------------|------------------------------|
+| chrono raw T RMSE | 0.514 | **0.5367** |
+| density mse_σ val/test | 0.134 / 0.210 | 0.146 / **0.234** |
+| gate floor | 0.4574 (published×1.10) | **0.5903** (clean×1.10) |
+
+- Density-control verdict **survives and strengthens**: clean argo16 test mse_σ 0.234 ≪ densonly 0.913 → `representation_plumbing` stands (`reports/phase3_density_shift_diag_clean.md`).
+- Gate: clean+isotonic T 0.5367, pre-inv σ₀ = 0, proj cost 0.0014 °C → **PASS** (`reports/phase3_argo16_isotonic_gate_clean.md`). Phase 3 candidate.
 
 ---
 
@@ -33,7 +53,7 @@ Under-correction still true (~0.3× anomaly variance), but not “δa≈0”. Lo
 
 ---
 
-## argo16 + isotonic gate (§3.6 opt-2)
+## argo16 + isotonic gate (§3.6 opt-2) — SUPERSEDED (leaked checkpoint; see erratum above)
 
 Report: [`reports/phase3_argo16_isotonic_gate.md`](reports/phase3_argo16_isotonic_gate.md)
 

@@ -1,0 +1,122 @@
+{
+  "splits": {
+    "val": {
+      "n": 621,
+      "clim_mse_sigma": 1.1386310249831892,
+      "densonly_mse_sigma": 0.4308768982369881,
+      "v10_mse_sigma": 1.1601669722345143,
+      "argo16_mse_sigma": 0.14632581725005228,
+      "var_true_delta_a": 106.46698760986328,
+      "var_std_anomaly": 0.7684100758097034,
+      "var_sigma0_anomaly": 0.39627662871528696,
+      "shrinkage_a_space_densonly": 0.00023358382013459746,
+      "shrinkage_a_space_v10": 0.00029066811156271436,
+      "shrinkage_sigma0_densonly": 0.3181874832584733,
+      "shrinkage_sigma0_v10": 0.13279451600065215,
+      "mean_abs_delta_a_densonly": 0.15228648357174024,
+      "mean_abs_delta_a_v10": 0.22349542959503324,
+      "mean_abs_delta_a_true": 6.925913333892822,
+      "rmse_sigma0_anom_densonly": 0.3646713643826697,
+      "rmse_sigma0_anom_clim": 0.804410384264668
+    },
+    "test": {
+      "n": 623,
+      "clim_mse_sigma": 1.2589666066137515,
+      "densonly_mse_sigma": 0.9133098195347388,
+      "v10_mse_sigma": 1.7424437775036785,
+      "argo16_mse_sigma": 0.2341580302794513,
+      "var_true_delta_a": 93.1020736694336,
+      "var_std_anomaly": 1.1782664975387225,
+      "var_sigma0_anomaly": 0.49583520942569226,
+      "shrinkage_a_space_densonly": 0.00019308344852723584,
+      "shrinkage_a_space_v10": 0.0007211128014780496,
+      "shrinkage_sigma0_densonly": 0.27508911912114875,
+      "shrinkage_sigma0_v10": 0.07225606759468782,
+      "mean_abs_delta_a_densonly": 0.09245607908200251,
+      "mean_abs_delta_a_v10": 0.2679630373227805,
+      "mean_abs_delta_a_true": 5.7171220779418945,
+      "rmse_sigma0_anom_densonly": 0.5382253047866653,
+      "rmse_sigma0_anom_clim": 0.7222968706408086
+    }
+  },
+  "monthly_test": [
+    {
+      "yyyymm": 202105,
+      "n": 52,
+      "clim_mse": 0.5613291830843604,
+      "densonly_mse": 0.4338748647118979,
+      "argo16_mse": 0.2054421951890553
+    },
+    {
+      "yyyymm": 202106,
+      "n": 100,
+      "clim_mse": 1.06201655402569,
+      "densonly_mse": 0.8751184915653039,
+      "argo16_mse": 0.2329730796288256
+    },
+    {
+      "yyyymm": 202107,
+      "n": 85,
+      "clim_mse": 1.7735791325812658,
+      "densonly_mse": 1.3509166124961194,
+      "argo16_mse": 0.4388398773431635
+    },
+    {
+      "yyyymm": 202108,
+      "n": 68,
+      "clim_mse": 2.0620962408127483,
+      "densonly_mse": 1.3228778730150375,
+      "argo16_mse": 0.2644319305934176
+    },
+    {
+      "yyyymm": 202109,
+      "n": 77,
+      "clim_mse": 1.428121573285085,
+      "densonly_mse": 1.0915688099896634,
+      "argo16_mse": 0.22570495663749773
+    },
+    {
+      "yyyymm": 202110,
+      "n": 53,
+      "clim_mse": 1.072306593443982,
+      "densonly_mse": 0.8670824186279519,
+      "argo16_mse": 0.19060493990425212
+    },
+    {
+      "yyyymm": 202111,
+      "n": 51,
+      "clim_mse": 0.8895874789955821,
+      "densonly_mse": 0.670262118087555,
+      "argo16_mse": 0.13594417393577748
+    },
+    {
+      "yyyymm": 202112,
+      "n": 48,
+      "clim_mse": 1.1546324154614724,
+      "densonly_mse": 0.7810050401667624,
+      "argo16_mse": 0.1546802843956068
+    },
+    {
+      "yyyymm": 202201,
+      "n": 49,
+      "clim_mse": 1.02348775974752,
+      "densonly_mse": 0.6010458550255524,
+      "argo16_mse": 0.14123308060581188
+    },
+    {
+      "yyyymm": 202202,
+      "n": 40,
+      "clim_mse": 1.0057206039675175,
+      "densonly_mse": 0.5751511154548239,
+      "argo16_mse": 0.19644547373630464
+    }
+  ],
+  "decision": {
+    "clim_test_over_val": 1.1056844394630287,
+    "argo16_test_over_val": 1.6002509651410655,
+    "densonly_test_over_val": 2.1196537184326045,
+    "argo16_beats_densonly_on_test": true,
+    "branch": "representation_plumbing",
+    "read": "argo16 density \u226a densonly on test and degrades less \u2192 signal is extractable; suspect clim-residual / softplus / month-clim / SSH\u2192density path. Keep v10 spice frozen. \u00a73.6 opt-2 still floor."
+  }
+}
