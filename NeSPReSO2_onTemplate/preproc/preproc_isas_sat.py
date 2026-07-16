@@ -32,6 +32,7 @@ ENGINEERED_PATCH_KEYS = (
 SAT_KEYS = ("sss", "sst", "ssh")
 SURFACE_RESIDUAL_SAT_KEY = {"temperature": "sst", "salinity": "sss"}
 NORMALIZATION_VERSION = "train_zscore_v1"
+ERROR_NORM_E0 = 1e-6  # Phase 2.2 log-offset for positive right-skewed error channels
 
 
 def sat_patch_center_index(spatial_pad: int, temporal_pad: int) -> int:
@@ -674,6 +675,65 @@ def apply_train_standardization(
         "train_indices": tr,
     }
     return standardized, meta
+
+
+def build_error_input_block(
+    err_raw: dict[str, np.ndarray],
+    juld: np.ndarray,
+    config: Mapping[str, Any],
+    *,
+    dataset_tag: str,
+    v2_src: str | None = None,
+    e0: float = ERROR_NORM_E0,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Log-zscore error channels + missing masks (Phase 2.2).
+
+    Returns ``(inputs_err, err_missing, meta)`` aligned on stations.
+    ``err_raw`` maps channel name → (N,) or (N, F) float arrays (NaN = missing).
+    """
+    from base.split_utils import build_split_indices
+
+    if not err_raw:
+        raise ValueError("err_raw must be non-empty")
+    names = list(err_raw.keys())
+    cols = []
+    miss_cols = []
+    for name in names:
+        arr = np.asarray(err_raw[name], dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr[:, None]
+        miss = ~np.isfinite(arr)
+        miss_cols.append(miss.astype(np.float32))
+        cols.append(arr)
+    raw = np.concatenate(cols, axis=1)
+    missing = np.concatenate(miss_cols, axis=1)
+
+    dl_cfg = dict((config.get("data_loader") or {}).get("args") or {})
+    n = raw.shape[0]
+    splits = build_split_indices(
+        n, juld, dl_cfg, dataset_tag=dataset_tag, v2_src=v2_src
+    )
+    tr = np.asarray(splits["train"], dtype=int)
+    fill = np.nanpercentile(raw[tr], 90, axis=0)
+    fill = np.where(np.isfinite(fill), fill, e0)
+    filled = np.where(np.isfinite(raw), raw, fill[None, :])
+    log_e = np.log(np.maximum(filled, 0.0) + e0)
+    mu = log_e[tr].mean(axis=0)
+    sd = np.maximum(log_e[tr].std(axis=0), 1e-6)
+    inputs_err = ((log_e - mu) / sd).astype(np.float32)
+    meta = {
+        "input_error_channels": names,
+        "mean_log": mu.astype(np.float32),
+        "std_log": sd.astype(np.float32),
+        "fill_p90": fill.astype(np.float32),
+        "e0": float(e0),
+        "normalization": "log_zscore_train",
+        "train_indices": tr,
+        "feature_widths": {
+            name: int(np.asarray(err_raw[name]).reshape(n, -1).shape[1]) for name in names
+        },
+    }
+    return inputs_err, missing.astype(np.float32), meta
 
 
 def residual_sat_patch_shape(

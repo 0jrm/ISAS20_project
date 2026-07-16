@@ -1,0 +1,21 @@
+{
+    "years": [2, 3, 4, 5, 6, 7, 15, 17, 18, 20],
+    "products": {
+        "bathymetry": ["elevation"],
+        "ostia": ["analysed_sst", "analysis_error"],
+        "sss": ["sos", "sos_error"],
+        "wind": ["windspeed", "u_wind", "v_wind"],
+        "ssh": ["adt", "sla", "ugos", "vgos", "err_sla"]
+    },
+    "spatial_pad": 20,
+    "temporal_pad": 6,
+    "error_channels": {
+        "ostia": "analysis_error",
+        "sss": "sos_error",
+        "ssh": "err_sla"
+    },
+    "_notes": {
+        "verified_2026-07-16": "SSH files have err_sla only (no err_ugosa/err_vgosa on disk). OSTIA has analysis_error. SSS has sos_error.",
+        "pads": "unchanged from v2 so patch geometry stays identical"
+    }
+}

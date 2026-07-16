@@ -57,12 +57,21 @@ def _expected_shape(spatial_pad: int, temporal_pad: int, is_static: bool) -> tup
     return (temporal_pad + 1, grid, grid)
 
 
-def _products_for_config(io_groups: dict | None) -> dict[str, list[str]]:
-    groups = io_groups or {
-        "sss": {"h5_group": "sss", "h5_var": "sos"},
-        "sst": {"h5_group": "ostia", "h5_var": "analysed_sst"},
-        "ssh": {"h5_group": "ssh", "h5_var": "adt"},
-    }
+def _products_for_config(
+    io_groups: dict | None,
+    error_groups: dict | None = None,
+) -> dict[str, list[str]]:
+    groups = dict(
+        io_groups
+        or {
+            "sss": {"h5_group": "sss", "h5_var": "sos"},
+            "sst": {"h5_group": "ostia", "h5_var": "analysed_sst"},
+            "ssh": {"h5_group": "ssh", "h5_var": "adt"},
+        }
+    )
+    # Phase 2.2: optional error vars under the same HDF5 product groups
+    if error_groups:
+        groups.update(error_groups)
     h5_to_product = {"sss": "sss", "ostia": "ostia", "ssh": "ssh", "bathymetry": "bathymetry"}
     products: dict[str, list[str]] = {"bathymetry": ["elevation"]}
     for spec in groups.values():
@@ -293,7 +302,7 @@ def generate_argo_satellite_h5(
 
     spatial_pad = int(io_cfg.get("spatial_pad", 2))
     temporal_pad = int(io_cfg.get("temporal_pad", 6))
-    products = _products_for_config(io_cfg.get("groups"))
+    products = _products_for_config(io_cfg.get("groups"), io_cfg.get("error_groups"))
 
     if force:
         pattern = os.path.join(batch_dir, f"{BATCH_PREFIX}b{batch_size:04d}_*.h5")

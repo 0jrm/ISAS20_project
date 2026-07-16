@@ -24,6 +24,7 @@ from preproc.export_v2_cache import _refit_pca_from_profiles
 from preproc.preproc_isas_sat import (
     apply_train_standardization,
     build_argo_l4_input_matrix,
+    build_error_input_block,
     build_residual_feature_names,
     compute_argo_l4_input_dim,
     config_hash,
@@ -94,6 +95,7 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
 
     sat_vars: dict[str, np.ndarray] = {}
     bottom_depth = None
+    err_raw: dict[str, np.ndarray] = {}
     with h5py.File(sat_path, "r") as sf:
         n_h5 = sf["stations"]["latitude"].shape[0]
         if n_h5 < n:
@@ -104,6 +106,12 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
                 continue
             d = sf[spec["h5_group"]][spec["h5_var"]][indices]
             sat_vars[key] = extract_sat_values(d, spatial_pad, temporal_pad)
+        error_groups = io_cfg.get("error_groups") or {}
+        for key, spec in error_groups.items():
+            g, v = spec["h5_group"], spec["h5_var"]
+            if g not in sf or v not in sf[g]:
+                raise KeyError(f"error_groups.{key}: missing {g}/{v} in {sat_path}")
+            err_raw[v] = extract_sat_values(sf[g][v][indices], spatial_pad, temporal_pad)
         if "bathymetry" in sf and "elevation" in sf["bathymetry"]:
             bathy = sf["bathymetry"]["elevation"][indices]
             bottom_depth = _bottom_depth_from_bathy(bathy, spatial_pad)
@@ -161,6 +169,17 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
         )
     else:
         input_standardization = None
+
+    error_block = None
+    if err_raw:
+        inputs_err, err_missing, err_meta = build_error_input_block(
+            err_raw,
+            juld,
+            config,
+            dataset_tag=io_cfg.get("dataset_tag", "argo_l4"),
+            v2_src=io_cfg.get("v2_src"),
+        )
+        error_block = (inputs_err, err_missing, err_meta)
 
     refit_pca = bool(io_cfg.get("refit_pca", True))
     use_anom = bool(io_cfg.get("anomaly_targets"))
@@ -261,6 +280,12 @@ def build_argo_l4_cache(config: Dict, force: bool = False, max_samples: int | No
     if input_standardization is not None:
         payload["input_standardization"] = input_standardization
         payload["feature_names"] = input_standardization.get("feature_names", [])
+    if error_block is not None:
+        inputs_err, err_missing, err_meta = error_block
+        payload["inputs_err"] = inputs_err
+        payload["err_missing"] = err_missing
+        payload["input_error_channels"] = err_meta["input_error_channels"]
+        payload["input_error_standardization"] = err_meta
     if anom is not None:
         payload.update(
             {
