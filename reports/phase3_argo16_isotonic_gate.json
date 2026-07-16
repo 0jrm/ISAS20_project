@@ -1,0 +1,35 @@
+{
+  "method": "argo16 \u2192 \u03c3\u2080,\u03c4 \u2192 isotonic@ctrl \u2192 PCHIP \u2192 re-invert (\u00a73.6 opt-2 / T1-D)",
+  "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM/argo16_scales/model_best.pth",
+  "cache": "../data/cache/train_ready_651f62a4b596.pkl",
+  "split_mode": "chronological",
+  "n": 623,
+  "note": "Published T=0.4158 (eval_argo16_test.json) used random split; ckpt config has no split_mode. Chronological test \u22480.514.",
+  "raw": {
+    "overall_T_rmse": 0.5142996762258155,
+    "sigma0_profile_rate": 0.4895666131621188
+  },
+  "projected": {
+    "overall_T_rmse": 0.5142881040404667,
+    "sigma0_pre_inv_profile_rate": 0.0,
+    "sigma0_post_inv_profile_rate_tol0": 0.30818619582664525,
+    "sigma0_post_inv_profile_rate_tol1e-6": 0.0,
+    "sigma0_post_inv_level_rate_tol0": 0.0015222043873729268,
+    "n2_profile_rate": 0.29213483146067415,
+    "vs_published_0_416": 1.2368641270814493,
+    "published_gate_floor": 0.45738000000000006,
+    "chrono_self_floor": 0.5657296438483971,
+    "pre_iso_neg_dsigma0_ctrl": 2897,
+    "post_iso_neg_dsigma0_ctrl": 0,
+    "pre_inv_projected_sigma0_profile_rate": 0.0,
+    "inversion_fail_frac": 0.0,
+    "proj_T_rmse_vs_raw": 0.0015344429575904288,
+    "proj_S_rmse_vs_raw": 0.0005375598820323318
+  },
+  "gate": {
+    "sigma0_pre_inv_near_zero": true,
+    "skill_vs_published_x1_10": false,
+    "skill_vs_self_x1_10": true,
+    "pass_as_coded": false
+  }
+}

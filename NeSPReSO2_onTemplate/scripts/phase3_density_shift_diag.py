@@ -245,8 +245,20 @@ def main() -> int:
         v10_mse = _mse(z_v, y)
 
         var_true = float(np.var(da_true[idx]))
-        shrink_d = float(np.var(da_p_d) / var_true) if var_true > 0 else float("nan")
-        shrink_v = float(np.var(da_p_v) / var_true) if var_true > 0 else float("nan")
+        shrink_d_a = float(np.var(da_p_d) / var_true) if var_true > 0 else float("nan")
+        shrink_v_a = float(np.var(da_p_v) / var_true) if var_true > 0 else float("nan")
+        # σ₀-space shrinkage (interpretable): softplus Jacobian makes a-space ratios meaningless
+        sig_clim = mean  # physical train clim on ctrl
+        sig_hat_d = z_d * std + mean
+        sig_hat_v = z_v * std + mean
+        sig_true_i = y * std + mean
+        var_anom = float(np.var(sig_true_i - sig_clim))
+        shrink_d = (
+            float(np.var(sig_hat_d - sig_clim) / var_anom) if var_anom > 0 else float("nan")
+        )
+        shrink_v = (
+            float(np.var(sig_hat_v - sig_clim) / var_anom) if var_anom > 0 else float("nan")
+        )
         var_anom_z = float(np.var(y))  # standardized anomaly variance
 
         print(f"argo16 σ₀ on {name}...", flush=True)
@@ -261,11 +273,16 @@ def main() -> int:
             "argo16_mse_sigma": a16_mse,
             "var_true_delta_a": var_true,
             "var_std_anomaly": var_anom_z,
-            "shrinkage_densonly": shrink_d,
-            "shrinkage_v10": shrink_v,
+            "var_sigma0_anomaly": var_anom,
+            "shrinkage_a_space_densonly": shrink_d_a,
+            "shrinkage_a_space_v10": shrink_v_a,
+            "shrinkage_sigma0_densonly": shrink_d,
+            "shrinkage_sigma0_v10": shrink_v,
             "mean_abs_delta_a_densonly": float(np.mean(np.abs(da_p_d))),
             "mean_abs_delta_a_v10": float(np.mean(np.abs(da_p_v))),
             "mean_abs_delta_a_true": float(np.mean(np.abs(da_true[idx]))),
+            "rmse_sigma0_anom_densonly": float(np.sqrt(np.mean((sig_hat_d - sig_true_i) ** 2))),
+            "rmse_sigma0_anom_clim": float(np.sqrt(np.mean((sig_clim - sig_true_i) ** 2))),
         }
 
     # 4) monthly test error (densonly + clim + argo16)
@@ -352,23 +369,28 @@ def main() -> int:
         "- **Verdict branch:** argo16 density extrapolates far better → signal is in the inputs; "
         "monotone / clim-residual plumbing is failing to use it (not a pure informational ceiling).",
         "",
-        "## 3. Shrinkage ratio  var(δa_pred) / var(a_true − a_clim)",
+        "## 3. Shrinkage  var(σ̂₀ − σ₀_clim) / var(σ₀_true − σ₀_clim)  [σ₀ space]",
         "",
-        "| era | densonly shrink | v10 shrink | var(δa_true) | mean|δa|_true | mean|δa|_densonly |",
-        "|-----|-----------------|------------|--------------|---------------|---------------------|",
+        "Prior a-space shrink≈0 contradicted densonly beating clim on val (0.43 vs 1.14) — ",
+        "softplus+cumsum Jacobian makes a-space variance ratios uninterpretable. Use σ₀ space.",
+        "",
+        "| era | densonly σ₀-shrink | v10 σ₀-shrink | a-space densonly (do not interpret) |",
+        "|-----|--------------------|---------------|--------------------------------------|",
     ]
     for name in ("val", "test"):
         s = out["splits"][name]
         lines.append(
-            f"| {name} | {s['shrinkage_densonly']:.4f} | {s['shrinkage_v10']:.4f} | "
-            f"{s['var_true_delta_a']:.4f} | {s['mean_abs_delta_a_true']:.4f} | "
-            f"{s['mean_abs_delta_a_densonly']:.4f} |"
+            f"| {name} | {s['shrinkage_sigma0_densonly']:.3f} | {s['shrinkage_sigma0_v10']:.3f} | "
+            f"{s['shrinkage_a_space_densonly']:.4f} |"
         )
     lines += [
         "",
-        "Shrink ≈ 0 both eras (δa collapsed toward clim). mean|δa|_pred ≪ mean|δa|_true "
-        "⇒ Finding-2 under-correction confirmed quantitatively — not flat-shrink + doubling "
-        "true-anomaly variance (a-space var actually falls slightly on test).",
+        f"Val densonly σ₀-anom RMSE {v['rmse_sigma0_anom_densonly']:.4f} vs clim "
+        f"{v['rmse_sigma0_anom_clim']:.4f} (must beat clim if shrink≪1 is false).",
+        "argo16 test/val density ratio **{:.2f}** is genuine era shift that hits everyone — "
+        "plumbing fixes should not be judged against a flat-ratio standard.".format(a16_ratio),
+        "",
+        "Note: `DensitySpiceLoss` already evaluates MSE **post** softplus+cumsum (σ₀ space).",
         "",
         "## 4. Test density error vs calendar month",
         "",

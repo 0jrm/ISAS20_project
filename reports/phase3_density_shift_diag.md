@@ -19,14 +19,20 @@ No retraining. Checkpoints: densonly v1, v10, argo16_scales. Same chronological 
 - Absolute: argo16 val=0.1338 / test=0.2101; densonly val=0.4309 / test=0.9133.
 - **Verdict branch:** argo16 density extrapolates far better → signal is in the inputs; monotone / clim-residual plumbing is failing to use it (not a pure informational ceiling).
 
-## 3. Shrinkage ratio  var(δa_pred) / var(a_true − a_clim)
+## 3. Shrinkage  var(σ̂₀ − σ₀_clim) / var(σ₀_true − σ₀_clim)  [σ₀ space]
 
-| era | densonly shrink | v10 shrink | var(δa_true) | mean|δa|_true | mean|δa|_densonly |
-|-----|-----------------|------------|--------------|---------------|---------------------|
-| val | 0.0002 | 0.0003 | 106.4670 | 6.9259 | 0.1523 |
-| test | 0.0002 | 0.0007 | 93.1021 | 5.7171 | 0.0925 |
+Prior a-space shrink≈0 contradicted densonly beating clim on val (0.43 vs 1.14) — 
+softplus+cumsum Jacobian makes a-space variance ratios uninterpretable. Use σ₀ space.
 
-Shrink ≈ 0 both eras (δa collapsed toward clim). mean|δa|_pred ≪ mean|δa|_true ⇒ Finding-2 under-correction confirmed quantitatively — not flat-shrink + doubling true-anomaly variance (a-space var actually falls slightly on test).
+| era | densonly σ₀-shrink | v10 σ₀-shrink | a-space densonly (do not interpret) |
+|-----|--------------------|---------------|--------------------------------------|
+| val | 0.318 | 0.133 | 0.0002 |
+| test | 0.275 | 0.072 | 0.0002 |
+
+Val densonly σ₀-anom RMSE 0.3647 vs clim 0.8044 (must beat clim if shrink≪1 is false).
+argo16 test/val density ratio **1.57** is genuine era shift that hits everyone — plumbing fixes should not be judged against a flat-ratio standard.
+
+Note: `DensitySpiceLoss` already evaluates MSE **post** softplus+cumsum (σ₀ space).
 
 ## 4. Test density error vs calendar month
 
@@ -43,7 +49,7 @@ Shrink ≈ 0 both eras (δa collapsed toward clim). mean|δa|_pred ≪ mean|δa|
 | 202201 | 49 | 1.0235 | 0.6010 | 0.1214 |
 | 202202 | 40 | 1.0057 | 0.5752 | 0.1896 |
 
-Monthly pattern is **seasonal** (JJA clim/densonly peak), not monotone growth with months since train end. argo16 stays low year-round — no flat-then-jump SSS fingerprint on this test window.
+Monotone growth with distance from train era ⇒ nonstationarity fingerprint; flat-then-jump ⇒ input-quality regime (cross-check SSS window).
 
 ## Decision (pre-registered)
 
