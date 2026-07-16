@@ -276,6 +276,11 @@ class FieldDataLoader(DataLoader):
         self.profiles = self.cache.get("profiles")
         self.input_params = self.cache.get("input_params", {})
         self.dataset_tag = self.cache.get("dataset_tag", "argo_field")
+        # train.py reads these off whatever loader it is handed; keep the attribute
+        # surface identical to NeSPReSODataLoader or the field path dies on AttributeError.
+        self.l3_enabled = bool(self.cache.get("l3_enabled", False))
+        self.l3_channel_metadata = self.cache.get("l3_channel_metadata")
+        self.sat_patch_shape = self.cache.get("sat_patch_shape")
         self.min_depth = self.cache.get("min_depth", 0)
         self.max_depth = self.cache.get("max_depth", 0)
         self.batch_size = batch_size
@@ -294,7 +299,7 @@ class FieldDataLoader(DataLoader):
         )
 
     def split_validation(self):
-        return DataLoader(
+        dl = DataLoader(
             self.val_subset,
             batch_size=self.batch_size,
             shuffle=False,
@@ -302,9 +307,15 @@ class FieldDataLoader(DataLoader):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
         )
+        # metric.profile_rmse reads these off the loader it is handed — mirror
+        # NeSPReSODataLoader.split_validation or the field metric dies on AttributeError.
+        dl.pca_models = self.pca_models
+        dl.outputs = self.outputs
+        dl.cache = self.cache
+        return dl
 
     def split_test(self):
-        return DataLoader(
+        dl = DataLoader(
             self.test_subset,
             batch_size=self.batch_size,
             shuffle=False,
@@ -312,6 +323,10 @@ class FieldDataLoader(DataLoader):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
         )
+        dl.pca_models = self.pca_models
+        dl.outputs = self.outputs
+        dl.cache = self.cache
+        return dl
 
 
 class MnistDataLoader(BaseDataLoader):

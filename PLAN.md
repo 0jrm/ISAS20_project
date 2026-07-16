@@ -706,7 +706,9 @@ Add a clean interface for static-stability loss without forcing all training to 
 ## **[measured 2026-07-15] Scope this to `point_cube` — it is the only model that needs it**
 
 RC-1 has now been run (`HANDOFF-2026-07-15-agentic-track0.md`). σ₀ violation rates, chronological
-test split, vs **nature's 24.70%**:
+test split, vs **nature's 1.12%** (⚠️ **corrected 2026-07-15** — the "24.70%" this section was
+written against is the **PCA-16 regression target**, not nature; raw ARGO violates at 1.12% on the
+test split / 3.88% over all 4145. See `HANDOFF-2026-07-15-agentic-close-out.md` Step 4):
 
 | model | σ₀ profile violation | verdict |
 |---|---:|---|
@@ -715,6 +717,8 @@ test split, vs **nature's 24.70%**:
 | `anom_point` | 7.38% | already slack |
 | `anom_patch_l4` | 8.99% | already slack |
 | **`point_cube`** | **38.52%** | **the only model less stable than nature** |
+| *RAW TRUTH (nature)* | *1.12%* | *reference* |
+| *PCA-16 truth (regression target)* | *21.83%* | *what a perfect model would score* |
 
 Four of five models are **over-smoothed, not unstable** — they reproduce PC1 at 0.97× true std but
 shrink high-order PCs to ~0.196×, and those high PCs carry the fine structure that *creates* real
@@ -722,17 +726,37 @@ inversions. **For those four, a physics loss would penalize an already-satisfied
 them further from nature's real roughness — do not enable it.** Turning `lambda` up on
 `golden_point` optimizes nothing and costs realism.
 
-**`point_cube` at 38.52% is the genuine target** — a 15× outlier against the other four and the one
-model that is *less* stable than the ocean. Its interface violation rate (0.0669%) is close to
-nature's (0.0586%), so the damage is **spread thinly across many profiles** rather than concentrated
-in a few bad ones — consistent with broadband noise in the cube features, not a handful of outlier
-profiles. **Diagnose the cause before reaching for a loss term:** a physics penalty on a model whose
-instability is an *input-noise* symptom treats the symptom. Compare against `residual_cube` (2.57%),
-which shares the cube feature path but anchors on the point block — that contrast is the cheapest
-available clue and should be the first thing checked.
+# 🚫 **[DIAGNOSED 2026-07-15 — DO NOT PROCEED. Phase 8 is CLOSED, not pending.]**
 
-The ablation ladder below (lambda 0.0 / 0.01 / 0.1 / 1.0) stays as written, but **run it on
-`point_cube` only**, and only after the diagnosis above.
+The diagnosis this section demanded has been done (`HANDOFF-2026-07-15-agentic-close-out.md`
+Step 4). **Three findings retire Phase 8 entirely:**
+
+1. **The "nature" benchmark was wrong.** "Nature's 24.70%" is the **PCA-16 regression target**, not
+   the ocean. Raw ARGO violates at **1.12%** (test) / 3.88% (n=4145); the PCA-16 target violates at
+   **21.83%**. **The basis truncation, not the model, is the dominant source of σ₀ inversions**
+   (6.4× inflation). A loss term on the model output cannot fix an unstable *target*.
+2. **Every violation, in every model, is marginal** — all fall in 0.010–0.02 kg/m³, none above.
+   `point_cube` drops to 2.09% at tol=0.02 and **0.00% at tol=0.03**. This is a near-threshold
+   artifact, not a physics failure.
+3. **`point_cube`'s excess is a feature-pipeline defect, not a physics-knowledge defect.** All 750
+   of its violations sit at **2.5–11.5 m** (10 of 1800 interfaces — *not* "spread thinly", as
+   assumed above). It reproduces the near-surface halocline **10× too weakly**
+   (dS(0→15 m) = +0.016 vs nature's +0.14), so its surface density goes *negative* at 3.5–5.5 m
+   where 37.9% of profiles violate. Contributing cause: the cube's **SSS** correlates only **0.744**
+   with the same quantity in the point cache (RMS diff 0.48 PSU, −13% variance), while SST transfers
+   at 0.9885. `residual_cube` escapes (2.57%) precisely because it anchors on the point block's
+   original SSS — the contrast this section asked for, and it lands.
+
+**The "broadband input noise" reading above is falsified** (violations are depth-concentrated, not
+spread), and so is the high-PC hypothesis: `point_cube`'s last-8 PC ratio is **0.220**, barely above
+`golden_point`'s 0.196, while `residual_cube` carries **more** (0.249) with 15× fewer violations.
+
+**A σ₀ penalty would force `point_cube` to fabricate a halocline it has no input to place** —
+buying stability by degrading T/S. That is precisely the "treats the symptom" failure this section
+warned against. **Fix the cube SSS feature instead**; also investigate `point_cube`'s
+**best_epoch=27** (vs `golden_point` 313) and its z-scored-vs-raw input mismatch.
+
+*(The ablation ladder below is retained for reference only. Do not run it.)*
 
 ## Requirements
 

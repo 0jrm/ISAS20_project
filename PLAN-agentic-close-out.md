@@ -1,7 +1,24 @@
 # PLAN — close Track 0.2, retire Track B, execute Track C + the two scoped defects
 
 **Created:** 2026-07-15
-**Status:** approved, not started
+**Status:** **ALL 6 STEPS DONE (2026-07-15).** Session record:
+[`HANDOFF-2026-07-15-agentic-close-out.md`](HANDOFF-2026-07-15-agentic-close-out.md).
+Two findings outrank the plan's own questions: **(a)** "nature's 24.70%" was the **PCA-16 target**,
+not nature (Step 4) — the basis, not the model, injects σ₀ inversions, and `PLAN.md` Phase 8 is
+**closed**; **(b)** eval-mode inference under-predicts **anomaly** PC1 by ~16–18% (Step 6), so the
+anomaly parity gap is **~62% smaller** than reported. One criterion is **not met** and is flagged,
+not glossed: Step 5's field product is structurally correct but **not physically plausible** (the
+climatology extrapolates outside the ARGO hull).
+- **Step 1 (closed-negative):** retune T RMSE **0.6803 → 0.6545** (−3.79%), only 18% of the parity
+  gap → loss scales were **not** the cause; corrected scales kept; gap handed to Step 6.
+- **Step 2:** done (stale markers cleared; the retirement argument was already committed).
+- **Step 3:** RC-4 live. Prediction **confirmed** — spread-error ratio **0.37 / 0.32** (over-confident).
+  Pooled spread↔error rank corr is **depth-confounded** (0.75 → **0.12** within depth) ⇒ **not
+  DA-usable**. Lead: `anom_point`'s eval-mode inference is **10% worse than its own dropout ensemble**.
+- **Step 4:** 🚨 **"nature's 24.70%" was mislabelled** — it is the **PCA-16 target**; nature is
+  **1.12%** (test) / 3.88% (all). The **basis**, not the model, injects σ₀ inversions (6.4×).
+  `point_cube`'s 38.52% = a **cube-SSS / missing-halocline** defect, all violations marginal and at
+  2.5–11.5 m. **`PLAN.md` Phase 8 is CLOSED — do not run it.**
 **Supersedes the open half of:** [`PLAN-agentic-ai-experiment.md`](PLAN-agentic-ai-experiment.md)
 (Tracks 0 and A there are **done**; Track B is **retired** — see Step 2)
 **Results feeding this plan:** [`HANDOFF-2026-07-15-agentic-track0.md`](HANDOFF-2026-07-15-agentic-track0.md),
@@ -18,8 +35,10 @@ evaluator) are done — see `HANDOFF-2026-07-15-agentic-track0.md` and
 `HANDOFF-2026-07-15-agentic-track-a.md`. They produced the plan's intended deliverables *and*
 falsified several of its premises:
 
-- σ₀ static stability is **slack** (models over-smoothed: 0.00% violations vs nature's 24.70%) —
+- σ₀ static stability is **slack** (models over-smoothed: 0.00% violations vs ~~nature's 24.70%~~) —
   except `point_cube` at **38.52%**, the only model less stable than the ocean.
+  **⚠️ CORRECTED 2026-07-15 (Step 4): "nature's 24.70%" is the PCA-16 *target*, not nature. Nature is
+  1.12% (test) / 3.88% (all). The conclusion survives; the magnitude was ~20× overstated.**
 - steric-vs-SLA is **saturated** (model r=0.8299 vs true-profile ceiling r=0.8297) — unusable as a
   search objective.
 - **Both** evaluators the plan counted on as existing assets were broken: `readiness.py` had never
@@ -37,7 +56,17 @@ prerequisites unblocked; then stop (OSSE design remains a separate, dissertation
 
 ---
 
-## Step 1 — Close Track 0.2: evaluate the finished retrain (do first; ~10 min)
+## Step 1 — Close Track 0.2: evaluate the finished retrain — **DONE (closed-negative)**
+
+> **Result (2026-07-15):** `T_rmse_native` **0.6545** / `S_rmse_native` **0.1013** / avg_common
+> **0.3797** (chrono test, n=623; `eval_run.py` cross-check passed). That is −3.79% on T vs the
+> 0.6803 baseline — the **first branch of the decision rule below** ("≈0.68 → loss scales were not
+> the cause"). Corrected scales kept; question closed-negative; parity gap handed to Step 6.
+> Free second read: σ₀ 7.38% → 5.14%, RC-2 r 0.8299 → 0.8313 (both decision-neutral).
+> Artifacts: `saved/readiness/retune_0715_anom_point_profile_metrics.json`,
+> `saved/readiness/readiness_retune_0715_anom_point.{json,md}`. Written up in
+> `HANDOFF-2026-07-15-agentic-track0.md` and memory `anom-phase-a-results`.
+> *Original step text preserved below.*
 
 The retrain **completed**: early stop at epoch 3382 (`retune_0715_anom_point`, tmux `anom_retune`,
 EXIT=0). Seed 42 + chronological split were pinned, so `loss_scales` is the only difference from
@@ -75,7 +104,16 @@ Write results to `saved/readiness/` and update `HANDOFF-2026-07-15-agentic-track
 
 ---
 
-## Step 2 — Retire Track B in the docs (~20 min, no code)
+## Step 2 — Retire Track B in the docs — **DONE**
+
+> **Done (2026-07-15).** `PLAN-agentic-ai-experiment.md` now carries "Track B — **RETIRED, not run**"
+> with all four arguments below and their measured numbers, the original design preserved under
+> "Original design, preserved below for revival", and the hardened evaluator + goldens named as the
+> durable deliverable. This session additionally cleared the stale status markers that survived the
+> retirement commit (header said "Track A is next", Track 0.4 said "IN FLIGHT") and folded Step 1's
+> result into the `loss_scales` non-goal: the *entire* T:S knob is worth −3.79% on T RMSE, so even a
+> perfect search over it wins ~4% — retiring it as a search target on measured grounds.
+> *Original step text preserved below.*
 
 Skipping is a **result**, not an omission, and the plan explicitly wanted the failure modes. Record
 in `PLAN-agentic-ai-experiment.md` why the experiment was not run, with the measured numbers:
@@ -136,7 +174,29 @@ ensemble_mean ≈ the deterministic prediction (sanity), and that RC-1/RC-2 are 
 
 ---
 
-## Step 4 — Diagnose `point_cube`'s 38.52% σ₀ (gates `PLAN.md` Phase 8)
+## Step 4 — Diagnose `point_cube`'s 38.52% σ₀ — **DONE. Verdict: Phase 8 must NOT proceed.**
+
+> **Result (2026-07-15)** — full writeup in `HANDOFF-2026-07-15-agentic-close-out.md` Step 4.
+> - 🚨 **The reference was wrong:** "nature's 24.70%" is the **PCA-16 regression target**. Nature =
+>   **1.12%** (test) / 3.88% (n=4145); the target = 21.83% / 24.73%. **The basis truncation, not the
+>   model, is the dominant source of σ₀ inversions.** Track 0's "not a PCA artifact" control was
+>   vacuous — it compared the PCA-16 number to itself.
+> - **Probe 1 (PC-shrinkage) FALSIFIED the hypothesis below:** `point_cube` last-8 = **0.220** vs
+>   `golden_point` 0.196, while `residual_cube` carries **more** (0.249) with 15× fewer violations
+>   and `anom_point` the **most** (0.341) with 7.4%. Ordering uncorrelated with σ₀.
+> - **Actual cause:** 100% of the 750 violations are at **2.5–11.5 m** (not "spread thinly"), all
+>   **marginal** (0.010–0.02 kg/m³; 0.00% at tol=0.03). `point_cube` reproduces the near-surface
+>   halocline **10× too weakly** (dS(0→15 m) **+0.016** vs nature's **+0.14**) → density decreases
+>   with depth at 3.5–5.5 m, where 37.9% of profiles violate.
+> - **Probe 2 (standardization contrast) landed:** the cube's **SSS correlates only 0.744** with the
+>   point cache's (RMS diff 0.48 PSU, −13% variance) while **SST transfers at 0.9885**.
+>   `residual_cube` escapes precisely because it anchors on the point block's original SSS.
+> - **Honest limit:** the SSS degradation is *contributing*, not proven-sole (halocline info
+>   −0.616 → −0.549 is modest against a 10× collapse). Second suspect, not chased:
+>   **`point_cube` best_epoch = 27** (vs golden 313), plus z-scored-vs-raw input mismatch.
+> - **Exit:** a σ₀ penalty would force a fabricated halocline. **Fix the cube SSS feature instead.**
+>
+> *Original step text preserved below.*
 
 The only model less stable than nature (24.70%), a 15× outlier against the other four
 (0.00–8.99%). **`PLAN.md` Phase 8 is already scoped to `point_cube` only and gated behind this
@@ -166,7 +226,35 @@ proceed at all.
 
 ---
 
-## Step 5 — Fix `scripts/export_field_product.py` (the DA-relevant output)
+## Step 5 — Fix `scripts/export_field_product.py` — **runs end-to-end; output NOT yet shippable**
+
+> **Result (2026-07-15)** — full writeup in `HANDOFF-2026-07-15-agentic-close-out.md` Step 5.
+> **Five** bugs, not two — and "expect more bugs downstream" was right in an unexpected place: the
+> field **training** path had never run either.
+> 1. `:33` `pickle.load(cache)` → `pickle.load(f)`
+> 2. `:83` `float(ord(ds))` → new `base/split_utils.py::dates_to_juld` (exact inverse of
+>    `sample_dates`, round-trip tested). **Must use `clim.meta["dataset_tag"]`**, not the field
+>    cache's `argo_field` — `eval_climatology` decodes with the climatology's tag, and a mismatch
+>    silently shifts the seasonal cycle. (`ord(ds)` returned a *constant* 50.0 for every 2000s date.)
+> 3. `:94` `temp_arr[..., land]` applied a `(lat,lon)` mask to the **depth** axis → `IndexError`.
+> 4. `FieldDataLoader` never set `l3_enabled`/`sat_patch_shape` → `train.py:294` `AttributeError`.
+> 5. `FieldDataLoader.split_validation/split_test` returned a bare `DataLoader` lacking
+>    `pca_models` → `metric.profile_rmse` `AttributeError`.
+>
+> **Structure verified:** xarray dims **`time/lat/lon/depth`** (8, 52, 68, 1801), land NaN-masked,
+> mean T 23.48 → 4.01 °C with depth, `time` now `datetime64[D]`.
+>
+> **🚨 "Values physically plausible" is NOT met — and cannot be fixed in this script.** Salinity
+> spans **22.13–45.02 PSU** (23% of finite points outside 30–38). **The climatology alone — no model
+> involved — reaches 43.80 PSU at *ocean* points**, worst at **lat 31.0, lon −81.0**: the grid's NE
+> corner, off the **Atlantic** coast of Georgia, *outside the Gulf*. It is a ridge fit on the ARGO
+> hull (**lat 19.44–28.70, lon −95.33..−84.74**) but the export grid is **lat 18–31, lon −98..−81**;
+> outside the hull it extrapolates. **17% of ocean points exceed 37 PSU.** Added
+> `report_plausibility` as a tripwire (Track A instinct: ranges, not existence).
+> **Follow-ups:** (a) clip the grid to the ARGO hull or refit/regularize the climatology;
+> (b) re-verify with a *trained* field model, not the 2-epoch smoke.
+>
+> *Original step text preserved below.*
 
 Two confirmed bugs prove it has **never run**:
 
@@ -185,7 +273,30 @@ just that the file exists).
 
 ---
 
-## Step 6 — Chase the anomaly parity gap (open-ended; informed by Step 1)
+## Step 6 — Chase the anomaly parity gap — **DONE, LOCALIZED (no timebox needed)**
+
+> **Result (2026-07-15)** — full writeup in `HANDOFF-2026-07-15-agentic-close-out.md` Step 6.
+> Two probes localized it, exactly as the plan hoped.
+> - **Probe 1 (PC shrinkage) — this is the gap.** `anom_point` shrinks the **dominant** mode:
+>   **PC1 = 0.776×** true std vs `golden_point`'s **0.973×**. The plan's guess was right in spirit
+>   ("the anomaly PCA spectrum is flatter → a model that regresses to the mean loses proportionally
+>   more"), but it is **PC1**, not the high-order PCs — `anom_point` carries *more* high-PC amplitude
+>   than `golden_point` (0.341 vs 0.196).
+> - **Probe 2 — the discovery: eval-mode inference under-predicts anomaly PC1 by ~16–18%.**
+>   MC-dropout averaging recovers it, **only for anomaly models**: `anom_patch_l4` +16.9%,
+>   `anom_point` +18.3%, `retune_anom` +15.7% — vs `point_cube` +0.1%, `residual_cube` −0.0%,
+>   `golden_point` +0.2%. **Confound resolved:** it tracks anomaly-ness, **not** training length
+>   (`anom_patch_l4` at 1048 epochs already shows +16.9%, and the effect is flat across 1048→3382).
+> - **The parity gap is ~62% smaller than reported.** Like-for-like (both MC-averaged):
+>   `retune_anom` **0.5900** vs `golden_point` **0.5360** → gap **0.1436 → 0.0540**. Step 1
+>   (corrected scales) gave 18%; Step 6 (inference) gives the rest. **The gap is substantially an
+>   artifact of how inference is done, not of the anomaly reframing.**
+> - **Probe 3 (T:S ratio) not needed** — Step 1 showed the whole knob is worth ~4%.
+> - **Recommendation:** evaluate anomaly models with MC averaging, or (cheaper) **lower
+>   `dropout_prob` for anomaly configs and retrain** — p=0.2 in the head is what makes the
+>   weight-scaling approximation fail on a low-SNR target.
+>
+> *Original step text preserved below.*
 
 Only if Step 1 confirms loss scales were not the cause. `anom_point` (0.6803) trails `golden_point`
 (0.5367) by ~27% on T RMSE despite the anomaly reframing being theoretically favourable.

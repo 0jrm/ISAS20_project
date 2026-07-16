@@ -270,14 +270,70 @@ def split_indices(
 # ---------------------------------------------------------------------------
 
 
+def enable_mc_dropout(model: torch.nn.Module) -> list[float]:
+    """Re-enable **only** ``nn.Dropout`` after ``eval()``; returns the active p values.
+
+    Raises if the model has no dropout or all p==0 — an MC pass there returns identical
+    members and a zero spread, which reads as "perfectly confident" instead of failing.
+    """
+    probs = []
+    for m in model.modules():
+        if isinstance(m, torch.nn.Dropout):
+            m.train()
+            probs.append(float(m.p))
+    if not probs:
+        raise ValueError("MC dropout requested but the model has no nn.Dropout modules")
+    if not any(p > 0.0 for p in probs):
+        raise ValueError(f"MC dropout requested but every nn.Dropout has p=0 (found {probs})")
+    return probs
+
+
+def _mc_dropout_pcs(
+    model: torch.nn.Module,
+    data_loader,
+    device: torch.device,
+    mc_samples: int,
+    *,
+    seed: int,
+) -> np.ndarray:
+    """N stochastic forward passes with dropout live. Returns (mc_samples, n_samples, n_pc)."""
+    probs = enable_mc_dropout(model)
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
+    members = []
+    try:
+        with torch.no_grad():
+            for _ in range(mc_samples):
+                pcs_list = []
+                for data, _target, _indices in data_loader:
+                    pcs_list.append(model(data.to(device)).cpu().numpy())
+                members.append(np.vstack(pcs_list))
+    finally:
+        model.eval()  # leave the model as we found it even if a pass raises
+    out = np.stack(members, axis=0)
+    out_flags = np.abs(out - out[0]) < 1e-12
+    if bool(out_flags.all()):
+        raise ValueError(
+            f"MC dropout produced {mc_samples} identical members (dropout p={probs}); "
+            "spread would be identically zero"
+        )
+    return out
+
+
 def run_inference(
     config: ConfigParser,
     checkpoint_path: str,
     *,
     split: str = "test",
     device: torch.device | None = None,
+    mc_samples: int = 0,
 ) -> dict[str, Any]:
-    """Forward pass on a split; returns PCs, indices, cache, pca_models, outputs."""
+    """Forward pass on a split; returns PCs, indices, cache, pca_models, outputs.
+
+    ``mc_samples > 0`` additionally returns ``mc_pcs`` (mc_samples, n_samples, n_pc) from
+    stochastic passes with dropout re-enabled. The deterministic ``pcs`` are unaffected.
+    """
     set_seed(config.config.get("seed", SPLIT_SEED_DEFAULT))
     ensure_cache(config)
 
@@ -312,7 +368,7 @@ def run_inference(
             pcs_list.append(out.cpu().numpy())
             idx_list.append(indices.cpu().numpy())
 
-    return {
+    result = {
         "pcs": np.vstack(pcs_list),
         "indices": np.concatenate(idx_list),
         "cache": data_loader.cache,
@@ -322,6 +378,16 @@ def run_inference(
         "dataset_tag": data_loader.dataset_tag,
         "n_samples": len(data_loader.dataset),
     }
+    if mc_samples > 0:
+        # shuffle=False, so member rows align with `indices` from the deterministic pass
+        result["mc_pcs"] = _mc_dropout_pcs(
+            model,
+            data_loader,
+            device,
+            mc_samples,
+            seed=int(config.config.get("seed", SPLIT_SEED_DEFAULT)),
+        )
+    return result
 
 
 def _profile_metrics_from_pred(

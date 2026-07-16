@@ -1,10 +1,13 @@
 # PLAN — Agentic AI on NeSPReSO: measure, then a controlled closed-loop experiment
 
 **Created:** 2026-07-15
-**Status:** **Track 0 complete (2026-07-15) — results in
-[`HANDOFF-2026-07-15-agentic-track0.md`](HANDOFF-2026-07-15-agentic-track0.md). Track A is next;
-Track B stays gated behind it.** Track 0 invalidated two of this plan's own assumptions; the
-affected sections below are revised and marked **[revised 2026-07-15]**.
+**Status:** **Tracks 0 and A complete; Track B RETIRED (not run); Track C moved to
+[`PLAN-agentic-close-out.md`](PLAN-agentic-close-out.md), which supersedes the open half of this
+plan.** Results: [`HANDOFF-2026-07-15-agentic-track0.md`](HANDOFF-2026-07-15-agentic-track0.md),
+[`HANDOFF-2026-07-15-agentic-track-a.md`](HANDOFF-2026-07-15-agentic-track-a.md). Track 0.2 closed
+**negative** (retrain: T 0.6803 → 0.6545, only 18% of the parity gap — loss scales were not the
+cause). Tracks 0 and A invalidated several of this plan's own assumptions; the affected sections
+below are revised and marked **[revised 2026-07-15]**.
 **Source brief:** [`agentic-science.html`](agentic-science.html) (deep research, July 2026)
 **Related:** [`PLAN_datacube_speed.md`](PLAN_datacube_speed.md) (Phase 5 is this plan's target),
 [`PLAN.md`](PLAN.md) Phases 8–9 (uncertainty/ensemble scaffolding)
@@ -122,30 +125,43 @@ measuring first:
    *Note:* `--update-config` reflows the whole JSON into expanded form; edit the numbers in place
    to keep the repo's compact style, or a 3-number change drowns in reformatting churn.
 
-**Exit: met.** σ₀ and steric-vs-SLA are written down; the loss-scale question is **escalated with
-evidence** and the deciding retrain is now **in flight** (Track 0.4).
+**Exit: met.** σ₀ and steric-vs-SLA are written down; the loss-scale question was escalated with
+evidence to a deciding retrain (Track 0.4), which has since run and **closed it negative**.
 
-### Track 0.4 — `anom_point` retrain, IN FLIGHT (launched 2026-07-15 15:10, tmux `anom_retune`)
+### Track 0.4 — `anom_point` retrain — **DONE, closed-negative (2026-07-15 16:04)**
 
-Runs **in parallel with Track A** — it is GPU-bound on an idle A100 (GPU 2) while Track A is
-numpy/Zarr CPU work, so there is no contention. This is the only thing that closes Track 0.2.
+The retrain finished (early stop **epoch 3382**, EXIT=0). Seed 42 + chronological split pinned, so
+`loss_scales` (T 2.0029/S 0.0313 → **1.3998/0.0240**) was the *only* difference from
+`scratch_0705_204716_anom_point`.
 
-- **Launch:** `scripts/run_anom_loss_scale_retune.sh` → `tmux attach -t anom_retune`
+**The pre-registered prediction held — no parity** (chronological test, n=623, native RMSE):
+
+| model | T | S |
+|---|---:|---:|
+| `golden_point` (target) | 0.5367 | 0.0897 |
+| `anom_point` (stale scales) | 0.6803 | 0.1043 |
+| **retune (corrected scales)** | **0.6545** | **0.1013** |
+
+T improved **−3.79%**, closing only **18%** of the gap to `golden_point` — a small improvement that
+leaves the anomaly reframing unexplained, exactly the "most likely outcome" written below before the
+run. A 9.7% T:S rebalance bought ~4% on T. **Verdict: stop blaming `loss_scales`.** Keep the
+corrected values (analytically right, free); hand the parity gap to
+[`PLAN-agentic-close-out.md`](PLAN-agentic-close-out.md) Step 6.
+
+**⚠️ `val_loss` is not comparable across the two runs** — correcting `profile_scales` changed the
+loss normalization itself (0.733× global factor), so baseline `mnt_best` 0.16285 vs retune 0.22589
+is apples-to-oranges. Only `raw_profile_rmse_native` (above) is scale-independent. *Caveat:* n=1 per
+arm — ~4% is not separable from trajectory noise without several seeds, but no decision turns on 4%.
+
+**Free second read (RC-1/RC-2 on the retune checkpoint):** σ₀ profile violations 7.38% → **5.14%**
+(slightly *more* over-smoothed, still far under nature's 24.70%); RC-2 r 0.8299 → 0.8313 (noise
+against an already-saturated 0.8297 ceiling). Neither changes a decision.
+
 - **Log:** `saved/readiness/retune_retune_0715_anom_point.log`
 - **Checkpoint:** `saved/models/NeSPReSO2_ARGO_GoM_anom/retune_0715_anom_point/`
   (the original `scratch_0705_204716_anom_point` is untouched)
-- **Controlled:** seed 42 + chronological split are pinned in the config, so `loss_scales`
-  (T 2.0029/S 0.0313 → **1.3998/0.0240**) is the *only* difference from the baseline run.
-- **Baselines** (chronological test, n=623, T/S RMSE): ANOM-point **0.680/0.104** → beat this;
-  point raw 0.537/0.090; golden 0.514/0.083. Prior run: best epoch 3067, ~40 min, early_stop 500.
-- **On completion:** `eval` for RMSE **and** re-run `diagnostics/readiness.py` on the new checkpoint
-  — RC-1/RC-2 are now cheap and the σ₀ rate is a free second read on whether a 9.7% T:S rebalance
-  changes the smoothing behaviour at all.
-- **Pre-registered prediction (falsifiable):** this **will not reach parity**. The stale scales were
-  a 0.733× global rescale (Adam absorbs it) + a 9.7% salinity over-weighting. If T RMSE moves from
-  0.680 to ≈0.537 on a 10% rebalance, that is *surprising* and means the gap was never about scales.
-  Most likely outcome: a small improvement that leaves the anomaly reframing still unexplained —
-  in which case **stop blaming loss_scales and look elsewhere.**
+- **Artifacts:** `saved/readiness/retune_0715_anom_point_profile_metrics.json`,
+  `saved/readiness/readiness_retune_0715_anom_point.{json,md}`
 
 ### Track 0.5 — `point_cube` σ₀ violation rate, **SCOPED** (was: unscoped finding)
 
@@ -355,7 +371,10 @@ publishable-adjacent and answer the actual question.
   2026-07-15**: the scales were simply stale (raw-cache values on the anomaly cache) and one
   `derive_loss_scales.py` run fixed them. A search would have burned budget rediscovering a
   closed-form answer. The only real knob is the T:S *ratio* (**measured: 63.99 stale → 58.32
-  correct**) — a scientific choice wearing a normalization constant's clothes.
+  correct**) — a scientific choice wearing a normalization constant's clothes. **The retrain
+  (Track 0.4) now quantifies the whole knob's reach: the full 63.99 → 58.32 move bought −3.79% on T
+  RMSE.** So even a *perfect* search over this parameter wins ~4% — which retires it as a search
+  target on measured grounds, not just analytic ones.
 - **No search against val-split RMSE.** The multiple-comparisons trap. One split-confusion
   incident is already on record (`0.416` random-split headlined against chronological `0.514`).
 - **No science loop against steric-vs-observed-SLA either. [revised 2026-07-15]**

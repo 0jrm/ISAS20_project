@@ -1158,6 +1158,166 @@ def test_readiness_report_requires_lat_lon():
         assert "latitude" in str(exc)
 
 
+def test_dates_to_juld_round_trip():
+    """dates_to_juld must invert sample_dates exactly — it feeds the climatology's DOY.
+
+    A wrong convention here does not crash: it silently shifts the seasonal cycle. The old
+    export_field_product.py used `float(ord(ds))` = 50.0 for every date in the 2000s.
+    """
+    from base.split_utils import dates_to_juld, sample_dates
+
+    for tag in ("argo_v2", "isas20"):
+        for iso in ("2000-01-01", "2004-02-29", "2019-12-31", "2020-01-01", "2021-07-04"):
+            juld = dates_to_juld([iso], dataset_tag=tag)
+            back = sample_dates(juld, dataset_tag=tag)
+            assert str(back[0]) == iso, f"{tag} {iso} -> juld {juld} -> {back[0]}"
+
+    # Round-trips real cache JULDs (whole-day truncation is expected and intended).
+    rng = np.random.default_rng(0)
+    for tag in ("argo_v2", "isas20"):
+        base = 738000.0 if tag == "argo_v2" else 25000.0
+        juld = base + rng.integers(0, 4000, size=200).astype(np.float64)
+        assert np.array_equal(dates_to_juld(sample_dates(juld, dataset_tag=tag), dataset_tag=tag), juld)
+
+    # ARGO is MATLAB datenum; the two tags must NOT agree (a swapped tag is a real bug).
+    assert dates_to_juld(["2020-01-01"], dataset_tag="argo_v2")[0] == 737791.0
+    assert dates_to_juld(["2020-01-01"], dataset_tag="isas20")[0] == 25567.0
+
+
+def test_ensemble_crps_matches_pairwise_definition():
+    """Sorted-ensemble CRPS == the naive O(N²) double sum, and == MAE at zero spread."""
+    from diagnostics.readiness import ensemble_crps
+
+    rng = np.random.default_rng(0)
+    n, shape = 9, (4, 3)
+    members = rng.normal(size=(n, *shape))
+    target = rng.normal(size=shape)
+
+    fast = ensemble_crps(members, target)
+    naive = np.empty(shape)
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            x, y = members[:, i, j], target[i, j]
+            t1 = np.mean(np.abs(x - y))
+            t2 = np.abs(x[:, None] - x[None, :]).sum() / (2 * n * n)
+            naive[i, j] = t1 - t2
+    assert np.allclose(fast, naive, atol=1e-12)
+
+    # A zero-spread ensemble is a point forecast: CRPS degenerates to |x - y|.
+    const = np.repeat(target[None, ...], n, axis=0)
+    assert np.allclose(ensemble_crps(const, target + 0.5), 0.5, atol=1e-12)
+
+
+def test_uncertainty_calibration_detects_calibrated_ensemble():
+    """Positive control: a *known* calibrated ensemble must score ratio ≈ 1.
+
+    Without this, a real ratio of ≈1 is unreadable — it could equally mean the models are
+    calibrated or that the metric is broken. This pins the metric so the model result is
+    interpretable (PLAN-agentic-close-out.md Step 3).
+    """
+    from diagnostics.readiness import uncertainty_calibration_hook
+
+    rng = np.random.default_rng(1)
+    n_members, n_depth, n_samples = 60, 12, 400
+    # Heteroscedastic on purpose: true sigma spans 0.2..2.0 across points. ENCE bins BY
+    # predicted spread, so it only has signal when the spread genuinely varies. On
+    # homoscedastic data the bins sort on sampling noise in the sample std (relative error
+    # ~1/sqrt(2(N-1)) ≈ 9% at N=60) and ENCE reports that floor (~0.08 here) no matter how
+    # well calibrated the ensemble is. Read a real ENCE against that floor, not against 0.
+    sigma = rng.uniform(0.2, 2.0, size=(n_depth, n_samples))
+    mu_true = rng.normal(size=(n_depth, n_samples))
+    # truth and members are draws from the SAME per-point distribution => perfectly reliable
+    target = mu_true + rng.normal(size=(n_depth, n_samples)) * sigma
+    members = mu_true[None, ...] + rng.normal(size=(n_members, n_depth, n_samples)) * sigma[None, ...]
+
+    out = uncertainty_calibration_hook(
+        ensemble_mean=members.mean(axis=0),
+        ensemble_spread=members.std(axis=0, ddof=1),
+        target=target,
+        depth=np.arange(n_depth, dtype=float),
+        members=members,
+        n_members=n_members,
+    )
+    assert out["status"] == "ok"
+    # Finite-N: a reliable N-member ensemble scores sqrt(N/(N+1)), not exactly 1.
+    assert abs(out["spread_error_ratio"] - np.sqrt(n_members / (n_members + 1))) < 0.02
+    assert abs(out["spread_error_ratio_corrected"] - 1.0) < 0.02
+    assert out["ence"] < 0.05, out["ence"]
+    # A calibrated heteroscedastic ensemble must also RANK its errors: wider spread where
+    # the error is bigger. Ratio ≈ 1 alone does not prove this.
+    assert out["spread_error_rank_corr"] > 0.3, out["spread_error_rank_corr"]
+    assert out["crps"] > 0
+    assert len(out["reliability_by_depth"]["rmse"]) == n_depth
+
+
+def test_uncertainty_calibration_detects_underdispersion():
+    """Negative control: spread deliberately 4x too small => ratio ≈ 0.25, ENCE large."""
+    from diagnostics.readiness import uncertainty_calibration_hook
+
+    rng = np.random.default_rng(2)
+    n_members, n_depth, n_samples = 40, 8, 500
+    sigma = 1.0
+    mu_true = rng.normal(size=(n_depth, n_samples))
+    target = mu_true + rng.normal(scale=sigma, size=(n_depth, n_samples))
+    members = mu_true[None, ...] + rng.normal(scale=sigma / 4.0, size=(n_members, n_depth, n_samples))
+
+    out = uncertainty_calibration_hook(
+        ensemble_mean=members.mean(axis=0),
+        ensemble_spread=members.std(axis=0, ddof=1),
+        target=target,
+        n_members=n_members,
+    )
+    assert out["status"] == "ok"
+    assert 0.20 < out["spread_error_ratio"] < 0.30, out["spread_error_ratio"]
+    assert out["ence"] > 0.5
+
+
+def test_uncertainty_hook_not_implemented_without_ensemble():
+    """N=0 keeps the honest `not_implemented` contract rather than inventing zeros."""
+    from diagnostics.readiness import uncertainty_calibration_hook
+
+    out = uncertainty_calibration_hook()
+    assert out["status"] == "not_implemented"
+    assert "ensemble_spread" in out["expected_fields"]
+
+
+def test_mc_dropout_enables_only_dropout():
+    """eval() + enable_mc_dropout => Dropout trains, everything else stays in eval."""
+    import torch.nn as nn
+
+    from nb_metrics import enable_mc_dropout
+
+    model = nn.Sequential(nn.Linear(4, 8), nn.BatchNorm1d(8), nn.Dropout(0.3), nn.Linear(8, 2))
+    model.eval()
+    probs = enable_mc_dropout(model)
+    assert probs == [0.3]
+    assert model[2].training is True          # Dropout live
+    assert model[1].training is False         # BatchNorm still eval (running stats frozen)
+    assert model[0].training is False
+
+    # Stochastic: two passes must differ, or the "ensemble" is a copy of one number.
+    x = torch.randn(16, 4)
+    with torch.no_grad():
+        assert not torch.allclose(model(x), model(x))
+
+    # A model with no dropout must fail loudly, not report zero spread.
+    plain = nn.Sequential(nn.Linear(4, 2))
+    plain.eval()
+    try:
+        enable_mc_dropout(plain)
+        raise AssertionError("expected ValueError for a model with no dropout")
+    except ValueError as exc:
+        assert "no nn.Dropout" in str(exc)
+
+    zeroed = nn.Sequential(nn.Linear(4, 8), nn.Dropout(0.0), nn.Linear(8, 2))
+    zeroed.eval()
+    try:
+        enable_mc_dropout(zeroed)
+        raise AssertionError("expected ValueError for p=0 dropout")
+    except ValueError as exc:
+        assert "p=0" in str(exc)
+
+
 def test_results_table_smoke():
     from pathlib import Path
 
@@ -1541,6 +1701,12 @@ if __name__ == "__main__":
     test_static_stability_readiness_synthetic()
     test_gsw_torch_matches_gsw_reference()
     test_readiness_report_requires_lat_lon()
+    test_dates_to_juld_round_trip()
+    test_ensemble_crps_matches_pairwise_definition()
+    test_uncertainty_calibration_detects_calibrated_ensemble()
+    test_uncertainty_calibration_detects_underdispersion()
+    test_uncertainty_hook_not_implemented_without_ensemble()
+    test_mc_dropout_enables_only_dropout()
     test_results_table_smoke()
     test_climatology_fit_eval_roundtrip()
     test_climatology_train_only()

@@ -110,3 +110,27 @@ def test_s0b_residual_init_matches_point_cube(cache_path):
         full = model(inputs)
     assert torch.allclose(full, base_only, atol=S0B_ATOL, rtol=0.0)
     assert float(model.gate_l1) == 0.0
+
+
+@pytest.mark.s0b_gate
+def test_s0b_point_block_matches_point_cache(cache_path):
+    """The real anchoring invariant: residual cache cols [:9] must equal the point-cube
+    cache inputs (same z-scoring), not just the same weights — a raw-vs-z-scored point
+    block passes the weight test above while feeding the frozen base garbage."""
+    import pickle
+
+    import numpy as np
+
+    from preproc.features.export_feature_cache import build_point_cube_cache
+
+    point_cfg_path = ROOT / "config/argo/config_argo_point_cube.json"
+    point_cache_path = build_point_cube_cache(read_json(point_cfg_path), force=False)
+
+    with open(cache_path, "rb") as f:
+        residual_cache = pickle.load(f)
+    with open(point_cache_path, "rb") as f:
+        point_cache = pickle.load(f)
+
+    point_inputs = np.asarray(point_cache["inputs"], dtype=np.float32)
+    residual_point_block = np.asarray(residual_cache["inputs"], dtype=np.float32)[:, : point_inputs.shape[1]]
+    np.testing.assert_allclose(residual_point_block, point_inputs, atol=1e-4, rtol=1e-4)

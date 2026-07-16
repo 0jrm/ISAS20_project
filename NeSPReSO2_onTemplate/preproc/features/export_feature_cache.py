@@ -83,6 +83,8 @@ def _hash_payload(config: Dict, *, cache_kind: str | None = None, features: Dict
 
 def cube_feature_hash(config: Dict) -> str:
     payload = _hash_payload(config)
+    # rehash on point-block standardization changes (S0 anchoring contract)
+    payload["point_block_norm"] = "train_zscore_point_sat_only_v1"
     blob = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:12]
 
@@ -247,9 +249,6 @@ def build_feature_cache(config: Dict, force: bool = False) -> str:
     sat_block = np.stack([table.values[:, name_to_j[n]] for n in backbone_names], axis=1).astype(np.float32)
     point_raw = np.concatenate([harmonic_block, sat_block], axis=1)
 
-    # Z-score residual features on train split only; harmonics pass through
-    feat_raw = table.values.astype(np.float32)
-    valid_mask = table.valid_mask.copy()
     dl_cfg = config.get("data_loader", {}).get("args", {})
     split_indices = build_split_indices(
         n,
@@ -259,6 +258,26 @@ def build_feature_cache(config: Dict, force: bool = False) -> str:
         v2_src=v2_src,
     )
     tr = np.asarray(split_indices["train"], dtype=int)
+
+    # Point block must match the point-cube cache standardization exactly (S0 anchoring):
+    # z-score sat cols on the train split, same recipe as build_point_cube_cache.
+    point_sat_cols = np.arange(harmonic_block.shape[1], point_raw.shape[1])
+    mu_point = np.zeros(point_raw.shape[1], dtype=np.float32)
+    sigma_point = np.ones(point_raw.shape[1], dtype=np.float32)
+    for j in point_sat_cols:
+        col = point_raw[tr, j]
+        m = col[np.isfinite(col)]
+        if m.size == 0:
+            raise ValueError(f"no finite train values for point column {j}")
+        mu_point[j] = float(np.mean(m))
+        sigma_point[j] = max(float(np.std(m)), 1e-6)
+    point_block = point_raw.copy()
+    for j in point_sat_cols:
+        point_block[:, j] = (point_raw[:, j] - mu_point[j]) / sigma_point[j]
+
+    # Z-score residual features on train split only; harmonics pass through
+    feat_raw = table.values.astype(np.float32)
+    valid_mask = table.valid_mask.copy()
     mu = np.zeros(feat_raw.shape[1], dtype=np.float32)
     sigma = np.ones(feat_raw.shape[1], dtype=np.float32)
     for j, nm in enumerate(table.names):
@@ -278,7 +297,7 @@ def build_feature_cache(config: Dict, force: bool = False) -> str:
         bad = ~valid_mask[:, j]
         feat_z[bad, j] = 0.0 if nm in HARMONIC_NAMES else 0.0  # already z-scored mean=0
 
-    inputs = np.concatenate([point_raw, feat_z], axis=1).astype(np.float32)
+    inputs = np.concatenate([point_block, feat_z], axis=1).astype(np.float32)
 
     pres = np.arange(ds.min_depth, ds.max_depth + 1, dtype=np.float32)
     raw_profiles = {}
@@ -348,8 +367,11 @@ def build_feature_cache(config: Dict, force: bool = False) -> str:
             "mean": mu,
             "std": sigma,
             "feature_names": table.names,
-            "normalization_version": "train_zscore_v1_harmonic_passthrough",
+            "normalization_version": "train_zscore_v2_point_sat_zscored",
             "train_indices": tr,
+            "point_mean": mu_point,
+            "point_std": sigma_point,
+            "point_zscore_columns": point_sat_cols.tolist(),
         },
         "base_dim": point_raw.shape[1],
         "feat_dim": feat_z.shape[1],

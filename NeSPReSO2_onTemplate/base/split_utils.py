@@ -35,6 +35,23 @@ def juld_to_datetime(juld: float, *, dataset_tag: str, v2_src: str | None = None
     return datenum_to_datetime(float(juld))
 
 
+def dates_to_juld(dates, *, dataset_tag: str) -> np.ndarray:
+    """Inverse of :func:`sample_dates`: calendar dates -> cache JULD (date-resolution).
+
+    ``dates`` is anything ``numpy`` reads as ``datetime64[D]`` (ISO strings, date objects,
+    datetime64). Exact inverse of ``sample_dates`` for whole days — see
+    ``selfcheck.py::test_dates_to_juld_round_trip``.
+
+    ISAS: days since 1950-01-01. ARGO: MATLAB datenum, where
+    ``juld = date.toordinal() + 366`` (``sample_dates`` decodes ``d - 367`` days from
+    ordinal 1, and ``(0001-01-01).toordinal() == 1``).
+    """
+    d64 = np.asarray(dates, dtype="datetime64[D]")
+    if dataset_tag == "isas20":
+        return (d64 - _EPOCH_1950_64).astype("timedelta64[D]").astype(np.float64)
+    return (d64 - _ORDINAL_1_64).astype("timedelta64[D]").astype(np.float64) + 367.0
+
+
 def sample_dates(
     juld: np.ndarray,
     *,

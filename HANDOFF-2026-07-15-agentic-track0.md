@@ -3,8 +3,9 @@
 **Date:** 2026-07-15
 **Branch:** `residual_cube`
 **Plan:** [`PLAN-agentic-ai-experiment.md`](PLAN-agentic-ai-experiment.md) Track 0
-**Status:** Track 0 **complete**. **`anom_point` retrain IN FLIGHT** (tmux `anom_retune`, GPU 2,
-launched 15:10) — closes Track 0.2, runs in parallel with Track A. Track A (harden evaluator) next.
+**Status:** Track 0 **complete**, including Track 0.2 — the `anom_point` retrain finished (early stop
+epoch 3382, 16:04) and closed the loss-scale question **negative**: T RMSE 0.6803 → 0.6545 (−3.79%),
+only 18% of the parity gap. Loss scales were not the cause. See "Track 0.2 — CLOSED-NEGATIVE" below.
 
 Track 0 asked for two currently-unknown numbers (RC-1 σ₀ violation rate, RC-2 steric-vs-SLA)
 and a loss-scale re-derivation. All three are now written down. Two of the three answers
@@ -40,9 +41,34 @@ and a loss-scale re-derivation. All three are now written down. Two of the three
 | `anom_patch_l4` | anom | 623 | 8.99% | 0.0757% | 0.7967 | 0.1415 m | ok |
 | `point_cube` | cube | 623 | **38.52%** | 0.0669% | — | — | unavailable |
 | `residual_cube` | cube | 623 | 2.57% | 0.0021% | — | — | unavailable |
-| *TRUTH (raw cache)* | — | 4145 | *24.70%* | *0.0586%* | — | — | reference |
+| *~~TRUTH (raw cache)~~ **PCA-16 TARGET (raw cache)** — **ROW MISLABELLED, corrected 2026-07-15*** | — | 4145 | *24.70%* | *0.0586%* | — | — | **not nature** |
 | *TRUTH (anom cache)* | — | 623 | *30.82%* | *0.0656%* | *0.8297* | *0.1405 m* | **ceiling** |
 | *CLIMATOLOGY only* | — | 623 | — | — | *n/a (const)* | *0.2341 m* | **floor** |
+
+> ### ⚠️ CORRECTION (2026-07-15, close-out Step 4) — "nature's 24.70%" is **not nature**
+>
+> The `TRUTH (raw cache)` row above is the **PCA-16 reconstruction** of truth — the regression
+> *target* — not the raw ARGO profiles. Reproduced exactly: PCA-16 truth at tol=0.01, n=4145 →
+> **24.73% / 0.0586%**, matching the recorded 24.70% / 0.0586% to the digit. **Raw ARGO profiles
+> violate at 3.88% / 0.0036%** (n=4145) and **1.12%** on the test split.
+>
+> | row (tol=0.01) | n=4145 | test n=623 |
+> |---|---:|---:|
+> | **RAW TRUTH (nature)** | **3.88%** | **1.12%** |
+> | **PCA-16 TRUTH (regression target)** | 24.73% | 21.83% |
+>
+> **The PCA-16 truncation is itself the dominant source of σ₀ inversions** — it turns a 1.12%-unstable
+> ocean into a 21.83%-unstable target. Consequences:
+> - "Models are over-smoothed vs nature's 24.70%" — **conclusion survives, magnitude does not.**
+>   `golden_point`'s 0.00% is smoother than nature's 1.12%, not than 24.70%. The over-smoothing is
+>   real but ~20× less dramatic than recorded.
+> - **A model that perfectly hit its own training target would violate at ~21.83%.** Every model
+>   except `point_cube` sits *below* its target's rate — they smooth away an artifact of the basis.
+> - `point_cube` **is still the outlier**, and by more than recorded: 38.52% is **34× nature's
+>   1.12%**, and the only model to exceed even the 21.83% target.
+>
+> Verify: `saved/readiness/rc1_reference_rows_corrected.json`. This is the same silent-wrong-number
+> class Track 0 was created to catch — found by re-deriving the reference instead of citing it.
 
 RC-2 is only computable on the **anomaly caches** — they alone carry `clim_steric`,
 `ssh_obs_sla`, `steric_calibration`. Raw/cube caches report an honest `unavailable`.
@@ -54,7 +80,15 @@ Three controls, because "0 out of 1.12M" is exactly the kind of number that is u
 
 - **Detector works:** true profiles → 24.7%; depth-reversing 50 profiles raises violations as
   expected. The diagnostic is sensitive.
+  **⚠️ CORRECTED 2026-07-15:** raw true profiles violate at **3.88%** (n=4145), not 24.7% — the
+  24.7% figure is the PCA-16 reconstruction (see the correction box above). The detector is still
+  sensitive and the control still stands; only the reference value was wrong.
 - **Not a PCA artifact:** true PCs pushed through the *same* PCA-16 basis still violate at 24.7%.
+  **⚠️ CORRECTED 2026-07-15: this control proved the opposite of what it concluded.** Raw truth =
+  3.88%, PCA-16 truth = 24.73%. The two are *not* equal — the basis inflates violations **6.4×**.
+  The 24.7%-vs-24.7% agreement that made it look like "not a basis artifact" was 24.7% compared
+  against **itself**: both sides of the control were the PCA-16 reconstruction. **σ₀ instability at
+  this scale IS largely a PCA-16 truncation artifact.**
 - **Predictions are sane:** T RMSE 0.53 vs PCA-reconstructed truth, matching the scoreboard.
 
 Mechanism — **the model reproduces PC1 at 0.97× true std but shrinks high-order PCs to ~0.13–0.20×**:
@@ -160,7 +194,10 @@ branch to 1.0 at zero-pred. Under the stale scales:
 
 A ~10% T:S rebalance is a real but small lever. **It is unlikely to explain the anom-point parity
 gap by itself.** The decisive test is a retrain (`anom_point` was ~2367 s / ~40 min, best epoch
-3067) — **not run this session**; no GPU job was launched without asking.
+3067).
+
+**→ The retrain has since been run and confirms exactly this: −3.79% on T RMSE, 18% of the gap.
+See "Track 0.2 — CLOSED-NEGATIVE" below for the numbers and the verdict.**
 
 ---
 
@@ -176,34 +213,63 @@ Nothing committed — repo convention is commit only when asked.
 
 ---
 
-## In flight — `anom_point` retrain (Track 0.2 closer)
+## Track 0.2 — CLOSED-NEGATIVE (retrain finished 2026-07-15 16:04)
 
-Launched **2026-07-15 15:10**, running **in parallel with Track A** (GPU-bound on an idle A100 vs
-Track A's numpy/Zarr CPU work — no contention).
+The retrain completed: early stop **epoch 3382**, EXIT=0, `retune_0715_anom_point`. Seed 42 +
+chronological split pinned → `loss_scales` was the only difference from
+`scratch_0705_204716_anom_point`.
 
-```bash
-tmux attach -t anom_retune                                   # watch
-tail -f NeSPReSO2_onTemplate/saved/readiness/retune_retune_0715_anom_point.log
-```
+**The pre-registered prediction held: no parity.** Evaluated with
+`nb_metrics.profile_metrics_from_inference(..., split="test")` — the same call that produced
+`notebooks/scratch_outputs/scratch_all_models_results.json`. `eval_run.py` cross-check passed.
 
-| | |
+| model | T_rmse_native | S_rmse_native | avg_common |
+|---|---:|---:|---:|
+| `golden_point` (target) | 0.5367 | 0.0897 | 0.3159 |
+| `anom_point` (stale scales, baseline) | 0.6803 | 0.1043 | 0.3940 |
+| **`retune_0715_anom_point` (corrected scales)** | **0.6545** | **0.1013** | **0.3797** |
+
+- T improved **−3.79%** (0.6803 → 0.6545), S **−2.80%**. Real but small, and in the direction the
+  analytic argument predicted (a 9.7% T:S rebalance bought ~4% on T).
+- It closes only **18% of the parity gap** to `golden_point` (0.1436 → 0.1178 in T RMSE). The
+  remaining 0.118 is the anomaly reframing, unexplained.
+
+**⚠️ `val_loss` remains apples-to-oranges** and is *not* evidence either way: correcting
+`profile_scales` changed the loss normalization itself (0.733× global factor). Baseline `mnt_best`
+0.16285 vs retune 0.22589 compares two different objectives. Only the native-RMSE row above is
+scale-independent.
+
+**Honest caveat on the 3.79%:** n=1 run per config. Seed and split are pinned, but changing the loss
+perturbs the optimization trajectory, so this single contrast cannot separate a true ~4% gain from
+run-to-run variation. It would take several seeds per arm to put an error bar on it — not worth the
+GPU time, because the decision does not turn on 4%.
+
+**Verdict — loss scales were not the cause.** Keep the corrected scales anyway: they are
+analytically right (they normalize each branch to 1.0 at zero-pred), and they cost nothing. Record
+Track 0.2 **closed-negative**; the parity gap moves to the anomaly-reframing probes
+(`PLAN-agentic-close-out.md` Step 6). **Stop blaming `loss_scales`.**
+
+**Free second read — RC-1/RC-2 on the retune checkpoint** (`saved/readiness/readiness_retune_0715_anom_point.{json,md}`):
+
+| | baseline `anom_point` | retune |
+|---|---:|---:|
+| σ₀ profile violation rate | 7.38% | **5.14%** |
+| σ₀ interface violation rate | 0.01% | 0.01% |
+| RC-2 steric-vs-SLA correlation | 0.8299 | 0.8313 |
+| RC-2 RMSE vs SLA | 0.1295 m | 0.1284 m |
+
+The rebalance made the model *slightly more* over-smoothed (7.38% → 5.14%, further below nature's
+24.70%), which is consistent with a marginally better-fit conditional mean and adds nothing new.
+RC-2 moved +0.0014 — noise against a metric already at its 0.8297 true-profile ceiling, i.e. still
+**saturated**. Neither number changes any decision.
+
+**Artifacts:**
+
+| Path | Contents |
 |---|---|
-| Launcher | `scripts/run_anom_loss_scale_retune.sh` (GPU 2, `RUN_ID=retune_0715_anom_point`) |
-| Checkpoint out | `saved/models/NeSPReSO2_ARGO_GoM_anom/retune_0715_anom_point/` |
-| Baseline (untouched) | `saved/models/NeSPReSO2_ARGO_GoM_anom/scratch_0705_204716_anom_point/` |
-| Controlled by | seed 42 + chronological split pinned → `loss_scales` is the **only** difference |
-| Beat this | ANOM-point **0.680 / 0.104** (T/S RMSE, chrono test n=623) |
-| Reference | point raw 0.537/0.090; golden 0.514/0.083 |
-| Prior run | best epoch 3067, ~40 min, early_stop 500, 8000 max |
-
-**On completion:** run eval for RMSE **and** re-run `diagnostics/readiness.py` on the new checkpoint
-(RC-1/RC-2 are cheap now, and σ₀ is a free second read on whether the rebalance changed the
-smoothing at all).
-
-**Pre-registered prediction:** *this will not reach parity.* The stale scales were a 0.733× global
-rescale (Adam absorbs it) plus a 9.7% salinity over-weighting. If T RMSE jumps 0.680 → ≈0.537 off a
-10% rebalance, that is **surprising** and means the gap was never about scales. Expected: a small
-improvement that leaves the anomaly reframing unexplained → **stop blaming `loss_scales`.**
+| `saved/readiness/retune_0715_anom_point_profile_metrics.json` | native/common RMSE + baselines side by side |
+| `saved/readiness/readiness_retune_0715_anom_point.{json,md}` | RC-1/RC-2 on the retune checkpoint |
+| `saved/readiness/retune_retune_0715_anom_point.log` | full training log (early stop @ 3382) |
 
 ---
 
