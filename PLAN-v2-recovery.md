@@ -8,6 +8,7 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-16 | **Human sign-off:** framing = *"no soft basis fixes stability; hard monotonicity does, at cost X."* Phase-3 deep-band FAIL diagnosed (softplus clamp on ~12% negative ctrl increments) and fixed (isotonic before encode). T1-E gate **PASS** (E/A ≤ 1.0 all T bands). **Big win:** hard constraint *improves* upper-ocean T RMSE vs A while zeroing σ₀ profile rate (0.215→0.000). Phase 4 unblocked. | Human approved mechanism reframing; accepted diagnostic→fix→re-gate path. |
 | 2026-07-16 | T1 escalate → R1: Phase 3.2 monotone head. Mechanism update: **truncation itself** (not T/S separateness) drives σ₀ violations — B joint EOF ≈ A under historical ruler; only hard constraint cuts 21.51%→0.48%. Residual post-inversion violations ⇒ Phase 3 tracks **inversion fidelity** as first-class. Phase 2.1 satisfied; R4 golden root-cause is a **Phase 5 prerequisite**. | Human accepted audit Decision R1; B/C historical rows complete the record. |
 | 2026-07-16 | §3.2 / §0.1: hard constraint guarantees **σ₀ monotonicity**; residual **N²** violations are expected to be small and must be **reported**, not assumed zero. Additive `sigma0_monotonicity_violations` in evalphys v1.1.0. | Audit C.2: monotone σ₀ control-grid + PCHIP does not imply N²≡0 after (σ₀,τ)→(T,S) inversion (locally referenced N²). |
 | 2026-07-16 | Headline metrics always use reference `gsw` via `evalphys.gsw_backend.get_gsw()`; `io.gsw_backend` / `--gsw-backend` select training / equivalence only. | Audit F: `diagnostics/readiness.py` aliases `gsw_torch as gsw`; evalphys must not silently substitute. |
@@ -18,7 +19,7 @@
 
 Three session-established findings drive this plan:
 
-1. **The separate T/S PCA-16 representation manufactures static-stability violations.** Reconstructing ground-truth ARGO profiles through the truncated separate bases raised the σ₀-inversion rate from ~1.1% (raw profiles) to ~22% (PCA-16 target). Truncating T and S *independently* injects uncorrelated errors into the tightly correlated T–S relation; density stability lives in that correlation. Violations are marginal (0.01–0.02 kg/m³) and cluster at 2.5–11.5 m.
+1. **Truncation manufactures static-stability violations; soft basis changes do not fix them.** Reconstructing ground-truth ARGO profiles through truncated bases raises the historical σ₀-inversion profile rate from ~1.1% (raw) to ~22% (PCA-16). **Human sign-off 2026-07-16:** joint EOF (B) and density/spice PCA (C) leave that rate ≈ A — the load-bearing mechanism is truncation itself, not T/S basis separateness. Soft representation changes do not buy stability; only a hard monotone density constraint does (framing: *"no soft basis fixes stability; hard monotonicity does, at cost X"*). Cost X on GoM ARGO is **negative in the upper ocean** (E beats A on T RMSE in 0–800 m while zeroing σ₀ violations — see `reports/t1_basis_stability.md`).
 2. **MSE + deterministic output ⇒ conditional-mean under-dispersion.** Anomaly PC1 amplitude shrinks to ~0.78×, ensemble-style spread to ~0.20×, and spread–|error| rank correlation is ~0.12. A deterministic conditional-mean emulator cannot provide the background/observation-error covariance a DA system needs.
 3. **The binding constraint has been evaluation validity, not capacity.** Non-comparable val_loss across retrains, self-referential baselines, inference-mode artifacts. Therefore: metrics get frozen FIRST, before any new model runs.
 
@@ -198,6 +199,8 @@ Depth control grid: `K = 64` levels, log-spaced in depth over [0, z_max] (denser
 **σ₀ vs N² (audit 2026-07-16):** The hard constraint guarantees **σ₀ monotonicity** (depth-increasing σ₀) **pre-inversion** on the control grid. The Phase-0 headline physical metric remains **N²** (`gsw.Nsquared`, §0.1). Residual violations after (σ₀,τ)→(T,S) Newton inversion (~0.3–0.5% σ₀ profile / ~0.2% N² level on T1-D) are expected and must be **reported** — they are dominated by **inversion round-trip error**, not control-grid non-monotonicity. Phase 3 therefore tracks **inversion fidelity** (round-trip |ΔT|, |ΔS|, recovered-σ₀ monotonicity, Newton fail rate) as a first-class metric alongside N². Do not delete or alter the N² metric.
 
 Note: strict monotonicity is marginally stronger than the physical requirement (neutral layers allowed). Acceptable: softplus output can be arbitrarily close to 0. Do not add an ε relaxation.
+
+**Truth-projection / cache targets (2026-07-16 deep-band fix):** linear interp of native σ₀ onto the ctrl grid leaves ~12% negative increments. Encoding those with softplus clamp injects a cumulative σ₀ bias that peaks below 800 m (T1-E FAIL). Always isotonic-project ctrl σ₀ before softplus encode (`project_monotone_sigma0_ctrl`); cache export applies the same projection to density targets so the loss floor matches what decode can represent.
 
 ### 3.3 Spice head
 

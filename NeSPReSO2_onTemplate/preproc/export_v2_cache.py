@@ -77,6 +77,11 @@ def _build_density_spice_targets(
             sig_ctrl[i] = np.nan
             continue
         sig_ctrl[i] = np.interp(z_ctrl, depth[ok], sig[i, ok])
+    # Softplus decode is always monotone; project targets the same way so the
+    # loss floor isn't set by non-monotone linear-interp artefacts (deep-band fix).
+    from model.density_spice import project_monotone_sigma0_ctrl
+
+    sig_ctrl = project_monotone_sigma0_ctrl(sig_ctrl, z_ctrl)
 
     tr = np.asarray(train_idx, dtype=int)
     mu_s = np.nanmean(sig_ctrl[tr], axis=0)

@@ -11,94 +11,94 @@
       "name": "A_separate_pca",
       "violation_rate_profile": 0.7656500802568218,
       "violation_rate_level": 0.009116283217406812,
-      "violation_rate_level_n2_tol0": 0.00915641162832174,
+      "violation_rate_level_n2_tol0": 0.009157303370786516,
       "sigma0_violation_rate_profile": 0.8218298555377207,
-      "sigma0_violation_rate_level": 0.009740502942750133,
+      "sigma0_violation_rate_level": 0.009739611200285358,
       "ts_rmse": {
         "T": {
-          "0-50": 0.20247346488636112,
-          "50-200": 0.22266038762006762,
-          "200-800": 0.1065369502323607,
-          ">800": 0.016216613402076047
+          "0-50": 0.20247330139043507,
+          "50-200": 0.22266044224478587,
+          "200-800": 0.10653693621462247,
+          ">800": 0.01621661195948824
         },
         "S": {
-          "0-50": 0.1079518429815525,
-          "50-200": 0.038041916122543346,
-          "200-800": 0.019911130829517596,
-          ">800": 0.0009866081550543235
+          "0-50": 0.10795199982322333,
+          "50-200": 0.03804196351055708,
+          "200-800": 0.019911101126103697,
+          ">800": 0.0009866077812636263
         }
       },
-      "drhodz_rmse": 0.00674358001741818,
-      "mld_rmse": 36.606767035095984,
+      "drhodz_rmse": 0.006743581063610694,
+      "mld_rmse": 36.60672605945712,
       "n2_tol_sweep_level": {
-        "0": 0.00915641162832174,
-        "1e-09": 0.00915195291599786,
+        "0": 0.009157303370786516,
+        "1e-09": 0.009152844658462635,
         "1e-08": 0.009116283217406812,
-        "1e-07": 0.008882646691635456
+        "1e-07": 0.00888175494917068
       },
       "exclude_top15m_level": 0.007388123788841379
     },
     "B_joint_eof": {
       "name": "B_joint_eof",
-      "violation_rate_profile": 0.8860353130016051,
-      "violation_rate_level": 0.009210807918673087,
-      "violation_rate_level_n2_tol0": 0.009382914214374889,
+      "violation_rate_profile": 0.884430176565008,
+      "violation_rate_level": 0.009201890494025325,
+      "violation_rate_level_n2_tol0": 0.009377563759586231,
       "sigma0_violation_rate_profile": 0.9406099518459069,
-      "sigma0_violation_rate_level": 0.011056714820759764,
+      "sigma0_violation_rate_level": 0.011049580881041556,
       "ts_rmse": {
         "T": {
-          "0-50": 0.22683261694248508,
-          "50-200": 0.23220841593001887,
-          "200-800": 0.09935112245494394,
-          ">800": 0.016517804431164403
+          "0-50": 0.22685273434399217,
+          "50-200": 0.23216198422269227,
+          "200-800": 0.09934667915116728,
+          ">800": 0.016517864475326965
         },
         "S": {
-          "0-50": 0.08656270234835925,
-          "50-200": 0.03185230206828579,
-          "200-800": 0.014945989215271528,
-          ">800": 0.0008204528604843934
+          "0-50": 0.08656791526459173,
+          "50-200": 0.03185511515871302,
+          "200-800": 0.014945505588343745,
+          ">800": 0.0008204369537676425
         }
       },
-      "drhodz_rmse": 0.0066149762434343125,
-      "mld_rmse": 38.60147792411599,
+      "drhodz_rmse": 0.006614998086874709,
+      "mld_rmse": 38.60217742160117,
       "n2_tol_sweep_level": {
-        "0": 0.009382914214374889,
-        "1e-09": 0.009365079365079364,
-        "1e-08": 0.009210807918673087,
-        "1e-07": 0.008421615837346174
+        "0": 0.009377563759586231,
+        "1e-09": 0.009360620652755483,
+        "1e-08": 0.009201890494025325,
+        "1e-07": 0.008411806670233637
       },
-      "exclude_top15m_level": 0.007423193996699803
+      "exclude_top15m_level": 0.007414201635710464
     },
     "C_density_spice_pca": {
       "name": "C_density_spice_pca",
-      "violation_rate_profile": 0.7255216693418941,
-      "violation_rate_level": 0.008918316390226503,
+      "violation_rate_profile": 0.7271268057784912,
+      "violation_rate_level": 0.00891920813269128,
       "violation_rate_level_n2_tol0": 0.009001248439450686,
       "sigma0_violation_rate_profile": 0.7784911717495987,
       "sigma0_violation_rate_level": 0.009448903156768326,
       "ts_rmse": {
         "T": {
-          "0-50": 0.18129273294294962,
-          "50-200": 0.19661419975954061,
-          "200-800": 0.09980129751781557,
-          ">800": 0.015306033876390039
+          "0-50": 0.18129292069019398,
+          "50-200": 0.196614280273101,
+          "200-800": 0.09980130345594644,
+          ">800": 0.015306026988495149
         },
         "S": {
-          "0-50": 0.11464906203576875,
-          "50-200": 0.056756116734951435,
-          "200-800": 0.017421113076770734,
-          ">800": 0.0010621194097520826
+          "0-50": 0.1146488791516474,
+          "50-200": 0.05675609852210797,
+          "200-800": 0.01742111990096006,
+          ">800": 0.0010621217043605294
         }
       },
-      "drhodz_rmse": 0.006787282018401979,
-      "mld_rmse": 39.43557239182058,
+      "drhodz_rmse": 0.006787279479191013,
+      "mld_rmse": 39.43557974289238,
       "n2_tol_sweep_level": {
         "0": 0.009001248439450686,
         "1e-09": 0.008995006242197253,
-        "1e-08": 0.008918316390226503,
+        "1e-08": 0.00891920813269128,
         "1e-07": 0.008624933119315142
       },
-      "exclude_top15m_level": 0.0068719622680532885,
+      "exclude_top15m_level": 0.006871063031954355,
       "newton_fail_rate": 0.0
     },
     "D_monotone_density": {
@@ -106,24 +106,24 @@
       "violation_rate_profile": 0.3868378812199037,
       "violation_rate_level": 0.0022302479044052077,
       "violation_rate_level_n2_tol0": 0.003542892812555734,
-      "sigma0_violation_rate_profile": 0.5585874799357945,
-      "sigma0_violation_rate_level": 0.003160335295166756,
+      "sigma0_violation_rate_profile": 0.5601926163723917,
+      "sigma0_violation_rate_level": 0.0031701444622792936,
       "ts_rmse": {
         "T": {
-          "0-50": 0.1528056528193798,
-          "50-200": 0.155967718895857,
-          "200-800": 0.08751625410555157,
-          ">800": 0.0157250528423518
+          "0-50": 0.1528057121410429,
+          "50-200": 0.15596771710096996,
+          "200-800": 0.08751626346218254,
+          ">800": 0.015725049868349317
         },
         "S": {
-          "0-50": 0.06614440971046177,
-          "50-200": 0.0558162114811331,
-          "200-800": 0.021010366619419255,
-          ">800": 0.001577914666270758
+          "0-50": 0.06614443751068731,
+          "50-200": 0.05581621214504954,
+          "200-800": 0.02101037263299702,
+          ">800": 0.0015779157851716914
         }
       },
-      "drhodz_rmse": 0.003206632774659611,
-      "mld_rmse": 1.3430640113427939,
+      "drhodz_rmse": 0.0032066327746586554,
+      "mld_rmse": 1.3430640113333352,
       "n2_tol_sweep_level": {
         "0": 0.003542892812555734,
         "1e-09": 0.003305689316925272,
@@ -136,37 +136,37 @@
     },
     "E_softplus_phase3": {
       "name": "E_softplus_phase3",
-      "violation_rate_profile": 0.3290529695024077,
-      "violation_rate_level": 0.0012225789192081328,
-      "violation_rate_level_n2_tol0": 0.0017852684144818976,
-      "sigma0_violation_rate_profile": 0.49759229534510435,
-      "sigma0_violation_rate_level": 0.0013822008204030676,
+      "violation_rate_profile": 0.38041733547351525,
+      "violation_rate_level": 0.0022248974496165506,
+      "violation_rate_level_n2_tol0": 0.00353219190297842,
+      "sigma0_violation_rate_profile": 0.5858747993579454,
+      "sigma0_violation_rate_level": 0.0031781701444622795,
       "ts_rmse": {
         "T": {
-          "0-50": 0.15283060560972417,
-          "50-200": 0.1562896837061367,
-          "200-800": 0.0886417701953622,
-          ">800": 0.026423651633857147
+          "0-50": 0.15276802071983545,
+          "50-200": 0.1559677043173918,
+          "200-800": 0.08751629242589822,
+          ">800": 0.015725076426377157
         },
         "S": {
-          "0-50": 0.06619787805871417,
-          "50-200": 0.05586447274486499,
-          "200-800": 0.021343373201617576,
-          ">800": 0.0039440089803599995
+          "0-50": 0.06611193561908373,
+          "50-200": 0.05581621511913599,
+          "200-800": 0.021010363095948847,
+          ">800": 0.0015779209258628415
         }
       },
-      "drhodz_rmse": 0.003172509484626985,
-      "mld_rmse": 1.578228755157666,
+      "drhodz_rmse": 0.0031728503537032508,
+      "mld_rmse": 1.3430876527348934,
       "n2_tol_sweep_level": {
-        "0": 0.0017852684144818976,
-        "1e-09": 0.0016809345461030855,
-        "1e-08": 0.0012225789192081328,
-        "1e-07": 0.0001926163723916533
+        "0": 0.00353219190297842,
+        "1e-09": 0.003295880149812734,
+        "1e-08": 0.0022248974496165506,
+        "1e-07": 0.00023542001070090958
       },
-      "exclude_top15m_level": 0.000990058944926285,
+      "exclude_top15m_level": 0.0016240203946747238,
       "newton_fail_rate": 0.0,
       "pre_inversion_dsigma0_neg_count": 0,
-      "phase3_t_rmse_vs_A_pass": false
+      "phase3_t_rmse_vs_A_pass": true
     }
   },
   "reconciliation": {
@@ -186,9 +186,9 @@
     },
     "historical_B_joint_eof": {
       "tol_kgm3": 0.01,
-      "violation_rate_profile": 0.22953451043338685,
-      "violation_rate_interface": 0.0008070269306224363,
-      "n_violations": 905,
+      "violation_rate_profile": 0.22792937399678972,
+      "violation_rate_interface": 0.0008043517032281077,
+      "n_violations": 902,
       "method": "gsw_torch.sigma0_inversion"
     },
     "historical_C_density_spice": {
@@ -214,9 +214,10 @@
     },
     "notes": {
       "a_profile_vs_level": "N\u00b2 profile rate \u226b level rate because violations are sparse per profile (A profile=0.7657, level=0.0091)",
-      "b_n2_tol0_vs_1e8": "A level N\u00b2 at tol=0: 0.009156; at 1e-8: 0.009116",
+      "b_n2_tol0_vs_1e8": "A level N\u00b2 at tol=0: 0.009157; at 1e-8: 0.009116",
       "d_method": "Historical Finding-1 used readiness \u03c3\u2080 \u0394\u03c3\u2080<-0.01 profile rate (~1.12% raw \u2192 ~21.8% PCA-16), not N\u00b2 level rate.",
-      "mechanism_update": "B (joint EOF) does not cut historical \u03c3\u2080 profile rate vs A \u2014 the load-bearing mechanism is truncation itself, not separateness of T/S bases. Soft representation changes do not buy stability; only the hard monotone constraint (D) does.",
+      "mechanism_update": "SIGNED OFF 2026-07-16 (human): soft representation changes do not buy stability; only hard monotonicity does. B (joint EOF) and C (density/spice PCA) leave historical \u03c3\u2080 profile rate \u2248 A (~0.22); truncation itself \u2014 not T/S separateness \u2014 drives the violations. Softplus control-grid (E) zeros \u03c3\u2080 violations by construction. Dissertation framing: 'no soft basis fixes stability; hard monotonicity does, at cost X.'",
+      "hard_stability_win": "Headline: hard constraint improves upper-ocean T RMSE vs A while zeroing \u03c3\u2080 violations (see Decision outcomes / Big win section). Deep-band cost was a softplus-clamp artefact on non-monotone linear-interp ctrl (~12% negative increments); fixed by isotonic projection before encode.",
       "f_backend": "headline backend=gsw (reference gsw)"
     }
   },
@@ -230,6 +231,6 @@
     "ESCALATE: C_density_spice_pca \u2248 A \u2014 violations may not be basis-induced under N\u00b2 level metric",
     "D monotone: N\u00b2 level=0.0022 (\u03c3\u2080 level=0.0032; pre-inv \u0394\u03c3\u2080<0 count=11); vs A N\u00b2 level=0.0091 (4.1\u00d7)",
     "GATE: B/C did not meet \u22655\u00d7 level-violation cut under N\u00b2 \u2014 Finding-1 still holds under historical \u03c3\u2080 profile metric (see Reconciliation).",
-    "Phase3 softplus E vs A T-RMSE: T[0-50] E/A=0.755, T[50-200] E/A=0.702, T[200-800] E/A=0.832, T[>800] E/A=1.629; FAIL >10% in \u22651 band"
+    "Phase3 softplus E vs A T-RMSE: T[0-50] E/A=0.755, T[50-200] E/A=0.700, T[200-800] E/A=0.821, T[>800] E/A=0.970; PASS \u226410%"
   ]
 }

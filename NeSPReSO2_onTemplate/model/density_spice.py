@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.interpolate import PchipInterpolator
+from sklearn.isotonic import IsotonicRegression
 
 
 def make_control_grid(depth: np.ndarray, K: int = 64) -> np.ndarray:
@@ -48,18 +49,57 @@ def decode_sigma0_ctrl(a: torch.Tensor, dz_tilde: torch.Tensor) -> torch.Tensor:
     return out
 
 
-def encode_a_from_sigma0_ctrl(sig_ctrl: np.ndarray, dz_tilde: np.ndarray) -> np.ndarray:
-    """Invert softplus decode (approx) for truth projection / diagnostics."""
+def project_monotone_sigma0_ctrl(sig_ctrl: np.ndarray, z_ctrl: np.ndarray) -> np.ndarray:
+    """L2-optimal increasing projection on the control grid (isotonic).
+
+    Linear interp of native σ₀ onto a coarse ctrl grid leaves ~12% negative
+    increments (GoM ARGO). Softplus encode clamps those to ~0 and the bias
+    accumulates with depth — the T1-E >800 m RMSE failure. Isotonic before
+    encode removes the pathology (see reports/e_deep_band_diagnostic.md).
+    """
+    sig = np.asarray(sig_ctrl, dtype=np.float64)
+    z = np.asarray(z_ctrl, dtype=np.float64)
+    single = sig.ndim == 1
+    if single:
+        sig = sig[None, :]
+    out = np.empty_like(sig)
+    for i in range(sig.shape[0]):
+        iso = IsotonicRegression(increasing=True, out_of_bounds="clip")
+        out[i] = iso.fit_transform(z, sig[i])
+    return out[0] if single else out
+
+
+def encode_a_from_sigma0_ctrl(
+    sig_ctrl: np.ndarray,
+    dz_tilde: np.ndarray,
+    z_ctrl: np.ndarray | None = None,
+    *,
+    monotone: bool = True,
+) -> np.ndarray:
+    """Invert softplus decode for truth projection / diagnostics.
+
+    When ``monotone=True`` (default), isotonic-project ``sig_ctrl`` first.
+    ``z_ctrl`` is required in that case. Pass ``monotone=False`` only for
+    isolating the clamp pathology in diagnostics.
+    """
     sig = np.asarray(sig_ctrl, dtype=np.float64)
     dz = np.asarray(dz_tilde, dtype=np.float64)
     if sig.ndim == 1:
         sig = sig[None, :]
+        squeeze = True
+    else:
+        squeeze = False
+    if monotone:
+        if z_ctrl is None:
+            raise ValueError("encode_a_from_sigma0_ctrl(..., monotone=True) requires z_ctrl")
+        sig = project_monotone_sigma0_ctrl(sig, z_ctrl)
     a = np.empty_like(sig)
     a[:, 0] = sig[:, 0]
     # softplus^{-1}(x) = log(expm1(x)); clamp for near-zero increments
     raw = np.diff(sig, axis=1) / np.maximum(dz[1:], 1e-12)
     a[:, 1:] = np.log(np.expm1(np.maximum(raw, 1e-12)))
-    return a.astype(np.float32)
+    out = a.astype(np.float32)
+    return out[0] if squeeze else out
 
 
 def interp_linear_torch(
@@ -117,6 +157,14 @@ def selfcheck_monotone_pchip(n: int = 1000, K: int = 64, n_z: int = 201, seed: i
     assert np.all(np.diff(sig_c, axis=1) >= -1e-12), "control-grid not monotone"
     sig_n = upsample_pchip(sig_c, z_ctrl, depth)
     assert np.all(np.diff(sig_n, axis=1) >= -1e-12), "PCHIP upsample not monotone"
+    # Isotonic-before-encode roundtrip on a mildly non-monotone ctrl sample
+    sig_wiggle = sig_c.copy()
+    sig_wiggle[:, K // 4] -= 0.05  # inject a local inversion
+    a_rt = encode_a_from_sigma0_ctrl(sig_wiggle, dz, z_ctrl, monotone=True)
+    with torch.no_grad():
+        sig_rt = decode_sigma0_ctrl(torch.from_numpy(a_rt), torch.from_numpy(dz)).numpy()
+    assert np.all(np.diff(sig_rt, axis=1) >= -1e-12), "encode(monotone)+decode not monotone"
+    assert float(np.max(np.abs(sig_rt - project_monotone_sigma0_ctrl(sig_wiggle, z_ctrl)))) < 1e-4
 
 
 if __name__ == "__main__":

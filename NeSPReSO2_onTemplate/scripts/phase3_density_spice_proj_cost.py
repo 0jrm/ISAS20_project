@@ -69,7 +69,7 @@ def project_softplus_spice(cache: dict, n_test: int | None = None) -> dict:
     sig, tau = sigma0_spice_from_ts(T, S, p, lon[:, None], lat[:, None])
 
     sig_ctrl = np.vstack([np.interp(z_ctrl, depth, sig[i]) for i in range(n_te)])
-    a = encode_a_from_sigma0_ctrl(sig_ctrl, dz)
+    a = encode_a_from_sigma0_ctrl(sig_ctrl, dz, z_ctrl)
     with torch.no_grad():
         sig_hat_c = decode_sigma0_ctrl(torch.from_numpy(a), torch.from_numpy(dz)).numpy()
     # PCHIP to native
