@@ -11,28 +11,28 @@
       "name": "A_separate_pca",
       "violation_rate_profile": 0.7656500802568218,
       "violation_rate_level": 0.009116283217406812,
-      "violation_rate_level_n2_tol0": 0.009157303370786516,
+      "violation_rate_level_n2_tol0": 0.00915641162832174,
       "sigma0_violation_rate_profile": 0.8218298555377207,
       "sigma0_violation_rate_level": 0.009740502942750133,
       "ts_rmse": {
         "T": {
-          "0-50": 0.20247332129775159,
-          "50-200": 0.22266050448593186,
-          "200-800": 0.10653695288265133,
-          ">800": 0.016216603475581064
+          "0-50": 0.20247346488636112,
+          "50-200": 0.22266038762006762,
+          "200-800": 0.1065369502323607,
+          ">800": 0.016216613402076047
         },
         "S": {
-          "0-50": 0.10795162188034005,
-          "50-200": 0.03804193281542357,
-          "200-800": 0.019911140663464152,
-          ">800": 0.00098660823983951
+          "0-50": 0.1079518429815525,
+          "50-200": 0.038041916122543346,
+          "200-800": 0.019911130829517596,
+          ">800": 0.0009866081550543235
         }
       },
-      "drhodz_rmse": 0.006743577264841275,
-      "mld_rmse": 36.60677875610558,
+      "drhodz_rmse": 0.00674358001741818,
+      "mld_rmse": 36.606767035095984,
       "n2_tol_sweep_level": {
-        "0": 0.009157303370786516,
-        "1e-09": 0.009152844658462635,
+        "0": 0.00915641162832174,
+        "1e-09": 0.00915195291599786,
         "1e-08": 0.009116283217406812,
         "1e-07": 0.008882646691635456
       },
@@ -40,65 +40,65 @@
     },
     "B_joint_eof": {
       "name": "B_joint_eof",
-      "violation_rate_profile": 0.884430176565008,
-      "violation_rate_level": 0.00919832352416622,
-      "violation_rate_level_n2_tol0": 0.009377563759586231,
+      "violation_rate_profile": 0.8860353130016051,
+      "violation_rate_level": 0.009210807918673087,
+      "violation_rate_level_n2_tol0": 0.009382914214374889,
       "sigma0_violation_rate_profile": 0.9406099518459069,
-      "sigma0_violation_rate_level": 0.011044230426252898,
+      "sigma0_violation_rate_level": 0.011056714820759764,
       "ts_rmse": {
         "T": {
-          "0-50": 0.2268188769690701,
-          "50-200": 0.2320670225637432,
-          "200-800": 0.09934203683945846,
-          ">800": 0.016517461542352996
+          "0-50": 0.22683261694248508,
+          "50-200": 0.23220841593001887,
+          "200-800": 0.09935112245494394,
+          ">800": 0.016517804431164403
         },
         "S": {
-          "0-50": 0.08655807664953719,
-          "50-200": 0.0318573206360074,
-          "200-800": 0.01494532696335603,
-          ">800": 0.0008204754302234068
+          "0-50": 0.08656270234835925,
+          "50-200": 0.03185230206828579,
+          "200-800": 0.014945989215271528,
+          ">800": 0.0008204528604843934
         }
       },
-      "drhodz_rmse": 0.0066146866817352904,
-      "mld_rmse": 38.76156173584728,
+      "drhodz_rmse": 0.0066149762434343125,
+      "mld_rmse": 38.60147792411599,
       "n2_tol_sweep_level": {
-        "0": 0.009377563759586231,
-        "1e-09": 0.009360620652755483,
-        "1e-08": 0.00919832352416622,
-        "1e-07": 0.008418940609951846
+        "0": 0.009382914214374889,
+        "1e-09": 0.009365079365079364,
+        "1e-08": 0.009210807918673087,
+        "1e-07": 0.008421615837346174
       },
-      "exclude_top15m_level": 0.0074088062191168605
+      "exclude_top15m_level": 0.007423193996699803
     },
     "C_density_spice_pca": {
       "name": "C_density_spice_pca",
-      "violation_rate_profile": 0.7271268057784912,
-      "violation_rate_level": 0.00891920813269128,
+      "violation_rate_profile": 0.7255216693418941,
+      "violation_rate_level": 0.008918316390226503,
       "violation_rate_level_n2_tol0": 0.009001248439450686,
       "sigma0_violation_rate_profile": 0.7784911717495987,
       "sigma0_violation_rate_level": 0.009448903156768326,
       "ts_rmse": {
         "T": {
-          "0-50": 0.18129283881941316,
-          "50-200": 0.19661425368889499,
-          "200-800": 0.09980128319954262,
-          ">800": 0.015306029605091942
+          "0-50": 0.18129273294294962,
+          "50-200": 0.19661419975954061,
+          "200-800": 0.09980129751781557,
+          ">800": 0.015306033876390039
         },
         "S": {
-          "0-50": 0.11464896166586577,
-          "50-200": 0.0567561065177265,
-          "200-800": 0.017421110047503695,
-          ">800": 0.0010621210282100362
+          "0-50": 0.11464906203576875,
+          "50-200": 0.056756116734951435,
+          "200-800": 0.017421113076770734,
+          ">800": 0.0010621194097520826
         }
       },
-      "drhodz_rmse": 0.006787280337316527,
-      "mld_rmse": 39.435575336119435,
+      "drhodz_rmse": 0.006787282018401979,
+      "mld_rmse": 39.43557239182058,
       "n2_tol_sweep_level": {
         "0": 0.009001248439450686,
         "1e-09": 0.008995006242197253,
-        "1e-08": 0.00891920813269128,
+        "1e-08": 0.008918316390226503,
         "1e-07": 0.008624933119315142
       },
-      "exclude_top15m_level": 0.006871063031954355,
+      "exclude_top15m_level": 0.0068719622680532885,
       "newton_fail_rate": 0.0
     },
     "D_monotone_density": {
@@ -107,23 +107,23 @@
       "violation_rate_level": 0.0022302479044052077,
       "violation_rate_level_n2_tol0": 0.003542892812555734,
       "sigma0_violation_rate_profile": 0.5585874799357945,
-      "sigma0_violation_rate_level": 0.0031540930979133226,
+      "sigma0_violation_rate_level": 0.003160335295166756,
       "ts_rmse": {
         "T": {
-          "0-50": 0.1528057228970913,
-          "50-200": 0.15596772713726495,
-          "200-800": 0.08751623969889018,
-          ">800": 0.015725050626260922
+          "0-50": 0.1528056528193798,
+          "50-200": 0.155967718895857,
+          "200-800": 0.08751625410555157,
+          ">800": 0.0157250528423518
         },
         "S": {
-          "0-50": 0.06614444358002845,
-          "50-200": 0.05581621215486965,
-          "200-800": 0.021010364240471344,
-          ">800": 0.0015779155108040126
+          "0-50": 0.06614440971046177,
+          "50-200": 0.0558162114811331,
+          "200-800": 0.021010366619419255,
+          ">800": 0.001577914666270758
         }
       },
-      "drhodz_rmse": 0.0032066327746587135,
-      "mld_rmse": 1.3430640113604702,
+      "drhodz_rmse": 0.003206632774659611,
+      "mld_rmse": 1.3430640113427939,
       "n2_tol_sweep_level": {
         "0": 0.003542892812555734,
         "1e-09": 0.003305689316925272,
@@ -133,6 +133,40 @@
       "exclude_top15m_level": 0.001620423450278988,
       "newton_fail_rate": 0.0,
       "pre_inversion_dsigma0_neg_count": 11
+    },
+    "E_softplus_phase3": {
+      "name": "E_softplus_phase3",
+      "violation_rate_profile": 0.3290529695024077,
+      "violation_rate_level": 0.0012225789192081328,
+      "violation_rate_level_n2_tol0": 0.0017852684144818976,
+      "sigma0_violation_rate_profile": 0.49759229534510435,
+      "sigma0_violation_rate_level": 0.0013822008204030676,
+      "ts_rmse": {
+        "T": {
+          "0-50": 0.15283060560972417,
+          "50-200": 0.1562896837061367,
+          "200-800": 0.0886417701953622,
+          ">800": 0.026423651633857147
+        },
+        "S": {
+          "0-50": 0.06619787805871417,
+          "50-200": 0.05586447274486499,
+          "200-800": 0.021343373201617576,
+          ">800": 0.0039440089803599995
+        }
+      },
+      "drhodz_rmse": 0.003172509484626985,
+      "mld_rmse": 1.578228755157666,
+      "n2_tol_sweep_level": {
+        "0": 0.0017852684144818976,
+        "1e-09": 0.0016809345461030855,
+        "1e-08": 0.0012225789192081328,
+        "1e-07": 0.0001926163723916533
+      },
+      "exclude_top15m_level": 0.000990058944926285,
+      "newton_fail_rate": 0.0,
+      "pre_inversion_dsigma0_neg_count": 0,
+      "phase3_t_rmse_vs_A_pass": false
     }
   },
   "reconciliation": {
@@ -152,9 +186,9 @@
     },
     "historical_B_joint_eof": {
       "tol_kgm3": 0.01,
-      "violation_rate_profile": 0.22632423756019263,
-      "violation_rate_interface": 0.0008016764758337793,
-      "n_violations": 899,
+      "violation_rate_profile": 0.22953451043338685,
+      "violation_rate_interface": 0.0008070269306224363,
+      "n_violations": 905,
       "method": "gsw_torch.sigma0_inversion"
     },
     "historical_C_density_spice": {
@@ -171,9 +205,16 @@
       "n_violations": 3,
       "method": "gsw_torch.sigma0_inversion"
     },
+    "historical_E_softplus_phase3": {
+      "tol_kgm3": 0.01,
+      "violation_rate_profile": 0.0,
+      "violation_rate_interface": 0.0,
+      "n_violations": 0,
+      "method": "gsw_torch.sigma0_inversion"
+    },
     "notes": {
       "a_profile_vs_level": "N\u00b2 profile rate \u226b level rate because violations are sparse per profile (A profile=0.7657, level=0.0091)",
-      "b_n2_tol0_vs_1e8": "A level N\u00b2 at tol=0: 0.009157; at 1e-8: 0.009116",
+      "b_n2_tol0_vs_1e8": "A level N\u00b2 at tol=0: 0.009156; at 1e-8: 0.009116",
       "d_method": "Historical Finding-1 used readiness \u03c3\u2080 \u0394\u03c3\u2080<-0.01 profile rate (~1.12% raw \u2192 ~21.8% PCA-16), not N\u00b2 level rate.",
       "mechanism_update": "B (joint EOF) does not cut historical \u03c3\u2080 profile rate vs A \u2014 the load-bearing mechanism is truncation itself, not separateness of T/S bases. Soft representation changes do not buy stability; only the hard monotone constraint (D) does.",
       "f_backend": "headline backend=gsw (reference gsw)"
@@ -188,6 +229,7 @@
     "ESCALATE: B_joint_eof \u2248 A \u2014 violations may not be basis-induced under N\u00b2 level metric",
     "ESCALATE: C_density_spice_pca \u2248 A \u2014 violations may not be basis-induced under N\u00b2 level metric",
     "D monotone: N\u00b2 level=0.0022 (\u03c3\u2080 level=0.0032; pre-inv \u0394\u03c3\u2080<0 count=11); vs A N\u00b2 level=0.0091 (4.1\u00d7)",
-    "GATE: B/C did not meet \u22655\u00d7 level-violation cut under N\u00b2 \u2014 Finding-1 still holds under historical \u03c3\u2080 profile metric (see Reconciliation)."
+    "GATE: B/C did not meet \u22655\u00d7 level-violation cut under N\u00b2 \u2014 Finding-1 still holds under historical \u03c3\u2080 profile metric (see Reconciliation).",
+    "Phase3 softplus E vs A T-RMSE: T[0-50] E/A=0.755, T[50-200] E/A=0.702, T[200-800] E/A=0.832, T[>800] E/A=1.629; FAIL >10% in \u22651 band"
   ]
 }

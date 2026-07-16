@@ -1,53 +1,48 @@
 # Session handoff — dissertation data foundation
 
-**Branch to use:** `audit/phase0-1` @ `7901d1b` (tagged `evalphys-v1.1.0`)  
-**`residual_cube`:** still @ `820e598` — **merge `audit/phase0-1` before Phase 3** (merge was interrupted 2026-07-16).  
+**Branch:** `residual_cube`  
 **Updated:** 2026-07-16  
-**Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)
-
-**Full session record:** [`HANDOFF-2026-07-16-v2-recovery-audit.md`](HANDOFF-2026-07-16-v2-recovery-audit.md)
+**Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)  
+**Conda:** `nespreso`
 
 ---
 
-## v2 recovery — Phase 0/1 audited; R1 accepted
+## STOP — Phase 4 still blocked
 
-Plan: [`PLAN-v2-recovery.md`](PLAN-v2-recovery.md) (see Changelog).  
-Audit: [`reports/audit_phase0_1.md`](reports/audit_phase0_1.md).  
-Phase 1: [`reports/phase1_decisive_tests.md`](reports/phase1_decisive_tests.md).
+Phase 3 acceptance **did not fully clear**. Do **not** start Phase 4 until the deep-band RMSE cost is addressed (or the gate is explicitly waived).
 
 | Gate | Result |
 |------|--------|
-| Finding-1 (σ₀ profile tol=0.01) | Confirmed: RAW **1.12%** → A **21.51%** |
-| B / C under same ruler | **22.63% / 21.83%** — joint EOF does **not** help |
-| D monotone | **0.48%** — only material cut |
-| T1 N² ≥5× for B/C | Not met → escalate → **R1: Phase 3.2** |
-| T2 stale | **OPEN**; Phase **2.1 satisfied** (SSS re-downloaded 2026-07-03) |
-
-**Dissertation claim:** mechanism is **truncation**, not T/S separateness. Soft bases fail; hard σ₀ constraint succeeds. Residual post-inversion violations (~0.3–0.5%) ⇒ track **inversion fidelity** in Phase 3.
-
-**gsw_torch JOSS table:** [`reports/backend_equivalence.md`](reports/backend_equivalence.md) (σ₀ max|Δ|≈9e-5; 14 N² flips @1e-8). Headline = reference `gsw`.
-
-**R4:** `combined_pca_loss_v2` golden drift — skip with reason; **Phase 5 prerequisite**, not blocking Phase 3.
+| Round-trip (500 test, ref `gsw`) | **PASS** — max\|ΔT\|≈3e-14, max\|ΔS\|≈7e-15, Newton fail=0 ([`reports/phase3_roundtrip.json`](reports/phase3_roundtrip.json)) |
+| Truth-projection softplus E vs A T-RMSE ≤10%/band | **FAIL** — T\[>800\] E/A=**1.629** (0.026 vs 0.016 °C). Other bands PASS (0.76 / 0.70 / 0.83). See [`reports/t1_basis_stability.md`](reports/t1_basis_stability.md) row `E_softplus_phase3` |
+| Full HDF5 contaminated by error schema | **NO** — `satellite_NeSPReSO_v2_ARGO_GoM.h5` still value-only (`sos`/`analysed_sst`/`adt`) |
+| Batch-schema resume guard | **Landed** + regression green (`utils/test_batch_schema_guard.py`) |
+| selfcheck (phase-boundary) | **Green** + documented R4 golden skip |
 
 ---
 
-## Next (strict order)
+## Done this close-out
 
-1. **Merge** `audit/phase0-1` → `residual_cube` and push (clear `.git/*.lock` if needed).
-2. **Phase 3** (monotone density + spice + inversion-fidelity metrics) **∥ Phase 2.2** (error channels). Skip redoing 2.1.
-3. Do **not** start Phase 5 ablation until R4 golden is root-caused.
+1. Commits pushed earlier: `644d9dc` feat(data) v3 errors; `500e635` feat(repr) density+spice.
+2. Merge completeness: B/C historical σ₀ rows + F.3 max-abs/RMS table present (no restore needed).
+3. Batch-schema guard: refuses resume when error vars missing — *"Regenerate from scratch or use v2 config."*
+4. Full density_spice cache: `data/cache/train_ready_cd9e08b6c630.pkl` (N=4145).
+5. `λ_ρ`/`λ_τ` frozen in `config/argo/config_argo_densityspice.json` (`8e-06` / `0.008256`).
+6. T1 table extended with **E_softplus_phase3** (price of hard stability via Phase 3.2+3.3 path).
+
+---
+
+## Next (before Phase 4)
+
+1. Diagnose T\[>800\] softplus projection RMSE (control-grid spacing / PCHIP clamp at deep end / spice PCA).
+2. Re-run T1 E after fix; require E/A ≤ 1.10 for **all** T depth bands.
+3. Then Phase 4 is unblocked.
+
+**R4 golden:** still Phase 5 prerequisite only.
 
 ```bash
-rm -f .git/packed-refs.lock .git/index.lock
-git checkout residual_cube
-git merge --no-ff audit/phase0-1 -m "merge(audit): Phase 0/1 audit (evalphys-v1.1.0, R1)"
-git push origin residual_cube
+cd NeSPReSO2_onTemplate
+srun --ntasks=1 --cpus-per-task=8 conda run -n nespreso python scripts/phase3_roundtrip.py --cache ../data/cache/train_ready_cd9e08b6c630.pkl
+srun --ntasks=1 --cpus-per-task=8 conda run -n nespreso python scripts/t1_basis_stability.py --gsw-backend gsw --out-md ../reports/t1_basis_stability.md
+cd ../utils && srun --ntasks=1 --cpus-per-task=8 conda run -n nespreso python test_batch_schema_guard.py
 ```
-
----
-
-## Older context (still true)
-
-**Read also:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md).  
-**Close-out (2026-07-15):** [`HANDOFF-2026-07-15-agentic-close-out.md`](HANDOFF-2026-07-15-agentic-close-out.md) — "nature's 24.7%" was PCA-16 target; Phase 8 CLOSED.  
-**Conda:** `nespreso`.

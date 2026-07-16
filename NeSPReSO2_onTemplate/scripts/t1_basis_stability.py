@@ -97,6 +97,34 @@ def _reconstruct_density_spice(T, S, depth, lat, lon, *, sm, ss, tm, ts, pca_sig
     return T_hat, S_hat, float(1.0 - ok.mean())
 
 
+def _reconstruct_softplus_density(T, S, depth, lat, lon, *, tm, ts, pca_tau, z_ctrl, dz_tilde):
+    """Phase 3.2+3.3 truth projection: softplus ctrl encode/decode + PCHIP + spice PCA."""
+    import torch
+    from model.density_spice import decode_sigma0_ctrl, encode_a_from_sigma0_ctrl, upsample_pchip
+
+    gsw = get_gsw()
+    sig, tau = _sigma0_spice(T, S, depth, lat, lon)
+    n_prof = T.shape[0]
+    sig_ctrl = np.empty((n_prof, z_ctrl.size), dtype=np.float64)
+    for i in range(n_prof):
+        ok = np.isfinite(sig[i]) & np.isfinite(depth)
+        if ok.sum() < 2:
+            sig_ctrl[i] = np.nan
+            continue
+        sig_ctrl[i] = np.interp(z_ctrl, depth[ok], sig[i, ok])
+    a = encode_a_from_sigma0_ctrl(sig_ctrl, dz_tilde)
+    with torch.no_grad():
+        sig_hat_c = decode_sigma0_ctrl(torch.from_numpy(a), torch.from_numpy(dz_tilde)).numpy()
+    sig_hat = upsample_pchip(sig_hat_c, z_ctrl, depth)
+    tau_hat = pca_tau.inverse_transform(pca_tau.transform(_level_zscore(tau, tm, ts))) * ts + tm
+    n_lev = T.shape[1]
+    p = gsw.p_from_z(-np.broadcast_to(depth, (n_prof, n_lev)), lat[:, None])
+    T_hat, S_hat, ok = ts_from_sigma0_spice(sig_hat, tau_hat, p, lon[:, None], lat[:, None])
+    dsig = np.diff(sig_hat, axis=1)
+    pre_n = int((dsig < -1e-12).sum())
+    return T_hat, S_hat, float(1.0 - ok.mean()), pre_n, sig_hat
+
+
 def _control_grid(depth: np.ndarray, K: int = 64) -> np.ndarray:
     z_max = float(np.nanmax(depth))
     z0 = max(float(depth[1]) if depth.size > 1 else 1.0, 1.0)
@@ -215,8 +243,16 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
     )
 
     z_ctrl = _control_grid(depth)
+    from model.density_spice import make_control_grid, normalized_dz
+
+    z_ctrl_p3 = make_control_grid(depth, K=64)
+    dz_tilde = normalized_dz(z_ctrl_p3)
     T_d, S_d, d_fail, d_pre_dsig_viol, sig_hat_d = _reconstruct_monotone_density(
         T_te, S_te, depth, lat_te, lon_te, tm=tm, ts=ts, pca_tau=pca_tau, z_ctrl=z_ctrl
+    )
+    T_e, S_e, e_fail, e_pre_dsig_viol, _ = _reconstruct_softplus_density(
+        T_te, S_te, depth, lat_te, lon_te,
+        tm=tm, ts=ts, pca_tau=pca_tau, z_ctrl=z_ctrl_p3, dz_tilde=dz_tilde,
     )
 
     results = {
@@ -231,6 +267,11 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
             newton_fail_rate=d_fail,
             pre_inversion_dsigma0_neg_count=d_pre_dsig_viol,
         ),
+        "E_softplus_phase3": _variant_metrics(
+            "E_softplus_phase3", T_e, S_e, T_te, S_te, depth, lat_te, lon_te,
+            newton_fail_rate=e_fail,
+            pre_inversion_dsigma0_neg_count=e_pre_dsig_viol,
+        ),
     }
 
     # Reconciliation vs historical Finding-1 (σ₀ profile rate, tol=0.01) — all variants
@@ -240,6 +281,7 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
         "historical_B_joint_eof": _historical_sigma0_profile_rate(T_b, S_b, depth, lat_te, lon_te),
         "historical_C_density_spice": _historical_sigma0_profile_rate(T_c, S_c, depth, lat_te, lon_te),
         "historical_D": _historical_sigma0_profile_rate(T_d, S_d, depth, lat_te, lon_te),
+        "historical_E_softplus_phase3": _historical_sigma0_profile_rate(T_e, S_e, depth, lat_te, lon_te),
         "notes": {
             "a_profile_vs_level": (
                 "N² profile rate ≫ level rate because violations are sparse per profile "
@@ -298,6 +340,25 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
             "GATE: B/C did not meet ≥5× level-violation cut under N² — "
             "Finding-1 still holds under historical σ₀ profile metric (see Reconciliation)."
         )
+
+    # Phase 3 acceptance: softplus path RMSE cost vs A (≤10% T per depth band)
+    e = results["E_softplus_phase3"]
+    a_ts = results["A_separate_pca"]["ts_rmse"]["T"]
+    e_ts = e["ts_rmse"]["T"]
+    cost_ok = True
+    cost_notes = []
+    for band, a_rmse in a_ts.items():
+        e_rmse = e_ts[band]
+        ratio = e_rmse / max(a_rmse, 1e-12)
+        cost_notes.append(f"T[{band}] E/A={ratio:.3f}")
+        if ratio > 1.10:
+            cost_ok = False
+    decisions.append(
+        "Phase3 softplus E vs A T-RMSE: "
+        + (", ".join(cost_notes))
+        + ("; PASS ≤10%" if cost_ok else "; FAIL >10% in ≥1 band")
+    )
+    results["E_softplus_phase3"]["phase3_t_rmse_vs_A_pass"] = cost_ok
 
     return {
         "cache": str(cache_path),
@@ -360,6 +421,7 @@ def _to_md(data: dict) -> str:
         f"| B joint EOF-32 | {rec['historical_B_joint_eof']['violation_rate_profile']:.4f} | {rec['historical_B_joint_eof']['violation_rate_interface']:.6f} |",
         f"| C density+spice | {rec['historical_C_density_spice']['violation_rate_profile']:.4f} | {rec['historical_C_density_spice']['violation_rate_interface']:.6f} |",
         f"| D monotone | {rec['historical_D']['violation_rate_profile']:.4f} | {rec['historical_D']['violation_rate_interface']:.6f} |",
+        f"| E softplus Phase-3 | {rec['historical_E_softplus_phase3']['violation_rate_profile']:.4f} | {rec['historical_E_softplus_phase3']['violation_rate_interface']:.6f} |",
         "",
     ]
     for k, v in rec["notes"].items():

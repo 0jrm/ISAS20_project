@@ -1,0 +1,13 @@
+{
+  "n_profiles": 500,
+  "gsw_backend": "gsw",
+  "max_abs_dT": 2.842170943040401e-14,
+  "max_abs_dS": 7.105427357601002e-15,
+  "newton_fail_rate": 0.0,
+  "pass": true,
+  "thresholds": {
+    "max_abs_dT": 0.01,
+    "max_abs_dS": 0.01,
+    "newton_fail_rate": 0.001
+  }
+}

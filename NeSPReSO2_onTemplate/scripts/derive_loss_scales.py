@@ -35,6 +35,9 @@ def derive_from_cache(cache_path: str | Path, *, device: torch.device | None = N
     with open(cache_path, "rb") as f:
         cache = pickle.load(f)
 
+    if cache.get("representation") == "density_spice" or "density_spice_meta" in cache:
+        return _derive_density_spice(cache, device=device)
+
     targets = torch.tensor(cache["targets"], dtype=torch.float32, device=device)
     zeros = torch.zeros_like(targets)
     pca = PCALoss(cache["pca_models"], cache["outputs"], device=device)
@@ -68,6 +71,46 @@ def derive_from_cache(cache_path: str | Path, *, device: torch.device | None = N
     }
 
 
+def _derive_density_spice(cache: dict, *, device: torch.device) -> dict:
+    """Equalize DensitySpiceLoss terms at zero-a / zero-spice-PC prediction."""
+    from model.loss import DensitySpiceLoss
+
+    meta = cache["density_spice_meta"]
+    targets = torch.tensor(cache["targets"], dtype=torch.float32, device=device)
+    zeros = torch.zeros_like(targets)
+    loss = DensitySpiceLoss(
+        cache["outputs"],
+        meta["dz_tilde"],
+        device,
+        lambda_rho=1.0,
+        lambda_tau=1.0,
+        sigma0_mean=meta["sigma0_ctrl_mean"],
+        sigma0_std=meta["sigma0_ctrl_std"],
+    )
+    with torch.no_grad():
+        # isolate terms
+        k = int(cache["outputs"]["density_ctrl"])
+        a0 = zeros[:, :k]
+        z0 = zeros[:, k:]
+        from model.density_spice import decode_sigma0_ctrl
+
+        sig_hat = decode_sigma0_ctrl(a0, loss.dz_tilde)
+        sig_hat = (sig_hat - loss.sigma0_mean) / loss.sigma0_std
+        mse_rho = float(torch.mean((sig_hat - targets[:, :k]) ** 2).item())
+        mse_tau = float(torch.mean((z0 - targets[:, k:]) ** 2).item())
+    lambda_rho = 1.0 / max(mse_rho, 1e-12)
+    lambda_tau = 1.0 / max(mse_tau, 1e-12)
+    return {
+        "dataset_tag": cache.get("dataset_tag"),
+        "outputs": dict(cache["outputs"]),
+        "representation": "density_spice",
+        "lambda_rho": round(lambda_rho, 6),
+        "lambda_tau": round(lambda_tau, 6),
+        "init_mse_rho": round(mse_rho, 6),
+        "init_mse_tau": round(mse_tau, 6),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Derive loss_scales from a config or cache pickle")
     parser.add_argument("-c", "--config", default=None, help="Config JSON (builds/locates cache via ensure_cache)")
@@ -94,16 +137,21 @@ def main() -> int:
             cache_path = ROOT / cache_path
 
     scales = derive_from_cache(cache_path)
-    if args.round != 4:
-        scales["profile_scales"] = {k: round(v, args.round) for k, v in scales["profile_scales"].items()}
-        scales["combined_pca_scale"] = round(scales["combined_pca_scale"], args.round)
-        scales["combined_mse_scale"] = round(scales["combined_mse_scale"], args.round)
-
-    loss_scales = {
-        "profile_scales": scales["profile_scales"],
-        "combined_pca_scale": scales["combined_pca_scale"],
-        "combined_mse_scale": scales["combined_mse_scale"],
-    }
+    if scales.get("representation") == "density_spice":
+        loss_scales = {
+            "lambda_rho": scales["lambda_rho"],
+            "lambda_tau": scales["lambda_tau"],
+        }
+    else:
+        if args.round != 4:
+            scales["profile_scales"] = {k: round(v, args.round) for k, v in scales["profile_scales"].items()}
+            scales["combined_pca_scale"] = round(scales["combined_pca_scale"], args.round)
+            scales["combined_mse_scale"] = round(scales["combined_mse_scale"], args.round)
+        loss_scales = {
+            "profile_scales": scales["profile_scales"],
+            "combined_pca_scale": scales["combined_pca_scale"],
+            "combined_mse_scale": scales["combined_mse_scale"],
+        }
     print(json.dumps({"cache": str(cache_path), **scales}, indent=2))
 
     if args.update_config and config_path is not None:

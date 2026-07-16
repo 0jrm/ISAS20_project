@@ -190,6 +190,35 @@ def list_batch_files(batch_dir: str, batch_size: int) -> list[str]:
     return sorted(glob.glob(pattern))
 
 
+def assert_batch_dir_matches_products(
+    batch_dir: str,
+    batch_size: int,
+    products: dict[str, list[str]],
+) -> None:
+    """Refuse resume when on-disk batches lack datasets required by ``products``.
+
+    Typical failure: v3 ``error_groups`` against a v2-era batch directory.
+    """
+    files = list_batch_files(batch_dir, batch_size)
+    if not files:
+        return
+    missing: list[str] = []
+    with h5py.File(files[0], "r") as f:
+        for prod, vars_ in products.items():
+            if prod not in f:
+                missing.append(f"{prod}/")
+                continue
+            for var in vars_:
+                if var not in f[prod]:
+                    missing.append(f"{prod}/{var}")
+    if missing:
+        raise RuntimeError(
+            "Batch directory schema mismatch "
+            f"(missing {missing} in {files[0]}). "
+            "Regenerate from scratch or use v2 config."
+        )
+
+
 def combine_argo_batches(
     batch_files: list[str],
     output_path: str,
@@ -313,6 +342,9 @@ def generate_argo_satellite_h5(
             os.remove(mp)
         if os.path.isfile(output_path):
             os.remove(output_path)
+    elif resume and not combine_only:
+        # ponytail: ceiling = first-batch-only check; upgrade to all batches if mixed schemas appear
+        assert_batch_dir_matches_products(batch_dir, batch_size, products)
 
     lat, lon, juld = _load_argo_stations(io_cfg["v2_pickle"], io_cfg.get("v2_src"))
     n = len(lat)
