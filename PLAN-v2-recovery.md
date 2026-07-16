@@ -4,6 +4,13 @@
 **Audience:** AI coding agent (Claude Code / Cursor) working in this repo. Read `CLAUDE.md`, `AGENTS.md`, `HANDOFF.md` first. Ponytail mode applies (`.cursor/rules/ponytail.mdc`): simplest thing that works, one runnable check per non-trivial unit. Numerical rules apply (`.cursor/skills/nespreso-numerical/SKILL.md`): explicit tolerances, seeds, no exact float equality.
 **Environment:** conda env `nespreso`; GPU jobs via `srun --ntasks=1 --cpus-per-task=8 --gres=gpu:1`; CPU jobs drop `--gres`.
 
+## Changelog
+
+| Date | Change | Why |
+|------|--------|-----|
+| 2026-07-16 | §3.2 / §0.1: hard constraint guarantees **σ₀ monotonicity**; residual **N²** violations are expected to be small and must be **reported**, not assumed zero. Additive `sigma0_monotonicity_violations` in evalphys v1.1.0. | Audit C.2: monotone σ₀ control-grid + PCHIP does not imply N²≡0 after (σ₀,τ)→(T,S) inversion (locally referenced N²). |
+| 2026-07-16 | Headline metrics always use reference `gsw` via `evalphys.gsw_backend.get_gsw()`; `io.gsw_backend` / `--gsw-backend` select training / equivalence only. | Audit F: `diagnostics/readiness.py` aliases `gsw_torch as gsw`; evalphys must not silently substitute. |
+
 ---
 
 ## 0. Context and rationale (read once, do not skip)
@@ -185,7 +192,9 @@ Depth control grid: `K = 64` levels, log-spaced in depth over [0, z_max] (denser
 σ̂₀(z_1)     = a_1                                  (unconstrained surface value, standardized units)
 σ̂₀(z_k)     = σ̂₀(z_1) + Σ_{j=2..k} softplus(a_j) · Δz̃_j     for k = 2..K
 ```
-`Δz̃_j` = control-grid spacing normalized to mean 1 (keeps softplus outputs O(1)). Because `softplus > 0`, σ̂₀ is strictly increasing on the control grid ⇒ **zero static-stability violations by construction**. Upsample control grid → native 1801 levels with **PCHIP** (`scipy.interpolate.PchipInterpolator`; monotone data ⇒ monotone interpolant, so the guarantee survives upsampling — add a test asserting this on 1000 random draws). Torch-side, implement linear interpolation for the training loss (monotonicity also preserved by linear interp) and reserve PCHIP for eval/export.
+`Δz̃_j` = control-grid spacing normalized to mean 1 (keeps softplus outputs O(1)). Because `softplus > 0`, σ̂₀ is strictly increasing on the control grid ⇒ **zero σ₀-space inversions by construction** (see `evalphys.sigma0_monotonicity_violations`). Upsample control grid → native 1801 levels with **PCHIP** (`scipy.interpolate.PchipInterpolator`; monotone data ⇒ monotone interpolant, so the σ₀ guarantee survives upsampling — add a test asserting this on 1000 random draws). Torch-side, implement linear interpolation for the training loss (monotonicity also preserved by linear interp) and reserve PCHIP for eval/export.
+
+**σ₀ vs N² (audit 2026-07-16):** The hard constraint guarantees **σ₀ monotonicity** (depth-increasing σ₀). The Phase-0 headline physical metric remains **N²** (`gsw.Nsquared`, §0.1). Residual N² violations after inversion / on the native grid are expected to be small and must be **reported**, not assumed zero — N² uses a locally referenced density gradient and (σ₀,τ)→(T,S) inversion is not an exact isometry. Report both metrics; do not delete or alter the N² metric.
 
 Note: strict monotonicity is marginally stronger than the physical requirement (neutral layers allowed). Acceptable: softplus output can be arbitrarily close to 0. Do not add an ε relaxation.
 
