@@ -22,6 +22,7 @@ DEFAULT_COMBINED_MSE_SCALE = 0.0255
 OUTPUT_H5_VARS = {"temperature": "TEMP", "salinity": "PSAL"}
 
 VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice")
+VALID_PROB_MODES = ("mse", "crps", "nll", "quantile")
 
 
 def output_slices(outputs: Mapping[str, int]) -> list[tuple[str, int, int]]:
@@ -669,6 +670,98 @@ class DensitySpiceLoss(nn.Module):
         return self.lambda_rho * loss_rho + self.lambda_tau * loss_tau
 
 
+class DensitySpiceProbLoss(DensitySpiceLoss):
+    """Phase 4: CRPS / β-NLL / quantile / MSE on standardized (σ₀_ctrl, spice PCs)."""
+
+    def __init__(
+        self,
+        outputs,
+        dz_tilde,
+        device,
+        *,
+        lambda_rho: float = 1.0,
+        lambda_tau: float = 1.0,
+        sigma0_mean: np.ndarray | None = None,
+        sigma0_std: np.ndarray | None = None,
+        prob_mode: str = "crps",
+        nll_beta: float = 0.5,
+        sigma_min: float = 1e-3,
+        freeze_sigma: bool = False,
+        target_err: torch.Tensor | None = None,
+    ):
+        super().__init__(
+            outputs,
+            dz_tilde,
+            device,
+            lambda_rho=lambda_rho,
+            lambda_tau=lambda_tau,
+            sigma0_mean=sigma0_mean,
+            sigma0_std=sigma0_std,
+        )
+        if prob_mode not in VALID_PROB_MODES:
+            raise ValueError(f"prob_mode must be one of {VALID_PROB_MODES}, got {prob_mode!r}")
+        self.prob_mode = prob_mode
+        self.nll_beta = float(nll_beta)
+        self.sigma_min = float(sigma_min)
+        self.freeze_sigma = bool(freeze_sigma)
+        self.d = self.k + self.n_spice
+        if target_err is not None:
+            self.register_buffer("target_err", torch.as_tensor(target_err, dtype=torch.float32, device=device))
+        else:
+            self.target_err = None
+
+    def _mu_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
+        from model.density_spice import decode_sigma0_ctrl
+
+        a = mu_raw[:, : self.k]
+        z_tau = mu_raw[:, self.k : self.k + self.n_spice]
+        sig_hat = decode_sigma0_ctrl(a, self.dz_tilde)
+        if self.sigma0_mean is not None:
+            sig_hat = (sig_hat - self.sigma0_mean) / self.sigma0_std
+        return torch.cat([sig_hat, z_tau], dim=-1)
+
+    def _sigma_tot(self, sigma: torch.Tensor, indices=None) -> torch.Tensor:
+        """Phase 4.7: σ_tot² = σ_pred² + σ_target² when target_err buffer present."""
+        if self.target_err is None or indices is None:
+            return sigma
+        te = self.target_err[indices]
+        return torch.sqrt(sigma * sigma + te * te)
+
+    def forward(self, output, target, indices=None, inputs=None):
+        from evalphys.calibration import gaussian_crps_torch
+        from model.prob_head import QUANTILE_TAUS, beta_nll, pinball_loss, split_mu_sigma
+
+        if self.prob_mode == "mse" or self.freeze_sigma:
+            # Stage 1 / deterministic: first D cols are μ raw (a || z_τ)
+            mu_raw = output[:, : self.d] if output.shape[-1] >= self.d else output
+            mu = self._mu_from_raw(mu_raw)
+            loss_rho = torch.mean((mu[:, : self.k] - target[:, : self.k]) ** 2)
+            loss_tau = torch.mean((mu[:, self.k :] - target[:, self.k :]) ** 2)
+            return self.lambda_rho * loss_rho + self.lambda_tau * loss_tau
+
+        if self.prob_mode == "quantile":
+            q = output.view(output.size(0), self.d, -1)
+            # density: replace first K of each quantile with decoded-from-a? ponytail:
+            # quantiles are predicted directly in target space (standardized σ₀ + spice).
+            # For density block the raw head is not softplus-a; quantile mode drops hard
+            # constraint during training (eval still uses a CRPS/NLL winner). Documented.
+            return pinball_loss(q, target, QUANTILE_TAUS)
+
+        mu_raw, sigma = split_mu_sigma(output, self.d)
+        mu = self._mu_from_raw(mu_raw)
+        sigma = self._sigma_tot(sigma, indices)
+        if self.prob_mode == "crps":
+            crps = gaussian_crps_torch(mu, sigma, target, sigma_min=self.sigma_min)
+            # weight density vs spice blocks like deterministic λ
+            w = torch.ones_like(crps)
+            w[:, : self.k] = self.lambda_rho
+            w[:, self.k :] = self.lambda_tau
+            return torch.mean(w * crps)
+        # nll
+        nll = beta_nll(mu, sigma, target, beta=self.nll_beta, sigma_min=self.sigma_min)
+        return nll
+
+
 def make_loss(
     *,
     pca_models,
@@ -702,6 +795,22 @@ def make_loss(
         meta = density_spice_meta or {}
         if "dz_tilde" not in meta:
             raise ValueError("density_spice mode requires density_spice_meta['dz_tilde'] from cache")
+        prob_mode = cfg.get("prob_mode")
+        if prob_mode:
+            return DensitySpiceProbLoss(
+                outputs=outputs,
+                dz_tilde=meta["dz_tilde"],
+                device=device,
+                lambda_rho=float(scales.get("lambda_rho", 1.0)),
+                lambda_tau=float(scales.get("lambda_tau", 1.0)),
+                sigma0_mean=meta.get("sigma0_ctrl_mean"),
+                sigma0_std=meta.get("sigma0_ctrl_std"),
+                prob_mode=str(prob_mode),
+                nll_beta=float(cfg.get("nll_beta", 0.5)),
+                sigma_min=float(cfg.get("sigma_min", 1e-3)),
+                freeze_sigma=bool(cfg.get("freeze_sigma", False)),
+                target_err=kwargs.get("target_err"),
+            )
         return DensitySpiceLoss(
             outputs=outputs,
             dz_tilde=meta["dz_tilde"],

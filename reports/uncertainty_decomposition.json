@@ -1,0 +1,10 @@
+{
+  "m": 20,
+  "alpha": 1.0,
+  "n_profiles": 32,
+  "fraction_input_driven": 4.797808743177423e-14,
+  "mean_total_var": 2.4098212718963623,
+  "mean_model_var": 2.4098212718963623,
+  "mean_input_var": 1.1290903108307493e-13,
+  "note": "Formal product errors are relative indicators; \u03b1 scales them (PLAN caveat)."
+}

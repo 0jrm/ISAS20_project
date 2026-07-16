@@ -74,6 +74,8 @@ def ensure_cache(config):
     if pinned:
         cache_path = pinned
     config.config["data_loader"]["args"]["cache_path"] = cache_path
+    if io_cfg.get("use_error_channels"):
+        config.config["data_loader"]["args"]["use_error_channels"] = True
 
     from preproc.l3_input import sync_arch_with_io, verify_l3_cache_layout
 
@@ -211,6 +213,10 @@ def main(config):
     if hasattr(model, "set_freeze_base") and arch_args.get("freeze_base"):
         model.set_freeze_base(True)
         logger.info("Residual base encoder frozen (freeze_base=true)")
+    loss_cfg = config.config.get("loss_config") or {}
+    if hasattr(model, "set_sigma_trainable") and loss_cfg.get("freeze_sigma"):
+        # Keep σ params in the optimizer (resume-safe). Loss ignores σ when freeze_sigma.
+        logger.info("Phase 4 stage-1: σ ignored by loss (params stay in optimizer for stage-2 resume)")
     model = model.to(device)
     if performance.get("compile"):
         model = maybe_compile_model(model, True)

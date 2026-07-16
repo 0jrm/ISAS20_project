@@ -77,6 +77,14 @@ class NeSPReSODataLoader(DataLoader):
             weight_key = "weights"
 
         inputs = torch.tensor(self.cache["inputs"], dtype=torch.float32)
+        use_err = bool(kwargs.pop("use_error_channels", False))
+        if use_err and "inputs_err" in self.cache:
+            err = torch.tensor(self.cache["inputs_err"], dtype=torch.float32)
+            miss = self.cache.get("err_missing")
+            if miss is None:
+                miss = np.zeros_like(self.cache["inputs_err"], dtype=np.float32)
+            miss_t = torch.tensor(miss, dtype=torch.float32)
+            inputs = torch.cat([inputs, err, miss_t], dim=-1)
         targets = torch.tensor(self.cache[target_key], dtype=torch.float32)
         full_ds = NeSPReSODataset(inputs, targets)
 

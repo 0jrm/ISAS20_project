@@ -23,6 +23,9 @@ def validate_config(config):
     else:
         output_dim = arch_args["output_dim"]
         assert output_dim == sum(outputs.values()), "output_dim must equal sum(outputs.values())"
+    if arch_args.get("probabilistic"):
+        nq = int(arch_args.get("n_quantiles") or 0)
+        assert nq in (0, 9), "arch.args.n_quantiles must be 0 (hetero) or 9 (quantile)"
     assert int(config["io"]["spatial_pad"]) >= 0 and int(config["io"]["temporal_pad"]) >= 0
     density = config.get("density", {})
     if density.get("enabled"):
@@ -38,6 +41,19 @@ def validate_config(config):
     from model.loss import VALID_LOSS_MODES
 
     assert mode in VALID_LOSS_MODES, f"loss_config.mode must be one of {VALID_LOSS_MODES}, got {mode!r}"
+    if mode == "density_spice" and loss_cfg.get("prob_mode"):
+        from model.loss import VALID_PROB_MODES
+
+        assert loss_cfg["prob_mode"] in VALID_PROB_MODES, (
+            f"loss_config.prob_mode must be one of {VALID_PROB_MODES}"
+        )
+        if loss_cfg["prob_mode"] in ("crps", "nll"):
+            assert arch_args.get("probabilistic"), "crps/nll require arch.args.probabilistic=true"
+            assert not arch_args.get("n_quantiles"), "crps/nll require n_quantiles=0"
+        if loss_cfg["prob_mode"] == "quantile":
+            assert int(arch_args.get("n_quantiles") or 0) == 9, "quantile mode requires n_quantiles=9"
+        if loss_cfg.get("prob_mode") == "mse" and loss_cfg.get("freeze_sigma"):
+            assert arch_args.get("probabilistic"), "freeze_sigma stage-1 needs probabilistic arch"
     if mode == "decoder":
         assert loss_cfg.get("decoder_dir"), "decoder mode requires loss_config.decoder_dir"
     if mode == "density_spice" or config.get("io", {}).get("representation") == "density_spice":

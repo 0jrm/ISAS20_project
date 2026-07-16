@@ -1734,6 +1734,94 @@ def test_density_spice_monotone_and_roundtrip():
     assert np.nanmax(np.abs(S2 - S)) < 0.01
 
 
+def test_prob_head_hetero_and_quantile():
+    """Phase 4: heteroscedastic + noncrossing quantile forward shapes."""
+    torch.manual_seed(0)
+    m = PatchConvMLP(
+        input_dim=9,
+        output_dim=80,
+        dropout_prob=0.0,
+        d_model=32,
+        head_layers=[16],
+        probabilistic=True,
+        n_quantiles=0,
+        n_enc=6,
+        n_sat=3,
+    )
+    x = torch.randn(3, 9)
+    with torch.no_grad():
+        out = m(x)
+    assert out.shape == (3, 160)
+    assert (out[:, 80:] > 0).all()
+    m.set_sigma_trainable(False)
+    assert not any(p.requires_grad for p in m.sigma_out.parameters())
+    mq = PatchConvMLP(
+        input_dim=9,
+        output_dim=80,
+        dropout_prob=0.0,
+        d_model=32,
+        head_layers=[16],
+        probabilistic=True,
+        n_quantiles=9,
+        n_enc=6,
+        n_sat=3,
+    )
+    with torch.no_grad():
+        q = mq(x).view(3, 80, 9)
+    assert torch.all(q[:, :, 1:] >= q[:, :, :-1] - 1e-5)
+
+
+def test_dacov_psd_and_mc():
+    """Phase 4.4: spice Σ PSD + MC diagonal agreement."""
+    from sklearn.decomposition import PCA
+    from dacov import assert_psd, density_ctrl_covariance, mc_vs_diag_agreement, spice_covariance
+
+    rng = np.random.default_rng(1)
+    pca = PCA(n_components=8).fit(rng.normal(size=(100, 32)))
+    sz = np.abs(rng.normal(size=8)) + 0.2
+    cov = spice_covariance(sz, pca, np.ones(32))
+    assert_psd(cov)
+    ag = mc_vs_diag_agreement(sz, pca, np.ones(32), n_draw=2000, seed=1, rtol=0.15)
+    assert ag["pass"], ag
+    assert_psd(density_ctrl_covariance(np.ones(16) * 0.1, np.ones(16)))
+
+
+def test_density_spice_prob_loss_crps_backward():
+    """Phase 4.2: CRPS density_spice loss is finite and backprops."""
+    from model.loss import DensitySpiceProbLoss
+    from model.density_spice import make_control_grid, normalized_dz
+
+    depth = np.linspace(0, 2000, 201)
+    z = make_control_grid(depth, 64)
+    dz = normalized_dz(z)
+    loss = DensitySpiceProbLoss(
+        {"density_ctrl": 64, "spice": 16},
+        dz,
+        device=torch.device("cpu"),
+        lambda_rho=1.0,
+        lambda_tau=1.0,
+        sigma0_mean=np.zeros(64),
+        sigma0_std=np.ones(64),
+        prob_mode="crps",
+    )
+    B, D = 4, 80
+    mu_raw = torch.randn(B, D, requires_grad=True)
+    # softplus-friendly a: surface ~24, increments modest
+    with torch.no_grad():
+        mu_raw[:, 0] = 24.0
+        mu_raw[:, 1:64] = -1.0
+    sigma = torch.ones(B, D) * 0.5
+    out = torch.cat([mu_raw, sigma], dim=-1)
+    # re-attach grad on mu only
+    out = out.detach()
+    out.requires_grad_(True)
+    tgt = torch.randn(B, D)
+    L = loss(out, tgt)
+    assert torch.isfinite(L)
+    L.backward()
+    assert out.grad is not None
+
+
 def test_error_channel_log_norm():
     """Phase 2.2: log-zscore + missing fill on synthetic error channels."""
     from preproc.preproc_isas_sat import build_error_input_block
@@ -1898,6 +1986,9 @@ if __name__ == "__main__":
     test_steric_train_calibration()
     test_evalphys_frozen_metrics()
     test_density_spice_monotone_and_roundtrip()
+    test_prob_head_hetero_and_quantile()
+    test_dacov_psd_and_mc()
+    test_density_spice_prob_loss_crps_backward()
     test_error_channel_log_norm()
     test_stale_sat_gate_status()
     test_backend_equivalence_smoke()

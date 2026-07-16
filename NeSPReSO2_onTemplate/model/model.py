@@ -98,6 +98,9 @@ class PatchConvMLP(BaseModel):
         n_enc=6,
         n_sat=3,
         residual=False,
+        probabilistic=False,
+        sigma_min=1e-3,
+        n_quantiles=0,
         **kwargs,
     ):
         super().__init__()
@@ -113,6 +116,11 @@ class PatchConvMLP(BaseModel):
         self.d_model = d_model
         self.residual = bool(residual)
         self.patch_shape = tuple(patch_shape) if patch_shape else None
+        self.probabilistic = bool(probabilistic)
+        self.sigma_min = float(sigma_min)
+        self.n_quantiles = int(n_quantiles) if self.probabilistic else 0
+        if self.n_quantiles and self.n_quantiles < 2:
+            raise ValueError("n_quantiles must be >= 2 when set")
 
         self.enc_proj = nn.Linear(n_enc, d_model)
 
@@ -157,7 +165,7 @@ class PatchConvMLP(BaseModel):
                 head_blocks.append(ResidualLinearBlock(prev, width, dropout_prob))
                 prev = width
             self.head_blocks = nn.ModuleList(head_blocks)
-            self.head_out = nn.Linear(prev, output_dim)
+            self._wire_output_heads(prev, output_dim)
             self.head = None
         else:
             head = []
@@ -165,10 +173,36 @@ class PatchConvMLP(BaseModel):
             for width in head_layers:
                 head.extend([nn.Linear(prev, width), nn.ReLU(), nn.Dropout(dropout_prob)])
                 prev = width
-            head.append(nn.Linear(prev, output_dim))
-            self.head = nn.Sequential(*head)
+            self.head_trunk = nn.Sequential(*head) if head else nn.Identity()
+            self._wire_output_heads(prev, output_dim)
+            self.head = None  # unused when probabilistic path; keep attr for older code
             self.head_blocks = None
+            # deterministic compat: single sequential including final linear
+            if not self.probabilistic:
+                self.head = nn.Sequential(self.head_trunk, self.mu_out)
             self.head_out = None
+
+    def _wire_output_heads(self, prev: int, output_dim: int) -> None:
+        if self.n_quantiles:
+            self.mu_out = nn.Linear(prev, output_dim * self.n_quantiles)
+            self.sigma_out = None
+        elif self.probabilistic:
+            self.mu_out = nn.Linear(prev, output_dim)
+            self.sigma_out = nn.Linear(prev, output_dim)
+            nn.init.zeros_(self.sigma_out.weight)
+            nn.init.constant_(self.sigma_out.bias, 0.5413)  # softplus(0.5413)≈1 → σ≈1+σ_min
+        else:
+            self.mu_out = nn.Linear(prev, output_dim)
+            self.sigma_out = None
+        if self.residual:
+            self.head_out = self.mu_out  # stage-1 freeze helpers look for head_out
+
+    def set_sigma_trainable(self, trainable: bool) -> None:
+        """Phase 4.3 stage-1 freeze / stage-2 unfreeze of heteroscedastic σ head."""
+        if self.sigma_out is None:
+            return
+        for p in self.sigma_out.parameters():
+            p.requires_grad = bool(trainable)
 
     def _encode_sat_point(self, sat_flat):
         return self.sat_proj(sat_flat)
@@ -182,7 +216,7 @@ class PatchConvMLP(BaseModel):
         sat = self.conv(sat).view(b, t, -1).mean(dim=1)
         return self.sat_proj(sat)
 
-    def forward(self, x):
+    def _trunk(self, x):
         enc = x[:, : self.n_enc]
         sat_flat = x[:, self.n_enc :]
         h = self.enc_proj(enc)
@@ -193,8 +227,21 @@ class PatchConvMLP(BaseModel):
         if self.head_blocks is not None:
             for block in self.head_blocks:
                 h = block(h)
-            return self.head_out(h)
-        return self.head(h)
+            return h
+        return self.head_trunk(h)
+
+    def forward(self, x):
+        from model.prob_head import noncrossing_quantiles, softplus_sigma
+
+        h = self._trunk(x)
+        if not self.probabilistic:
+            return self.mu_out(h)
+        if self.n_quantiles:
+            raw = self.mu_out(h).view(h.size(0), self.output_dim, self.n_quantiles)
+            return noncrossing_quantiles(raw).reshape(h.size(0), -1)
+        mu = self.mu_out(h)
+        sigma = softplus_sigma(self.sigma_out(h), self.sigma_min)
+        return torch.cat([mu, sigma], dim=-1)
 
 
 class PatchMaskConvMLP(BaseModel):

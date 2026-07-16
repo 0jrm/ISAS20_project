@@ -216,7 +216,8 @@ class BaseTrainer:
         """
         resume_path = str(resume_path)
         self.logger.info("Loading checkpoint: {} ...".format(resume_path))
-        checkpoint = torch.load(resume_path)
+        # Trusted local checkpoints may contain ConfigParser; weights_only=False is intentional.
+        checkpoint = torch.load(resume_path, weights_only=False)
         self.start_epoch = checkpoint['epoch'] + 1
         self.mnt_best = checkpoint['monitor_best']
         self.best_train_loss = checkpoint.get('best_train_loss', inf)
