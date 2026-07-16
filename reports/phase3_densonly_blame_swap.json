@@ -1,0 +1,12 @@
+{
+  "pred_both": 1.6749007307445225,
+  "true_sigma0_pred_tau": 1.1868442321745623,
+  "pred_sigma0_true_tau": 0.5467820288404884,
+  "argo16_overall": 0.4158,
+  "gap_to_argo16x1_10": 0.45738000000000006,
+  "n_test": 623,
+  "inv_fail_frac_spice_only": 5.3474839641909355e-06,
+  "inv_fail_frac_density_only": 0.0,
+  "checkpoint": "saved/argo_densityspice/models/NeSPReSO2_ARGO_GoM_densityspice_densonly/phase3_densonly_v1/model_best.pth",
+  "dominant_branch": "spice"
+}

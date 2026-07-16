@@ -49,10 +49,11 @@ Bugs found and fixed this session:
 - **v8** (`phase3_full_v8`): residual-δa + density weight×0.01, equal-ish λ; completed 100 epochs (val≈83). Spice still stuck (~mse_τ ≈ 180); did not unlock PC learning — discarded for skill, kept as pre–spice-first baseline.
 - **v9** (`phase3_full_v9`): full-batch + equal λ_ρ/λ_τ=1; completed 200 epochs (val≈77–79). Same spice stall (~mse_τ ≈ 180); equal λ alone is not enough when PC variance ≫1 — discarded for skill.
 - **v10s2e** (`phase3_full_v10s2e`): density fine-tune from v10 with **weight amplify** (undo ×0.01 on μ density rows). Epoch-1 loss ~5×10⁷ / val ~2×10⁶; early-stopped at 67 with no recovery. Pathology: amplifying density weights after residual+×0.01 init blows the fine-tune — comparative-architecture material, not a retry candidate.
+- **densonly v1** (`phase3_densonly_v1`, λ_τ=0): fair density skill (pred σ₀+true τ) **0.547 vs v10 0.522** — no improvement. Multi-task interference **refuted**; density still fails chrono test alone. See [`phase3_densonly_eval.md`](phase3_densonly_eval.md).
 
-## Diagnosis (loss whack-a-mole)
+## Diagnosis (loss whack-a-mole → revised)
 
-Spice unlocked only when v10 set λ_ρ/λ_τ = 0.05/1 (spice-first). Combined with `a = a_clim + δa` and density weight×0.01, the density branch has almost no gradient pressure to move δa off zero — mse_ρ≈1.3 is a clim floor, not a capacity failure. Structural fix (not another λ sweep): blame-split swap test → EMA-normalized / density-only / sequential schedule. Prefer procedures over representation-specific magic numbers (Phase 5 fairness).
+Spice unlocked only when v10 set λ_ρ/λ_τ = 0.05/1 (spice-first). Combined with `a = a_clim + δa` and density weight×0.01, joint density sat at clim. Blame-split confirmed density owns the T gap. **But densonly (λ_τ=0) did not fix density** — so the fix is not “remove spice competition”; it is density capacity / chrono generalization / sequential warm-start from v10 spice, or EMA-normalized joint. Prefer procedures over representation-specific magic numbers (Phase 5 fairness). §3.6 option 2 remains the floor.
 
 ## Phase 2 caveat
 

@@ -8,6 +8,7 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-16 | **densonly ablation (λ_τ=0):** pred σ₀+true τ = 0.547 ≈ v10 0.522 — multi-task interference **refuted**. Density chrono generalization remains the bottleneck. Next: sequential warm-start (freeze v10 spice) or EMA-normalized joint; §3.6 opt-2 still floor. | Close the interference hypothesis before more λ sweeps. |
 | 2026-07-16 | **§3.6 fallback option 2 pre-registered:** if in-head monotone skill gate still fails after branch decoupling, keep best-skill μ and enforce stability at inference via isotonic σ₀ projection + re-inversion (T1 variant-D op; RMSE cost already measured small). Preferred path remains in-head. | Floor under skill gate so Phase 5 is not a cliff. |
 | 2026-07-16 | **Phase 3/4 full runs:** density_spice + CRPS two-stage on full cache. Skill gate FAIL (T 0.72 vs argo16 0.42) with σ₀=0; CRPS Spearman 0.65 PASS / ENCE 0.33 MISS (informational). Diagnosis: spice-first λ + residual δa starved density gradients — structural decoupling next, not λ sweep. | Commit FAIL-state; recover mean before re-CRPS. |
 | 2026-07-16 | **Phase 4 smoke cleared:** heteroscedastic/quantile `PatchConvMLP`, `DensitySpiceProbLoss` (`crps`/`nll`/`quantile`/`mse`), two-stage launcher, `dacov` Σ export, uncertainty decomposition script. Acceptance: all three modes train; twostage CRPS green; dacov PSD+MC. | Continue PLAN after Phase 3 gate. |
