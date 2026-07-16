@@ -1,0 +1,61 @@
+{
+  "n_test": 20,
+  "ts_rmse": {
+    "T": {
+      "0-50": 0.13543234072396484,
+      "50-200": 0.09758444066205611,
+      "200-800": 0.04719215630336871,
+      ">800": 0.021349618083963212
+    },
+    "S": {
+      "0-50": 0.051083042254231985,
+      "50-200": 0.028033760528834547,
+      "200-800": 0.00879027838392407,
+      ">800": 0.0033765286620021824
+    }
+  },
+  "static_stability_pred": {
+    "n2_tol": 1e-08,
+    "exclude_top_m": null,
+    "violation_rate_profile": 0.7,
+    "violation_rate_level": 0.0028888888888888888,
+    "n_profiles": 20,
+    "n_interfaces_checked": 36000,
+    "n_violations": 104,
+    "by_depth_band": {
+      "violation_rate_level": {
+        "0-50": 0.035,
+        "50-200": 0.0036666666666666666,
+        "200-800": 0.0,
+        ">800": 0.0029
+      }
+    }
+  },
+  "sigma0_monotonicity_pred": {
+    "sigma0_tol": 0.0,
+    "exclude_top_m": null,
+    "violation_rate_profile": 0.85,
+    "violation_rate_level": 0.001638888888888889,
+    "n_profiles": 20,
+    "n_interfaces_checked": 36000,
+    "n_violations": 59,
+    "by_depth_band": {
+      "violation_rate_level": {
+        "0-50": 0.049,
+        "50-200": 0.0033333333333333335,
+        "200-800": 0.0,
+        ">800": 0.0
+      }
+    }
+  },
+  "pre_inversion_sigma0_level_violation": 0.0,
+  "inversion_fidelity": {
+    "newton_fail_rate": 0.0,
+    "max_abs_dT": 0.6657499474828477,
+    "max_abs_dS": 0.15672808020804752,
+    "mean_abs_dT": 0.02894918780905067,
+    "mean_abs_dS": 0.006157461795417548,
+    "sigma0_violation_rate_profile_post": 0.85,
+    "sigma0_violation_rate_level_post": 0.001638888888888889
+  }
+}

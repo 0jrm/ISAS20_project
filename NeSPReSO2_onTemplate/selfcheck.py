@@ -1711,6 +1711,61 @@ def test_evalphys_frozen_metrics():
     assert np.mean(np.abs(crps - mae)) / np.mean(mae) < 0.01
 
 
+def test_density_spice_monotone_and_roundtrip():
+    """Phase 3: softplus+PCHIP monotone; Newton round-trip on synthetic profiles."""
+    from model.density_spice import selfcheck_monotone_pchip
+    from evalphys.inversion import sigma0_spice_from_ts, ts_from_sigma0_spice
+    from evalphys.gsw_backend import get_gsw
+
+    selfcheck_monotone_pchip(n=200)
+    gsw = get_gsw()
+    rng = np.random.default_rng(1)
+    n, nz = 40, 30
+    depth = np.linspace(0, 400, nz)
+    lat = 25.0 + rng.uniform(-2, 2, n)
+    lon = -90.0 + rng.uniform(-2, 2, n)
+    T = np.broadcast_to(28.0 - 0.05 * depth, (n, nz)).copy()
+    S = np.broadcast_to(36.0 + 0.002 * depth, (n, nz)).copy()
+    p = gsw.p_from_z(-np.broadcast_to(depth, (n, nz)), lat[:, None])
+    sig, tau = sigma0_spice_from_ts(T, S, p, lon[:, None], lat[:, None])
+    T2, S2, ok = ts_from_sigma0_spice(sig, tau, p, lon[:, None], lat[:, None], sa0=None, ct0=None)
+    assert ok.mean() > 0.99
+    assert np.nanmax(np.abs(T2 - T)) < 0.01
+    assert np.nanmax(np.abs(S2 - S)) < 0.01
+
+
+def test_error_channel_log_norm():
+    """Phase 2.2: log-zscore + missing fill on synthetic error channels."""
+    from preproc.preproc_isas_sat import build_error_input_block
+
+    rng = np.random.default_rng(0)
+    n = 200
+    juld = np.linspace(2450000, 2453000, n)
+    err = {
+        "err_sla": np.exp(rng.normal(-3, 0.5, n)),
+        "analysis_error": np.exp(rng.normal(-1, 0.4, n)),
+    }
+    err["err_sla"][::17] = np.nan
+    cfg = {
+        "data_loader": {
+            "args": {
+                "split_mode": "chronological",
+                "train_frac": 0.7,
+                "val_frac": 0.15,
+                "test_frac": 0.15,
+            }
+        }
+    }
+    inputs_err, missing, meta = build_error_input_block(
+        err, juld, cfg, dataset_tag="argo_l4"
+    )
+    assert inputs_err.shape == (n, 2)
+    assert missing.shape == (n, 2)
+    assert missing[::17, 0].sum() > 0
+    assert meta["input_error_channels"] == ["err_sla", "analysis_error"]
+    assert np.isfinite(inputs_err).all()
+
+
 def test_stale_sat_gate_status():
     """T2 gate wired into selfcheck — embargo if val/test stale > 5%."""
     from diagnostics.stale_sat.split_vs_stale import STALE_GATE_FRAC, audit_splits
@@ -1842,6 +1897,8 @@ if __name__ == "__main__":
     test_steric_loss_grad()
     test_steric_train_calibration()
     test_evalphys_frozen_metrics()
+    test_density_spice_monotone_and_roundtrip()
+    test_error_channel_log_norm()
     test_stale_sat_gate_status()
     test_backend_equivalence_smoke()
     test_steric_matches_climatology_adt()

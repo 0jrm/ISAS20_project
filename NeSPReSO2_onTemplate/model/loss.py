@@ -21,7 +21,7 @@ DEFAULT_COMBINED_MSE_SCALE = 0.0255
 
 OUTPUT_H5_VARS = {"temperature": "TEMP", "salinity": "PSAL"}
 
-VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder")
+VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice")
 
 
 def output_slices(outputs: Mapping[str, int]) -> list[tuple[str, int, int]]:
@@ -618,6 +618,57 @@ class CombinedPCALoss(nn.Module):
         return combined_loss
 
 
+class DensitySpiceLoss(nn.Module):
+    """Phase 3 deterministic loss: MSE(σ̂₀_ctrl, σ₀_ctrl) + MSE(ẑ_τ, z_τ); λ_f=0 for v1."""
+
+    def __init__(
+        self,
+        outputs: Mapping[str, int],
+        dz_tilde: np.ndarray | torch.Tensor,
+        device,
+        *,
+        lambda_rho: float = 1.0,
+        lambda_tau: float = 1.0,
+        sigma0_mean: np.ndarray | None = None,
+        sigma0_std: np.ndarray | None = None,
+    ):
+        super().__init__()
+        self.outputs = OrderedDict(outputs)
+        if "density_ctrl" not in self.outputs or "spice" not in self.outputs:
+            raise ValueError("density_spice loss requires outputs density_ctrl + spice")
+        self.k = int(self.outputs["density_ctrl"])
+        self.n_spice = int(self.outputs["spice"])
+        self.lambda_rho = float(lambda_rho)
+        self.lambda_tau = float(lambda_tau)
+        dz = torch.as_tensor(dz_tilde, dtype=torch.float32, device=device)
+        self.register_buffer("dz_tilde", dz)
+        if sigma0_mean is not None:
+            self.register_buffer(
+                "sigma0_mean", torch.as_tensor(sigma0_mean, dtype=torch.float32, device=device)
+            )
+            self.register_buffer(
+                "sigma0_std",
+                torch.as_tensor(np.maximum(sigma0_std, 1e-6), dtype=torch.float32, device=device),
+            )
+        else:
+            self.sigma0_mean = None
+            self.sigma0_std = None
+
+    def forward(self, output, target, indices=None, inputs=None):
+        from model.density_spice import decode_sigma0_ctrl
+
+        a = output[:, : self.k]
+        z_tau_hat = output[:, self.k : self.k + self.n_spice]
+        sig_tgt = target[:, : self.k]
+        z_tau = target[:, self.k : self.k + self.n_spice]
+        sig_hat = decode_sigma0_ctrl(a, self.dz_tilde)
+        if self.sigma0_mean is not None:
+            sig_hat = (sig_hat - self.sigma0_mean) / self.sigma0_std
+        loss_rho = torch.mean((sig_hat - sig_tgt) ** 2)
+        loss_tau = torch.mean((z_tau_hat - z_tau) ** 2)
+        return self.lambda_rho * loss_rho + self.lambda_tau * loss_tau
+
+
 def make_loss(
     *,
     pca_models,
@@ -638,13 +689,28 @@ def make_loss(
     surface_residual_layout: Mapping[str, Any] | None = None,
     bottom_depth=None,
     pres_levels=None,
+    density_spice_meta: Mapping[str, Any] | None = None,
     **kwargs,
-) -> CombinedPCALoss:
+) -> nn.Module:
     scales = loss_scales or {}
     cfg = loss_config or {}
     mode = cfg.get("mode", "combined")
     if mode not in VALID_LOSS_MODES:
         raise ValueError(f"unknown loss_config.mode {mode!r}; expected one of {VALID_LOSS_MODES}")
+
+    if mode == "density_spice":
+        meta = density_spice_meta or {}
+        if "dz_tilde" not in meta:
+            raise ValueError("density_spice mode requires density_spice_meta['dz_tilde'] from cache")
+        return DensitySpiceLoss(
+            outputs=outputs,
+            dz_tilde=meta["dz_tilde"],
+            device=device,
+            lambda_rho=float(scales.get("lambda_rho", 1.0)),
+            lambda_tau=float(scales.get("lambda_tau", 1.0)),
+            sigma0_mean=meta.get("sigma0_ctrl_mean"),
+            sigma0_std=meta.get("sigma0_ctrl_std"),
+        )
 
     cached_profiles = None
     if mode in ("pred_profile_cached", "decoder"):

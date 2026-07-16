@@ -1,0 +1,17 @@
+{
+  "n_test": 20,
+  "ts_rmse_T_0-50": 0.13543234072396484,
+  "ts_rmse_S_0-50": 0.051083042254231985,
+  "n2_violation_rate_profile": 0.7,
+  "n2_violation_rate_level": 0.0028888888888888888,
+  "pre_inversion_sigma0_level_violation": 0.0,
+  "inversion_fidelity": {
+    "newton_fail_rate": 0.0,
+    "max_abs_dT": 0.6657499474828477,
+    "max_abs_dS": 0.15672808020804752,
+    "mean_abs_dT": 0.02894918780905067,
+    "mean_abs_dS": 0.006157461795417548,
+    "sigma0_violation_rate_profile_post": 0.85,
+    "sigma0_violation_rate_level_post": 0.001638888888888889
+  }
+}

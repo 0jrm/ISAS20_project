@@ -1,0 +1,113 @@
+{
+    "name": "NeSPReSO2_ARGO_GoM_densityspice_smoke",
+    "n_gpu": 1,
+    "seed": 42,
+
+    "arch": {
+        "type": "PatchConvMLP",
+        "args": {
+            "input_dim": 9,
+            "output_dim": 80,
+            "dropout_prob": 0.2,
+            "d_model": 128,
+            "head_layers": [1024, 1024],
+            "patch_shape": null,
+            "n_enc": 6,
+            "n_sat": 3
+        }
+    },
+
+    "input_params": {
+        "timecos": true,
+        "timesin": true,
+        "latcos": true,
+        "latsin": true,
+        "loncos": true,
+        "lonsin": true,
+        "sss": true,
+        "sst": true,
+        "ssh": true,
+        "sat": true
+    },
+
+    "io": {
+        "dataset_tag": "argo_v2",
+        "cache_dir": "../data/cache",
+        "spatial_pad": 0,
+        "temporal_pad": 0,
+        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "v2_reload": false,
+        "refit_pca": true,
+        "representation": "density_spice",
+        "max_samples": 128
+    },
+
+    "outputs": {
+        "density_ctrl": 64,
+        "spice": 16
+    },
+
+    "loss_scales": {
+        "lambda_rho": 1.0,
+        "lambda_tau": 1.0
+    },
+
+    "density": {
+        "enabled": false,
+        "checkpoint": "",
+        "stats_path": "",
+        "stab_weight": 0.0,
+        "smooth_weight": 0.0
+    },
+
+    "data_loader": {
+        "type": "NeSPReSODataLoader",
+        "args": {
+            "cache_path": "",
+            "batch_size": 32,
+            "shuffle": true,
+            "split_mode": "chronological",
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false
+        }
+    },
+
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": false
+        }
+    },
+
+    "loss": "combined_pca_loss",
+    "loss_config": {
+        "mode": "density_spice"
+    },
+    "metrics": [],
+
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": 100000,
+            "gamma": 1.0
+        }
+    },
+
+    "trainer": {
+        "epochs": 2,
+        "save_dir": "saved/smoke_densityspice/",
+        "save_period": 2,
+        "log_interval": 1,
+        "verbosity": 2,
+        "monitor": "off",
+        "early_stop": 0,
+        "tensorboard": false
+    }
+}

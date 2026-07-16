@@ -265,6 +265,7 @@ def main(config):
         surface_residual_layout=surface_residual_layout_from_cache(cache),
         bottom_depth=cache.get("bottom_depth"),
         pres_levels=cache.get("PRES"),
+        density_spice_meta=cache.get("density_spice_meta"),
     )
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)

@@ -40,6 +40,14 @@ def validate_config(config):
     assert mode in VALID_LOSS_MODES, f"loss_config.mode must be one of {VALID_LOSS_MODES}, got {mode!r}"
     if mode == "decoder":
         assert loss_cfg.get("decoder_dir"), "decoder mode requires loss_config.decoder_dir"
+    if mode == "density_spice" or config.get("io", {}).get("representation") == "density_spice":
+        assert set(outputs.keys()) == {"density_ctrl", "spice"}, (
+            "density_spice requires outputs {density_ctrl, spice}"
+        )
+        assert int(outputs["density_ctrl"]) == 64 and int(outputs["spice"]) == 16, (
+            "density_spice expects density_ctrl=64, spice=16 (PLAN §3.2–3.3)"
+        )
+        assert mode == "density_spice", "representation=density_spice requires loss_config.mode=density_spice"
     dl = config.get("data_loader", {}).get("args", {})
     split_mode = dl.get("split_mode", "random")
     assert split_mode in ("random", "chronological"), f"split_mode must be random|chronological, got {split_mode!r}"
