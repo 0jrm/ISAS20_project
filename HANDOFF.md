@@ -1,11 +1,15 @@
 # Session handoff — dissertation data foundation
 
-**Branch:** `phase3-l3-rasterization` (merged `nespreso-v2-port` @ `38191d7`)  
+**Branch:** `audit/phase0-1` (from `residual_cube`)  
 **Base:** legacy ISAS production on `nespreso-v2-port` — not replaced by dissertation work  
 **Updated:** 2026-07-16  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)
 
-**v2 recovery (2026-07-16):** [`PLAN-v2-recovery.md`](PLAN-v2-recovery.md) — Phase **0** (frozen `evalphys/`) and Phase **1** (T1/T2 decisive tests) **done**; see [`reports/phase1_decisive_tests.md`](reports/phase1_decisive_tests.md). T2 stale gate **OPEN**. T1: B/C did not meet 5× violation cut; **monotone σ₀ (D)** cuts level violations ~4× with lower RMSE — proceed Phase 3 on 3.2 monotone head. Tag `evalphys-v1.0.0` when committing.
+**v2 recovery AUDIT (2026-07-16):** [`reports/audit_phase0_1.md`](reports/audit_phase0_1.md) — Phase 0/1 audited on branch `audit/phase0-1`, snapshot `pre-audit-phase0-1`, metrics tag **`evalphys-v1.1.0`**. Finding-1 **confirmed** under historical σ₀ profile metric (1.12%→21.51%); T1 N² gate still fails for B/C; T2 **OPEN** (SSS gap re-downloaded 2026-07-03). Next: human confirm Phase 3.2 monotone path (Decision R1 in audit report). **Do not start Phases 2–6 until confirmed.**
+
+**Known selfcheck skip:** `test_combined_pca_loss_v2` combined/weighted_mse golden fails identically on parent `820e598` (pre-Phase-0) — PCA recon still matches; needs human golden re-derivation (not auto-regen).
+
+**Prior (unaudited) claim:** Phase 0/1 done on `residual_cube` — superseded by audit above; see [`PLAN-v2-recovery.md`](PLAN-v2-recovery.md) changelog.
 
 **Read first:** [`PLAN.md`](PLAN.md), [`PLAN-dissertation-data-foundation.md`](PLAN-dissertation-data-foundation.md), [`PLAN-phase3-l3-rasterization.md`](PLAN-phase3-l3-rasterization.md).  
 **L3 download homework (user):** [`L3-DOWNLOAD-HOMEWORK.md`](L3-DOWNLOAD-HOMEWORK.md)
