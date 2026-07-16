@@ -1,0 +1,96 @@
+{
+  "eval_split": "test",
+  "models": [
+    {
+      "key": "clim",
+      "label": "Climatology",
+      "tag": "argo_v2",
+      "arch": "baseline",
+      "n_test": 623,
+      "T_rmse_common": 1.654395436341852,
+      "S_rmse_common": 0.21824754160239246,
+      "T_rmse_native": 1.6574836958470875,
+      "S_rmse_native": 0.215659833881153,
+      "avg_common_rmse": 0.9363214889721223,
+      "checkpoint": ""
+    },
+    {
+      "key": "gem",
+      "label": "Clim + SLA GEM",
+      "tag": "argo_v2",
+      "arch": "baseline",
+      "n_test": 623,
+      "T_rmse_common": 1.0745681313962292,
+      "S_rmse_common": 0.15886150823342368,
+      "T_rmse_native": 1.075602926223917,
+      "S_rmse_native": 0.1551535018477756,
+      "avg_common_rmse": 0.6167148198148265,
+      "checkpoint": ""
+    },
+    {
+      "key": "golden_point",
+      "label": "Point (raw PCs)",
+      "tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "n_test": 623,
+      "T_rmse_common": 0.5379479764453239,
+      "S_rmse_common": 0.09376468886367831,
+      "T_rmse_native": 0.5366791090646792,
+      "S_rmse_native": 0.08974318457647712,
+      "avg_common_rmse": 0.3158563326545011,
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM/scratch_0705_204716_golden_point/model_best.pth"
+    },
+    {
+      "key": "anom_point",
+      "label": "ANOM-point",
+      "tag": "argo_v2",
+      "arch": "PatchConvMLP",
+      "n_test": 623,
+      "T_rmse_common": 0.6804840557316207,
+      "S_rmse_common": 0.10742368921174898,
+      "T_rmse_native": 0.6802960467175659,
+      "S_rmse_native": 0.10425230245485972,
+      "avg_common_rmse": 0.39395387247168484,
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_anom/scratch_0705_204716_anom_point/model_best.pth"
+    },
+    {
+      "key": "anom_patch_l4",
+      "label": "ANOM-L4-patch",
+      "tag": "argo_l4",
+      "arch": "PatchMaskConvMLP",
+      "n_test": 623,
+      "T_rmse_common": 0.9322415623225964,
+      "S_rmse_common": 0.14150940073309085,
+      "T_rmse_native": 0.9325312323898558,
+      "S_rmse_native": 0.13666157225567388,
+      "avg_common_rmse": 0.5368754815278436,
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_patch_l4_anom/scratch_0705_204716_anom_patch_l4/model_best.pth"
+    },
+    {
+      "key": "point_cube",
+      "label": "Point-cube",
+      "tag": "argo_cube",
+      "arch": "PatchConvMLP",
+      "n_test": 623,
+      "T_rmse_common": 0.5775330948326785,
+      "S_rmse_common": 0.09103444304816462,
+      "T_rmse_native": 0.5769680176450872,
+      "S_rmse_native": 0.08849704538747195,
+      "avg_common_rmse": 0.33428376894042156,
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM/scratch_0705_204716_point_cube/model_best.pth"
+    },
+    {
+      "key": "residual_cube",
+      "label": "Cube residual",
+      "tag": "argo_cube",
+      "arch": "PointAnchoredResidual",
+      "n_test": 623,
+      "T_rmse_common": 0.5979038937646993,
+      "S_rmse_common": 0.09399977753879596,
+      "T_rmse_native": 0.5974582778941366,
+      "S_rmse_native": 0.09149905388442395,
+      "avg_common_rmse": 0.34595183565174764,
+      "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_residual_cube/scratch_0706_001728_residual_cube_fixed/model_best.pth"
+    }
+  ]
+}

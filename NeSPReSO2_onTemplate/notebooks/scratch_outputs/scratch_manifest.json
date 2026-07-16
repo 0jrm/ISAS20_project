@@ -1,0 +1,38 @@
+{
+  "golden_point": {
+    "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM/scratch_0705_204716_golden_point/model_best.pth",
+    "cache_path": "../data/cache/train_ready_3adcff404b0b.pkl",
+    "trained_at": "0705_204716",
+    "wall_s": 610,
+    "best_epoch": 313
+  },
+  "anom_point": {
+    "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_anom/scratch_0705_204716_anom_point/model_best.pth",
+    "cache_path": "../data/cache/train_ready_945ab8874c00.pkl",
+    "trained_at": "0705_204716",
+    "wall_s": 2367,
+    "best_epoch": 3067
+  },
+  "anom_patch_l4": {
+    "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_patch_l4_anom/scratch_0705_204716_anom_patch_l4/model_best.pth",
+    "cache_path": "../data/cache/train_ready_0085aed3c9b8.pkl",
+    "trained_at": "0705_204716",
+    "wall_s": 1503,
+    "best_epoch": 1048
+  },
+  "point_cube": {
+    "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM/scratch_0705_204716_point_cube/model_best.pth",
+    "cache_path": "data/cache/train_ready_269d311a4b02.pkl",
+    "trained_at": "0705_204716",
+    "wall_s": 387,
+    "best_epoch": 27
+  },
+  "residual_cube": {
+    "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_residual_cube/scratch_0706_001728_residual_cube_fixed/model_best.pth",
+    "cache_path": "data/cache/train_ready_76aa50b84810.pkl",
+    "trained_at": "0706_001728",
+    "wall_s": 436,
+    "best_epoch": 65,
+    "note": "retrained after S0 anchoring fix (point block z-scored)"
+  }
+}
