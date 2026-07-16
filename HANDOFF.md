@@ -65,7 +65,11 @@ Headline: Spearman 0.65 (ranking works). Defer scalar σ calib + ENCE re-judge u
 
 ## Next (ordered)
 
-1. **Blame-split swap test** (cheap): reconstruct T via (true σ₀, pred τ) and (pred σ₀, true τ) — locate the 0.724→0.458 gap.
+1. ~~**Blame-split swap test**~~ **DONE** — see [`reports/phase3_blame_swap.md`](reports/phase3_blame_swap.md):
+   - pred both T RMSE **0.724**
+   - true σ₀ + pred τ (spice error) **0.393** — already ≤ argo16×1.10 (0.457)
+   - pred σ₀ + true τ (density error) **0.522**
+   - **Dominant branch: density.** Gap is not spice.
 2. **Decouple branches:** density-only (λ_τ=0) ablation; then EMA-normalized per-branch losses or two small models; sequential density→freeze→spice as fallback.
 3. **Re-CRPS stage-2** after mean recovers → optional val scalar σ calib → re-judge ENCE.
 4. If skill still FAIL → fire **§3.6 fallback option 2** (isotonic σ₀ projection at inference; T1-D). Then Phase 5.
