@@ -72,30 +72,32 @@ def derive_from_cache(cache_path: str | Path, *, device: torch.device | None = N
 
 
 def _derive_density_spice(cache: dict, *, device: torch.device) -> dict:
-    """Equalize DensitySpiceLoss terms at zero-a / zero-spice-PC prediction."""
-    from model.loss import DensitySpiceLoss
+    """Equalize DensitySpiceLoss at climatological-a / zero-spice-PC init.
+
+    Zero ``a`` decodes to σ₀≈0 (softplus floor), so 1/MSE_ρ → ~1e-5 and the
+    density head is starved. Init ``a`` from train-mean σ₀_ctrl instead
+    (spice PCs still zero = PCA mean profile).
+    """
+    import numpy as np
+
+    from model.density_spice import decode_sigma0_ctrl, encode_a_from_sigma0_ctrl
 
     meta = cache["density_spice_meta"]
     targets = torch.tensor(cache["targets"], dtype=torch.float32, device=device)
-    zeros = torch.zeros_like(targets)
-    loss = DensitySpiceLoss(
-        cache["outputs"],
-        meta["dz_tilde"],
-        device,
-        lambda_rho=1.0,
-        lambda_tau=1.0,
-        sigma0_mean=meta["sigma0_ctrl_mean"],
-        sigma0_std=meta["sigma0_ctrl_std"],
+    k = int(cache["outputs"]["density_ctrl"])
+    a_clim = encode_a_from_sigma0_ctrl(
+        np.asarray(meta["sigma0_ctrl_mean"], dtype=np.float64),
+        np.asarray(meta["dz_tilde"], dtype=np.float64),
+        np.asarray(meta["z_ctrl"], dtype=np.float64),
     )
+    a0 = torch.tensor(a_clim, dtype=torch.float32, device=device).expand(targets.shape[0], -1)
+    z0 = torch.zeros(targets.shape[0], targets.shape[1] - k, dtype=torch.float32, device=device)
+    mu = torch.tensor(meta["sigma0_ctrl_mean"], dtype=torch.float32, device=device)
+    sd = torch.tensor(np.maximum(meta["sigma0_ctrl_std"], 1e-6), dtype=torch.float32, device=device)
+    dz = torch.tensor(meta["dz_tilde"], dtype=torch.float32, device=device)
     with torch.no_grad():
-        # isolate terms
-        k = int(cache["outputs"]["density_ctrl"])
-        a0 = zeros[:, :k]
-        z0 = zeros[:, k:]
-        from model.density_spice import decode_sigma0_ctrl
-
-        sig_hat = decode_sigma0_ctrl(a0, loss.dz_tilde)
-        sig_hat = (sig_hat - loss.sigma0_mean) / loss.sigma0_std
+        sig_hat = decode_sigma0_ctrl(a0, dz)
+        sig_hat = (sig_hat - mu) / sd
         mse_rho = float(torch.mean((sig_hat - targets[:, :k]) ** 2).item())
         mse_tau = float(torch.mean((z0 - targets[:, k:]) ** 2).item())
     lambda_rho = 1.0 / max(mse_rho, 1e-12)
@@ -108,6 +110,7 @@ def _derive_density_spice(cache: dict, *, device: torch.device) -> dict:
         "lambda_tau": round(lambda_tau, 6),
         "init_mse_rho": round(mse_rho, 6),
         "init_mse_tau": round(mse_tau, 6),
+        "init": "clim_a_zero_spice",
     }
 
 

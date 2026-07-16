@@ -620,7 +620,10 @@ class CombinedPCALoss(nn.Module):
 
 
 class DensitySpiceLoss(nn.Module):
-    """Phase 3 deterministic loss: MSE(σ̂₀_ctrl, σ₀_ctrl) + MSE(ẑ_τ, z_τ); λ_f=0 for v1."""
+    """Phase 3 deterministic loss: MSE(σ̂₀_ctrl, σ₀_ctrl) + MSE(ẑ_τ, z_τ); λ_f=0 for v1.
+
+    Network predicts residual δa; decode uses a = a_clim + δa (avoids softplus explosion).
+    """
 
     def __init__(
         self,
@@ -632,6 +635,7 @@ class DensitySpiceLoss(nn.Module):
         lambda_tau: float = 1.0,
         sigma0_mean: np.ndarray | None = None,
         sigma0_std: np.ndarray | None = None,
+        a_clim: np.ndarray | torch.Tensor | None = None,
     ):
         super().__init__()
         self.outputs = OrderedDict(outputs)
@@ -643,6 +647,10 @@ class DensitySpiceLoss(nn.Module):
         self.lambda_tau = float(lambda_tau)
         dz = torch.as_tensor(dz_tilde, dtype=torch.float32, device=device)
         self.register_buffer("dz_tilde", dz)
+        if a_clim is not None:
+            self.register_buffer("a_clim", torch.as_tensor(a_clim, dtype=torch.float32, device=device))
+        else:
+            self.a_clim = None
         if sigma0_mean is not None:
             self.register_buffer(
                 "sigma0_mean", torch.as_tensor(sigma0_mean, dtype=torch.float32, device=device)
@@ -655,10 +663,16 @@ class DensitySpiceLoss(nn.Module):
             self.sigma0_mean = None
             self.sigma0_std = None
 
+    def _a_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
+        a = mu_raw[:, : self.k]
+        if self.a_clim is not None:
+            a = a + self.a_clim
+        return a
+
     def forward(self, output, target, indices=None, inputs=None):
         from model.density_spice import decode_sigma0_ctrl
 
-        a = output[:, : self.k]
+        a = self._a_from_raw(output)
         z_tau_hat = output[:, self.k : self.k + self.n_spice]
         sig_tgt = target[:, : self.k]
         z_tau = target[:, self.k : self.k + self.n_spice]
@@ -683,6 +697,7 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         lambda_tau: float = 1.0,
         sigma0_mean: np.ndarray | None = None,
         sigma0_std: np.ndarray | None = None,
+        a_clim: np.ndarray | torch.Tensor | None = None,
         prob_mode: str = "crps",
         nll_beta: float = 0.5,
         sigma_min: float = 1e-3,
@@ -697,6 +712,7 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
             lambda_tau=lambda_tau,
             sigma0_mean=sigma0_mean,
             sigma0_std=sigma0_std,
+            a_clim=a_clim,
         )
         if prob_mode not in VALID_PROB_MODES:
             raise ValueError(f"prob_mode must be one of {VALID_PROB_MODES}, got {prob_mode!r}")
@@ -713,7 +729,7 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
     def _mu_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
         from model.density_spice import decode_sigma0_ctrl
 
-        a = mu_raw[:, : self.k]
+        a = self._a_from_raw(mu_raw)
         z_tau = mu_raw[:, self.k : self.k + self.n_spice]
         sig_hat = decode_sigma0_ctrl(a, self.dz_tilde)
         if self.sigma0_mean is not None:
@@ -795,6 +811,15 @@ def make_loss(
         meta = density_spice_meta or {}
         if "dz_tilde" not in meta:
             raise ValueError("density_spice mode requires density_spice_meta['dz_tilde'] from cache")
+        a_clim = meta.get("a_clim")
+        if a_clim is None and meta.get("sigma0_ctrl_mean") is not None:
+            from model.density_spice import encode_a_from_sigma0_ctrl
+
+            a_clim = encode_a_from_sigma0_ctrl(
+                np.asarray(meta["sigma0_ctrl_mean"], dtype=np.float64),
+                np.asarray(meta["dz_tilde"], dtype=np.float64),
+                np.asarray(meta["z_ctrl"], dtype=np.float64),
+            )
         prob_mode = cfg.get("prob_mode")
         if prob_mode:
             return DensitySpiceProbLoss(
@@ -805,6 +830,7 @@ def make_loss(
                 lambda_tau=float(scales.get("lambda_tau", 1.0)),
                 sigma0_mean=meta.get("sigma0_ctrl_mean"),
                 sigma0_std=meta.get("sigma0_ctrl_std"),
+                a_clim=a_clim,
                 prob_mode=str(prob_mode),
                 nll_beta=float(cfg.get("nll_beta", 0.5)),
                 sigma_min=float(cfg.get("sigma_min", 1e-3)),
@@ -819,6 +845,7 @@ def make_loss(
             lambda_tau=float(scales.get("lambda_tau", 1.0)),
             sigma0_mean=meta.get("sigma0_ctrl_mean"),
             sigma0_std=meta.get("sigma0_ctrl_std"),
+            a_clim=a_clim,
         )
 
     cached_profiles = None

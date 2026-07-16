@@ -34,6 +34,24 @@ def set_seed(seed, performance=None):
     )
 
 
+def _init_density_spice_clim_bias(model, config) -> None:
+    """Zero δa bias; optional density weight shrink via trainer.density_weight_scale."""
+    if not hasattr(model, "mu_out"):
+        return
+    k = int(config.config["outputs"]["density_ctrl"])
+    scale = float((config.config.get("trainer") or {}).get("density_weight_scale", 1.0))
+    with torch.no_grad():
+        model.mu_out.bias[:k].zero_()
+        if scale != 1.0:
+            model.mu_out.weight[:k].mul_(scale)
+        if getattr(model, "sigma_out", None) is not None:
+            if model.sigma_out.bias is not None:
+                model.sigma_out.bias[:k].zero_()
+            if scale != 1.0:
+                model.sigma_out.weight[:k].mul_(scale)
+    print(f"density_spice residual-δa init (density_weight_scale={scale})", flush=True)
+
+
 def ensure_cache(config):
     """Build or locate train-ready pickle; wire cache_path into data_loader args."""
     validate_config(config.config)
@@ -218,6 +236,12 @@ def main(config):
         # Keep σ params in the optimizer (resume-safe). Loss ignores σ when freeze_sigma.
         logger.info("Phase 4 stage-1: σ ignored by loss (params stay in optimizer for stage-2 resume)")
     model = model.to(device)
+    # density_spice: random a → softplus/cumsum explodes; bias-init μ to clim σ₀ encode.
+    if (
+        (config.config.get("io") or {}).get("representation") == "density_spice"
+        or loss_cfg.get("mode") == "density_spice"
+    ):
+        _init_density_spice_clim_bias(model, config)
     if performance.get("compile"):
         model = maybe_compile_model(model, True)
         logger.info("torch.compile enabled")

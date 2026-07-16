@@ -172,7 +172,8 @@ class BaseTrainer:
                 self.best_train_loss = train_loss
                 save_best_train = True
 
-            if epoch % self.save_period == 0:
+            # Always persist best-val / best-train; periodic dump otherwise.
+            if save_best_val or save_best_train or (epoch % self.save_period == 0):
                 self._save_checkpoint(epoch, save_best_val=save_best_val, save_best_train=save_best_train)
         else:
             self._train_finished("completed")
@@ -232,6 +233,8 @@ class BaseTrainer:
         if checkpoint['config']['optimizer']['type'] != self.config['optimizer']['type']:
             self.logger.warning("Warning: Optimizer type given in config file is different from that of checkpoint. "
                                 "Optimizer parameters not being resumed.")
+        elif checkpoint.get('optimizer') is None:
+            self.logger.info("No optimizer state in checkpoint; starting optimizer fresh.")
         else:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 

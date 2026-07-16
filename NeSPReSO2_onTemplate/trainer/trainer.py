@@ -137,12 +137,18 @@ class Trainer(BaseTrainer):
         return output, loss
 
     def _optimizer_step(self, loss):
+        clip = float(self.config["trainer"].get("grad_clip_norm") or 0.0)
         if self._grad_scaler is not None:
             self._grad_scaler.scale(loss).backward()
+            if clip > 0:
+                self._grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
             self._grad_scaler.step(self.optimizer)
             self._grad_scaler.update()
             return
         loss.backward()
+        if clip > 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
         self.optimizer.step()
 
     def _train_epoch(self, epoch):

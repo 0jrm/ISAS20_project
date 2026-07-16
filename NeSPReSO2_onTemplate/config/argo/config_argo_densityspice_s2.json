@@ -1,5 +1,5 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM_densityspice_prob_smoke",
+    "name": "NeSPReSO2_ARGO_GoM_densityspice_s2",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
@@ -8,17 +8,14 @@
             "input_dim": 9,
             "output_dim": 80,
             "dropout_prob": 0.2,
-            "d_model": 64,
+            "d_model": 128,
             "head_layers": [
-                256,
-                256
+                1024,
+                1024
             ],
             "patch_shape": null,
             "n_enc": 6,
-            "n_sat": 3,
-            "probabilistic": true,
-            "n_quantiles": 0,
-            "sigma_min": 0.001
+            "n_sat": 3
         }
     },
     "input_params": {
@@ -42,20 +39,15 @@
         "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
         "v2_reload": false,
         "refit_pca": true,
-        "representation": "density_spice",
-        "max_samples": 128,
-        "use_error_channels": false
+        "representation": "density_spice"
     },
     "outputs": {
         "density_ctrl": 64,
         "spice": 16
     },
     "loss_scales": {
-        "lambda_rho": 0.94367,
-        "lambda_tau": 0.008256
-    },
-    "augment": {
-        "input_noise_alpha": 0.0
+        "lambda_rho": 1.0,
+        "lambda_tau": 1.0
     },
     "density": {
         "enabled": false,
@@ -68,7 +60,7 @@
         "type": "NeSPReSODataLoader",
         "args": {
             "cache_path": "",
-            "batch_size": 32,
+            "batch_size": 512,
             "shuffle": true,
             "split_mode": "chronological",
             "train_frac": 0.7,
@@ -76,25 +68,20 @@
             "test_frac": 0.15,
             "split": "train",
             "num_workers": 0,
-            "pin_memory": false,
-            "use_error_channels": false
+            "pin_memory": false
         }
     },
     "optimizer": {
         "type": "Adam",
         "args": {
-            "lr": 0.001,
+            "lr": 0.0005,
             "weight_decay": 0,
             "amsgrad": false
         }
     },
     "loss": "combined_pca_loss",
     "loss_config": {
-        "mode": "density_spice",
-        "prob_mode": "crps",
-        "freeze_sigma": false,
-        "nll_beta": 0.5,
-        "sigma_min": 0.001
+        "mode": "density_spice"
     },
     "metrics": [],
     "lr_scheduler": {
@@ -105,13 +92,15 @@
         }
     },
     "trainer": {
-        "epochs": 2,
-        "save_dir": "saved/smoke_densityspice_prob/",
-        "save_period": 2,
-        "log_interval": 1,
+        "epochs": 100,
+        "save_dir": "saved/argo_densityspice/",
+        "save_period": 10,
+        "log_interval": 50,
         "verbosity": 2,
-        "monitor": "off",
-        "early_stop": 0,
-        "tensorboard": false
+        "monitor": "min val_loss",
+        "early_stop": 30,
+        "tensorboard": false,
+        "grad_clip_norm": 5.0,
+        "density_weight_scale": 1.0
     }
 }

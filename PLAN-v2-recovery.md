@@ -8,6 +8,8 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-16 | **§3.6 fallback option 2 pre-registered:** if in-head monotone skill gate still fails after branch decoupling, keep best-skill μ and enforce stability at inference via isotonic σ₀ projection + re-inversion (T1 variant-D op; RMSE cost already measured small). Preferred path remains in-head. | Floor under skill gate so Phase 5 is not a cliff. |
+| 2026-07-16 | **Phase 3/4 full runs:** density_spice + CRPS two-stage on full cache. Skill gate FAIL (T 0.72 vs argo16 0.42) with σ₀=0; CRPS Spearman 0.65 PASS / ENCE 0.33 MISS (informational). Diagnosis: spice-first λ + residual δa starved density gradients — structural decoupling next, not λ sweep. | Commit FAIL-state; recover mean before re-CRPS. |
 | 2026-07-16 | **Phase 4 smoke cleared:** heteroscedastic/quantile `PatchConvMLP`, `DensitySpiceProbLoss` (`crps`/`nll`/`quantile`/`mse`), two-stage launcher, `dacov` Σ export, uncertainty decomposition script. Acceptance: all three modes train; twostage CRPS green; dacov PSD+MC. | Continue PLAN after Phase 3 gate. |
 | 2026-07-16 | **Human sign-off:** framing = *"no soft basis fixes stability; hard monotonicity does, at cost X."* Phase-3 deep-band FAIL diagnosed (softplus clamp on ~12% negative ctrl increments) and fixed (isotonic before encode). T1-E gate **PASS** (E/A ≤ 1.0 all T bands). **Big win:** hard constraint *improves* upper-ocean T RMSE vs A while zeroing σ₀ profile rate (0.215→0.000). Phase 4 unblocked. | Human approved mechanism reframing; accepted diagnostic→fix→re-gate path. |
 | 2026-07-16 | T1 escalate → R1: Phase 3.2 monotone head. Mechanism update: **truncation itself** (not T/S separateness) drives σ₀ violations — B joint EOF ≈ A under historical ruler; only hard constraint cuts 21.51%→0.48%. Residual post-inversion violations ⇒ Phase 3 tracks **inversion fidelity** as first-class. Phase 2.1 satisfied; R4 golden root-cause is a **Phase 5 prerequisite**. | Human accepted audit Decision R1; B/C historical rows complete the record. |
@@ -230,7 +232,11 @@ L = λ_ρ · MSE(σ̂₀_ctrl, σ₀_ctrl) + λ_τ · MSE(ẑ_τ, z_τ) + λ_f �
 
 ### 3.6 Fallback
 
-If 3.4 inversion fails validation and can't be fixed in ≤ 2 days: fall back to **joint T/S EOF (T1 variant B)** as the representation, keep the monotone-density evaluation as a diagnostic. The ablation matrix (Phase 5) still includes both.
+**Option 1 (inversion broken):** If 3.4 inversion fails validation and can't be fixed in ≤ 2 days: fall back to **joint T/S EOF (T1 variant B)** as the representation, keep the monotone-density evaluation as a diagnostic. The ablation matrix (Phase 5) still includes both. Note: T1 already showed joint EOF does **not** fix stability — this is an inversion-engineering escape hatch, not a stability fix.
+
+**Option 2 (skill gate FAIL after decoupling — preferred vs retreat to B):** If the in-architecture monotone head cannot recover skill (overall T ≤ argo16×1.10) after the pre-registered structural fixes (blame-split → density-only / EMA-normalized or sequential density→spice), do **not** abandon the best-skill representation. Instead: keep that μ for prediction, and enforce stability at **inference** by isotonic projection of predicted σ₀ onto the monotone control grid + re-inversion — exactly the **T1 variant-D** operation, whose RMSE cost was already measured and found small (`reports/t1_basis_stability.md`, `reports/phase3_proj_cost.md`). This converts the hard constraint from "in the head, gradient-aware" to "post-hoc projection": scientifically weaker, operationally equivalent for DA (casts entering assimilation are stable either way). In-head remains preferred; this option is the pre-registered floor under the skill gate so a FAIL does not cliff Phase 5.
+
+**Process caution (Phase 5 fairness):** prefer procedures (EMA-normalized per-branch losses, sequential schedules) over representation-specific λ / weight magic numbers so matrix cells stay comparable to argo16.
 
 **Acceptance:** round-trip test green; T1-D style truth-projection through the full 3.2+3.3 parameterization reports its RMSE cost; one smoke training run (`config_argo_densityspice_smoke.json`, 2 epochs) completes; `selfcheck.py` extended with the round-trip check.
 

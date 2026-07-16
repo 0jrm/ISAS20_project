@@ -46,8 +46,8 @@
         "spice": 16
     },
     "loss_scales": {
-        "lambda_rho": 8e-06,
-        "lambda_tau": 0.008256
+        "lambda_rho": 0.05,
+        "lambda_tau": 1.0
     },
     "density": {
         "enabled": false,
@@ -92,13 +92,15 @@
         }
     },
     "trainer": {
-        "epochs": 100,
+        "epochs": 150,
         "save_dir": "saved/argo_densityspice/",
         "save_period": 10,
         "log_interval": 50,
         "verbosity": 2,
         "monitor": "min val_loss",
-        "early_stop": 20,
-        "tensorboard": false
+        "early_stop": 40,
+        "tensorboard": false,
+        "grad_clip_norm": 5.0,
+        "density_weight_scale": 0.01
     }
 }
