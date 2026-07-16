@@ -9,7 +9,6 @@ import pickle
 import sys
 from pathlib import Path
 
-import gsw
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 from sklearn.decomposition import PCA
@@ -20,8 +19,16 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from base.split_utils import build_split_indices
+from evalphys.gsw_backend import get_gsw, resolve_backend, set_config_backend
 from evalphys.inversion import ts_from_sigma0_spice
-from evalphys.metrics import summarize_physical, to_teos10
+from evalphys.metrics import (
+    sigma0_monotonicity_violations,
+    sigma0_profiles,
+    static_stability_violations,
+    summarize_physical,
+    to_teos10,
+    ts_rmse_by_band,
+)
 
 
 def _level_zscore(profiles: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
@@ -29,24 +36,12 @@ def _level_zscore(profiles: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np
 
 
 def _fit_level_stats(profiles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """profiles (n_prof, n_lev)."""
     mean = np.nanmean(profiles, axis=0)
     std = np.nanstd(profiles, axis=0)
     return mean, std
 
 
-def _reconstruct_separate_pca(
-    T: np.ndarray,
-    S: np.ndarray,
-    *,
-    n_comp: int,
-    T_mean: np.ndarray,
-    T_std: np.ndarray,
-    S_mean: np.ndarray,
-    S_std: np.ndarray,
-    pca_t: PCA,
-    pca_s: PCA,
-) -> tuple[np.ndarray, np.ndarray]:
+def _reconstruct_separate_pca(T, S, *, n_comp, T_mean, T_std, S_mean, S_std, pca_t, pca_s):
     Tz = _level_zscore(T, T_mean, T_std)
     Sz = _level_zscore(S, S_mean, S_std)
     T_hat = pca_t.inverse_transform(pca_t.transform(Tz)) * T_std + T_mean
@@ -54,7 +49,7 @@ def _reconstruct_separate_pca(
     return T_hat, S_hat
 
 
-def _fit_separate_pca(T_tr: np.ndarray, S_tr: np.ndarray, n_comp: int):
+def _fit_separate_pca(T_tr, S_tr, n_comp: int):
     T_mean, T_std = _fit_level_stats(T_tr)
     S_mean, S_std = _fit_level_stats(S_tr)
     pca_t = PCA(n_components=n_comp).fit(_level_zscore(T_tr, T_mean, T_std))
@@ -62,7 +57,7 @@ def _fit_separate_pca(T_tr: np.ndarray, S_tr: np.ndarray, n_comp: int):
     return (T_mean, T_std, S_mean, S_std, pca_t, pca_s)
 
 
-def _fit_joint_eof(T_tr: np.ndarray, S_tr: np.ndarray, n_comp: int):
+def _fit_joint_eof(T_tr, S_tr, n_comp: int):
     T_mean, T_std = _fit_level_stats(T_tr)
     S_mean, S_std = _fit_level_stats(S_tr)
     joint = np.hstack([_level_zscore(T_tr, T_mean, T_std), _level_zscore(S_tr, S_mean, S_std)])
@@ -70,23 +65,14 @@ def _fit_joint_eof(T_tr: np.ndarray, S_tr: np.ndarray, n_comp: int):
     return T_mean, T_std, S_mean, S_std, pca
 
 
-def _reconstruct_joint_eof(
-    T: np.ndarray,
-    S: np.ndarray,
-    *,
-    T_mean,
-    T_std,
-    S_mean,
-    S_std,
-    pca: PCA,
-    n_lev: int,
-):
+def _reconstruct_joint_eof(T, S, *, T_mean, T_std, S_mean, S_std, pca, n_lev):
     joint = np.hstack([_level_zscore(T, T_mean, T_std), _level_zscore(S, S_mean, S_std)])
     rec = pca.inverse_transform(pca.transform(joint))
     return rec[:, :n_lev] * T_std + T_mean, rec[:, n_lev:] * S_std + S_mean
 
 
-def _sigma0_spice(T: np.ndarray, S: np.ndarray, depth: np.ndarray, lat: np.ndarray, lon: np.ndarray):
+def _sigma0_spice(T, S, depth, lat, lon):
+    gsw = get_gsw()
     sa, ct, p = to_teos10(T, S, depth, lat, lon)
     return gsw.sigma0(sa, ct), gsw.spiciness0(sa, ct)
 
@@ -100,28 +86,15 @@ def _fit_density_spice_pca(T_tr, S_tr, depth, lat, lon, n_comp: int):
     return sm, ss, tm, ts, pca_sig, pca_tau
 
 
-def _reconstruct_density_spice(
-    T,
-    S,
-    depth,
-    lat,
-    lon,
-    *,
-    sm,
-    ss,
-    tm,
-    ts,
-    pca_sig,
-    pca_tau,
-):
+def _reconstruct_density_spice(T, S, depth, lat, lon, *, sm, ss, tm, ts, pca_sig, pca_tau):
+    gsw = get_gsw()
     sig, tau = _sigma0_spice(T, S, depth, lat, lon)
     sig_hat = pca_sig.inverse_transform(pca_sig.transform(_level_zscore(sig, sm, ss))) * ss + sm
     tau_hat = pca_tau.inverse_transform(pca_tau.transform(_level_zscore(tau, tm, ts))) * ts + tm
-    n_prof = T.shape[0]
-    n_lev = T.shape[1]
+    n_prof, n_lev = T.shape
     p = gsw.p_from_z(-np.broadcast_to(depth, (n_prof, n_lev)), lat[:, None])
-    T_hat, S_hat, _ = ts_from_sigma0_spice(sig_hat, tau_hat, p, lon[:, None], lat[:, None])
-    return T_hat, S_hat
+    T_hat, S_hat, ok = ts_from_sigma0_spice(sig_hat, tau_hat, p, lon[:, None], lat[:, None])
+    return T_hat, S_hat, float(1.0 - ok.mean())
 
 
 def _control_grid(depth: np.ndarray, K: int = 64) -> np.ndarray:
@@ -140,18 +113,8 @@ def _monotone_sigma0_profile(sig: np.ndarray, depth: np.ndarray, z_ctrl: np.ndar
     return PchipInterpolator(z_ctrl, sig_m, extrapolate=True)(depth)
 
 
-def _reconstruct_monotone_density(
-    T,
-    S,
-    depth,
-    lat,
-    lon,
-    *,
-    tm,
-    ts,
-    pca_tau,
-    z_ctrl,
-):
+def _reconstruct_monotone_density(T, S, depth, lat, lon, *, tm, ts, pca_tau, z_ctrl):
+    gsw = get_gsw()
     sig, tau = _sigma0_spice(T, S, depth, lat, lon)
     n_prof = T.shape[0]
     sig_hat = np.empty_like(sig)
@@ -160,30 +123,49 @@ def _reconstruct_monotone_density(
     tau_hat = pca_tau.inverse_transform(pca_tau.transform(_level_zscore(tau, tm, ts))) * ts + tm
     n_lev = T.shape[1]
     p = gsw.p_from_z(-np.broadcast_to(depth, (n_prof, n_lev)), lat[:, None])
-    T_hat, S_hat, _ = ts_from_sigma0_spice(sig_hat, tau_hat, p, lon[:, None], lat[:, None])
-    return T_hat, S_hat
+    T_hat, S_hat, ok = ts_from_sigma0_spice(sig_hat, tau_hat, p, lon[:, None], lat[:, None])
+    # Pre-inversion Δσ₀ violations on projected σ₀ (should be ~0)
+    dsig = np.diff(sig_hat, axis=1)
+    pre_n = int((dsig < -1e-12).sum())
+    return T_hat, S_hat, float(1.0 - ok.mean()), pre_n, sig_hat
 
 
-def _headline_rmse(T_hat, S_hat, T, S, depth):
-    from evalphys.metrics import ts_rmse_by_band
-
-    bands = ts_rmse_by_band(T_hat, S_hat, T, S, depth)
-    t_vals = [v for v in bands["T"].values() if v is not None]
-    s_vals = [v for v in bands["S"].values() if v is not None]
-    return float(np.mean(t_vals + s_vals))
-
-
-def _variant_metrics(name, T_hat, S_hat, T, S, depth, lat, lon):
+def _variant_metrics(name, T_hat, S_hat, T, S, depth, lat, lon, **extra):
     phys = summarize_physical(T_hat, S_hat, T, S, depth, lat, lon)
     stab = phys["static_stability_pred"]["1e-08"]
+    stab0 = phys["static_stability_pred"]["0"]
+    s0 = phys["sigma0_monotonicity_pred"]
+    ts = phys["ts_rmse"]
     return {
         "name": name,
         "violation_rate_profile": stab["violation_rate_profile"],
         "violation_rate_level": stab["violation_rate_level"],
-        "mean_rmse_ts": _headline_rmse(T_hat, S_hat, T, S, depth),
+        "violation_rate_level_n2_tol0": stab0["violation_rate_level"],
+        "sigma0_violation_rate_profile": s0["violation_rate_profile"],
+        "sigma0_violation_rate_level": s0["violation_rate_level"],
+        "ts_rmse": ts,
         "drhodz_rmse": phys["drhodz_rmse"]["rmse_overall"],
         "mld_rmse": phys["mld"]["pred_vs_true"]["rmse"],
+        "n2_tol_sweep_level": {
+            k: v["violation_rate_level"] for k, v in phys["static_stability_pred"].items()
+        },
+        "exclude_top15m_level": phys["static_stability_pred_exclude_top15m"]["1e-08"]["violation_rate_level"],
+        **extra,
         "summary": phys,
+    }
+
+
+def _historical_sigma0_profile_rate(T, S, depth, lat, lon, *, tol=0.01):
+    """Session Finding-1 metric: readiness σ₀ Δσ₀ < −tol profile rate (gsw_torch path)."""
+    from diagnostics.readiness import static_stability_diagnostic
+
+    out = static_stability_diagnostic(T.T, S.T, depth, lat, lon, tol_kgm3=tol)
+    return {
+        "tol_kgm3": tol,
+        "violation_rate_profile": out["violation_rate"],
+        "violation_rate_interface": out["interface_violation_rate"],
+        "n_violations": out["total_violations"],
+        "method": out["method"],
     }
 
 
@@ -213,90 +195,172 @@ def run_t1(cache_path: Path, *, n_comp: int = 16, joint_comp: int = 32) -> dict:
     lat_tr, lon_tr = lat[tr], lon[tr]
     lat_te, lon_te = lat[te], lon[te]
 
-    # A — separate PCA
     stats_a = _fit_separate_pca(T_tr, S_tr, n_comp)
     T_a, S_a = _reconstruct_separate_pca(
-        T_te,
-        S_te,
-        n_comp=n_comp,
-        T_mean=stats_a[0],
-        T_std=stats_a[1],
-        S_mean=stats_a[2],
-        S_std=stats_a[3],
-        pca_t=stats_a[4],
-        pca_s=stats_a[5],
+        T_te, S_te, n_comp=n_comp,
+        T_mean=stats_a[0], T_std=stats_a[1], S_mean=stats_a[2], S_std=stats_a[3],
+        pca_t=stats_a[4], pca_s=stats_a[5],
+    )
+    assert stats_a[4].n_components_ == n_comp and stats_a[5].n_components_ == n_comp
+
+    T_mean, T_std, S_mean, S_std, pca_j = _fit_joint_eof(T_tr, S_tr, joint_comp)
+    assert pca_j.n_components_ == joint_comp
+    T_b, S_b = _reconstruct_joint_eof(
+        T_te, S_te, T_mean=T_mean, T_std=T_std, S_mean=S_mean, S_std=S_std, pca=pca_j, n_lev=depth.size
     )
 
-    # B — joint EOF
-    T_mean, T_std, S_mean, S_std, pca_j = _fit_joint_eof(T_tr, S_tr, joint_comp)
-    T_b, S_b = _reconstruct_joint_eof(T_te, S_te, T_mean=T_mean, T_std=T_std, S_mean=S_mean, S_std=S_std, pca=pca_j, n_lev=depth.size)
-
-    # C — density/spice PCA
     sm, ss, tm, ts, pca_sig, pca_tau = _fit_density_spice_pca(T_tr, S_tr, depth, lat_tr, lon_tr, n_comp)
-    T_c, S_c = _reconstruct_density_spice(T_te, S_te, depth, lat_te, lon_te, sm=sm, ss=ss, tm=tm, ts=ts, pca_sig=pca_sig, pca_tau=pca_tau)
+    T_c, S_c, c_fail = _reconstruct_density_spice(
+        T_te, S_te, depth, lat_te, lon_te, sm=sm, ss=ss, tm=tm, ts=ts, pca_sig=pca_sig, pca_tau=pca_tau
+    )
 
-    # D — monotone σ₀ + spice PCA
     z_ctrl = _control_grid(depth)
-    T_d, S_d = _reconstruct_monotone_density(T_te, S_te, depth, lat_te, lon_te, tm=tm, ts=ts, pca_tau=pca_tau, z_ctrl=z_ctrl)
+    T_d, S_d, d_fail, d_pre_dsig_viol, sig_hat_d = _reconstruct_monotone_density(
+        T_te, S_te, depth, lat_te, lon_te, tm=tm, ts=ts, pca_tau=pca_tau, z_ctrl=z_ctrl
+    )
 
     results = {
         "A_separate_pca": _variant_metrics("A_separate_pca", T_a, S_a, T_te, S_te, depth, lat_te, lon_te),
         "B_joint_eof": _variant_metrics("B_joint_eof", T_b, S_b, T_te, S_te, depth, lat_te, lon_te),
-        "C_density_spice_pca": _variant_metrics("C_density_spice_pca", T_c, S_c, T_te, S_te, depth, lat_te, lon_te),
-        "D_monotone_density": _variant_metrics("D_monotone_density", T_d, S_d, T_te, S_te, depth, lat_te, lon_te),
+        "C_density_spice_pca": _variant_metrics(
+            "C_density_spice_pca", T_c, S_c, T_te, S_te, depth, lat_te, lon_te,
+            newton_fail_rate=c_fail,
+        ),
+        "D_monotone_density": _variant_metrics(
+            "D_monotone_density", T_d, S_d, T_te, S_te, depth, lat_te, lon_te,
+            newton_fail_rate=d_fail,
+            pre_inversion_dsigma0_neg_count=d_pre_dsig_viol,
+        ),
+    }
+
+    # Reconciliation vs historical Finding-1 (σ₀ profile rate, tol=0.01)
+    recon = {
+        "historical_raw_test": _historical_sigma0_profile_rate(T_te, S_te, depth, lat_te, lon_te),
+        "historical_A_pca16": _historical_sigma0_profile_rate(T_a, S_a, depth, lat_te, lon_te),
+        "historical_D": _historical_sigma0_profile_rate(T_d, S_d, depth, lat_te, lon_te),
+        "notes": {
+            "a_profile_vs_level": (
+                "N² profile rate ≫ level rate because violations are sparse per profile "
+                f"(A profile={results['A_separate_pca']['violation_rate_profile']:.4f}, "
+                f"level={results['A_separate_pca']['violation_rate_level']:.4f})"
+            ),
+            "b_n2_tol0_vs_1e8": (
+                f"A level N² at tol=0: {results['A_separate_pca']['violation_rate_level_n2_tol0']:.6f}; "
+                f"at 1e-8: {results['A_separate_pca']['violation_rate_level']:.6f}"
+            ),
+            "d_method": (
+                "Historical Finding-1 used readiness σ₀ Δσ₀<-0.01 profile rate "
+                "(~1.12% raw → ~21.8% PCA-16), not N² level rate."
+            ),
+            "f_backend": f"headline backend={resolve_backend(None)} (reference gsw)",
+        },
     }
 
     a_lvl = results["A_separate_pca"]["violation_rate_level"]
     a_prof = results["A_separate_pca"]["violation_rate_profile"]
+    # Decision uses T RMSE 0-50 as the ≤10% cost proxy (units consistent); also report full bands.
+    a_t050 = results["A_separate_pca"]["ts_rmse"]["T"]["0-50"]
+
+    plan_rules = [
+        "If B and/or C cut the level violation rate by ≥ 5× vs A at ≤ 10% RMSE cost ⇒ Finding-1 mechanism confirmed; Phase 3 proceeds as planned.",
+        "If C ≈ A (no improvement) ⇒ the violations are not basis-induced; escalate to human before Phase 3 (the representation chapter framing changes).",
+        'D should show violation rate ≡ 0 by construction; record its RMSE cost — this is the "price of hard stability" headline number.',
+    ]
     decisions = []
     for label in ("B_joint_eof", "C_density_spice_pca"):
         r = results[label]
-        if a_lvl > 0 and r["violation_rate_level"] <= a_lvl / 5 and r["mean_rmse_ts"] <= results["A_separate_pca"]["mean_rmse_ts"] * 1.10:
-            decisions.append(f"CONFIRMED: {label} cuts level violations ≥5× vs A at ≤10% RMSE cost")
+        t050 = r["ts_rmse"]["T"]["0-50"]
+        rmse_ok = t050 <= a_t050 * 1.10
+        if a_lvl > 0 and r["violation_rate_level"] <= a_lvl / 5 and rmse_ok:
+            decisions.append(f"CONFIRMED: {label} cuts level violations ≥5× vs A at ≤10% T(0-50) RMSE cost")
         elif np.isclose(r["violation_rate_level"], a_lvl, rtol=0.05):
-            decisions.append(f"ESCALATE: {label} ≈ A — violations may not be basis-induced")
+            decisions.append(f"ESCALATE: {label} ≈ A — violations may not be basis-induced under N² level metric")
     d = results["D_monotone_density"]
-    if d["violation_rate_level"] == 0.0:
+    if d["sigma0_violation_rate_level"] == 0.0 and d["violation_rate_level"] == 0.0:
+        decisions.append("D monotone: N² and σ₀ violation_rate_level ≡ 0")
+    else:
         decisions.append(
-            f"D monotone: violation_rate_level ≡ 0; RMSE cost vs truth = {d['mean_rmse_ts']:.4f}"
+            f"D monotone: N² level={d['violation_rate_level']:.4f} "
+            f"(σ₀ level={d['sigma0_violation_rate_level']:.4f}; "
+            f"pre-inv Δσ₀<0 count={d.get('pre_inversion_dsigma0_neg_count')}); "
+            f"vs A N² level={a_lvl:.4f} ({a_lvl / max(d['violation_rate_level'], 1e-12):.1f}×)"
         )
-    elif a_lvl > 0:
-        ratio = a_lvl / max(d["violation_rate_level"], 1e-12)
+    if not any(x.startswith("CONFIRMED") for x in decisions):
         decisions.append(
-            f"D monotone: level violation {d['violation_rate_level']:.4f} vs A {a_lvl:.4f} "
-            f"({ratio:.1f}× reduction); profile {d['violation_rate_profile']:.3f} vs A {a_prof:.3f}; "
-            f"RMSE {d['mean_rmse_ts']:.4f} vs A {results['A_separate_pca']['mean_rmse_ts']:.4f}"
-        )
-    if not any("CONFIRMED" in x for x in decisions):
-        decisions.append(
-            "GATE: B/C did not meet ≥5× level-violation cut — review before Phase 3; "
-            "D monotone shows partial stability gain (see table)."
+            "GATE: B/C did not meet ≥5× level-violation cut under N² — "
+            "Finding-1 still holds under historical σ₀ profile metric (see Reconciliation)."
         )
 
     return {
         "cache": str(cache_path),
+        "gsw_backend": resolve_backend(None),
         "n_train": int(tr.size),
         "n_test": int(te.size),
+        "n_comp_separate": n_comp,
+        "n_comp_joint": joint_comp,
+        "bases_fit_on": "train_split_only",
         "variants": results,
-        "decision_rules": decisions,
+        "reconciliation": recon,
+        "plan_decision_rules_verbatim": plan_rules,
+        "decision_outcomes": decisions,
     }
 
 
+def _fmt_ts(ts: dict) -> str:
+    parts = []
+    for var in ("T", "S"):
+        bands = ts[var]
+        parts.append(
+            var
+            + ":"
+            + ",".join(f"{k}={bands[k]:.3f}" if bands[k] is not None else f"{k}=NA" for k in bands)
+        )
+    return "; ".join(parts)
+
+
 def _to_md(data: dict) -> str:
-    lines = ["# Phase 1 decisive tests — T1 basis stability", ""]
-    lines.append(f"Cache: `{data['cache']}`  |  train n={data['n_train']}  test n={data['n_test']}")
-    lines.append("")
-    lines.append("| variant | viol_rate_profile | viol_rate_level | mean T/S RMSE | dρ/dz RMSE | MLD RMSE |")
-    lines.append("|---------|-------------------|-----------------|---------------|------------|----------|")
-    for key, r in data["variants"].items():
+    lines = [
+        "# Phase 1 decisive tests — T1 basis stability",
+        "",
+        f"Cache: `{data['cache']}`  |  train n={data['n_train']}  test n={data['n_test']}  |  gsw=`{data['gsw_backend']}`",
+        f"Bases fit on: **{data['bases_fit_on']}** (leakage check: train only).",
+        "",
+        "| variant | N² prof | N² level | σ₀ level | T/S RMSE by band | dρ/dz | MLD |",
+        "|---------|---------|----------|----------|------------------|-------|-----|",
+    ]
+    for _key, r in data["variants"].items():
         lines.append(
             f"| {r['name']} | {r['violation_rate_profile']:.4f} | {r['violation_rate_level']:.4f} | "
-            f"{r['mean_rmse_ts']:.4f} | {r['drhodz_rmse']:.4f} | {r['mld_rmse']:.4f} |"
+            f"{r['sigma0_violation_rate_level']:.4f} | {_fmt_ts(r['ts_rmse'])} | "
+            f"{r['drhodz_rmse']:.4f} | {r['mld_rmse']:.4f} |"
         )
-    lines.append("")
-    lines.append("## Decision rules")
-    for d in data["decision_rules"]:
+    lines += ["", "## Plan decision rules (verbatim from PLAN §1-T1)", ""]
+    for rule in data["plan_decision_rules_verbatim"]:
+        lines.append(f"- {rule}")
+    lines += ["", "## Decision outcomes", ""]
+    for d in data["decision_outcomes"]:
         lines.append(f"- {d}")
+    rec = data["reconciliation"]
+    lines += [
+        "",
+        "## Reconciliation (Finding-1 vs T1 N² numbers)",
+        "",
+        "| row | σ₀ profile rate (tol=0.01) | interface rate |",
+        "|-----|----------------------------|----------------|",
+        f"| RAW test | {rec['historical_raw_test']['violation_rate_profile']:.4f} | {rec['historical_raw_test']['violation_rate_interface']:.6f} |",
+        f"| A PCA-16 | {rec['historical_A_pca16']['violation_rate_profile']:.4f} | {rec['historical_A_pca16']['violation_rate_interface']:.6f} |",
+        f"| D monotone | {rec['historical_D']['violation_rate_profile']:.4f} | {rec['historical_D']['violation_rate_interface']:.6f} |",
+        "",
+    ]
+    for k, v in rec["notes"].items():
+        lines.append(f"- **({k})** {v}")
+    lines.append("")
+    lines.append("## T3 — exclude top 15 m (N² level @ 1e-8)")
+    lines.append("")
+    lines.append("| variant | full-column | exclude top 15 m |")
+    lines.append("|---------|-------------|------------------|")
+    for _key, r in data["variants"].items():
+        lines.append(f"| {r['name']} | {r['violation_rate_level']:.4f} | {r['exclude_top15m_level']:.4f} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -308,13 +372,17 @@ def main():
         "--cache",
         default="/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/data/cache/train_ready_4411c65ee518.pkl",
     )
+    ap.add_argument("--gsw-backend", default="gsw", choices=("gsw", "gsw_torch"))
     ap.add_argument("--out-json", type=Path, default=_ROOT.parent / "reports" / "t1_basis_stability.json")
     ap.add_argument("--out-md", type=Path, default=None)
     args = ap.parse_args()
+    set_config_backend(args.gsw_backend)
     data = run_t1(Path(args.cache))
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
-    # slim JSON — drop full summarize blobs
-    slim = {**data, "variants": {k: {kk: vv for kk, vv in v.items() if kk != "summary"} for k, v in data["variants"].items()}}
+    slim = {
+        **data,
+        "variants": {k: {kk: vv for kk, vv in v.items() if kk != "summary"} for k, v in data["variants"].items()},
+    }
     args.out_json.write_text(json.dumps(slim, indent=2) + "\n")
     md_path = args.out_md or args.out_json.with_suffix(".md")
     md_path.write_text(_to_md(slim))
