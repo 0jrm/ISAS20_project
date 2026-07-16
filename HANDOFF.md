@@ -1,20 +1,20 @@
 # Session handoff — dissertation data foundation
 
-**Branch:** `residual_cube`  
+**Branch:** `residual_cube` (merged → `master` @ `56f1e18`)  
 **Updated:** 2026-07-16  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)  
 **Conda:** `nespreso`
 
 ---
 
-## Status: low-rank δσ₀ PASS — matrix admission (inference-isotonic claim)
+## Status: Phase 4 low-rank CRPS run complete — ENCE miss / Spearman pass
 
 | Phase | Status |
 |-------|--------|
 | 0–1 | Done |
 | 2 | v3 HDF5 regen advancing |
-| 3 | **PASS** (corrected floor) — see architecture claim below |
-| 4 | **Next** — two-stage CRPS on this μ; cov export is `Σ_ρ = V diag(σ_z²) Vᵀ` |
+| 3 | **PASS** (merged to master) — inference-isotonic claim |
+| 4 | **Run done** — low-rank CRPS; Spearman PASS, ENCE MISS after val σ×α; §4.4 PSD+MC on score-σ export green |
 | 5–6 | Pass = Phase 5 matrix admission; dissertation number = 3-seed mean±std |
 
 ---
@@ -25,26 +25,37 @@ Winning path is **σ₀-space** low-rank: `σ̂₀ = clim + scores @ V`.
 **Not** monotone in the head. Pre-isotonic test: **45.6%** profiles violate.  
 **Guarantee:** *stable by construction at inference* via mandatory isotonic
 (`project_monotone_sigma0_ctrl`) — §3.6 opt-2 / T1-D. Cost ΔT ≈ −0.0002 °C.  
-Full-rank softplus+cumsum retains the stronger "hard constraint in the head" claim.
-PLAN §3.2 updated. Eval reports `stability_guarantee: inference_isotonic`.
+Prob σ lives on scores; cov export `Σ_ρ = V diag(σ_z²) Vᵀ`.
 
 ---
 
 ## Headline numbers
 
+### Phase 3 μ (deterministic)
+
 | quantity | value |
 |----------|------:|
 | chrono T RMSE (spice_v3) | **0.562** |
-| clean chrono argo16 | 0.5367 |
 | same-split floor (×1.10) | **0.590** |
 | ratio | 1.047 |
-| pre-inv σ₀ (after isotonic) | 0 |
-| pred dens + true spice | 0.250 |
-| true dens + pred spice | 0.404 |
 
-**Ckpt:** `saved/.../lowrank_sigma0_spice_v3/model_best.pth`  
+### Phase 4 low-rank CRPS (`lowrank_crps_v1`)
+
+| quantity | val raw | val σ×α | test raw | test σ×α |
+|----------|--------:|--------:|---------:|---------:|
+| CRPS | 0.585 | 0.587 | 0.715 | **0.715** |
+| ENCE | 0.286 | 0.246 | 0.506 | **0.361** |
+| Spearman | 0.441 | 0.441 | 0.519 | **0.519** |
+| slope | 1.51 | 1.33 | 1.76 | 1.56 |
+
+α = 1.134 (val RMSE/RMV). Anchors: Spearman **PASS**; ENCE **MISS** (<0.20).  
+vs prior full-rank FAIL μ CRPS 1.15 / Spearman 0.65 — mean recovered, ranking still strong.
+
+**Ckpt s2:** `saved/.../lowrank_crps_v1_s2/model_best.pth`  
 **Cache:** `../data/cache/train_ready_0f6129b27ddb.pkl`  
-**Report:** [`reports/phase3_lowrank_sigma0_spice_eval.md`](reports/phase3_lowrank_sigma0_spice_eval.md)
+**Report:** [`reports/phase4_lowrank_crps_eval.md`](reports/phase4_lowrank_crps_eval.md)  
+**§4.4 score-σ export:** `dacov.density_lowrank_covariance` — PSD + MC agreement green
+(`mc_vs_diag_agreement_lowrank`, n_draw=2000, rtol=0.15, max_rel≈0.057).
 
 ---
 
@@ -52,19 +63,18 @@ PLAN §3.2 updated. Eval reports `stability_guarantee: inference_isotonic`.
 
 | doc | role |
 |-----|------|
-| [`reports/gate_floor_provenance.md`](reports/gate_floor_provenance.md) | floor chain: leak → clean retrain → 0.5903 |
-| [`reports/finding_compress_physical_space.md`](reports/finding_compress_physical_space.md) | a-space PCA failure as citable finding (35× gap) |
-| [`reports/phase3_density_shift_diag.md`](reports/phase3_density_shift_diag.md) | leakage erratum (argo16 mse_σ 0.21) |
-| [`reports/phase3_density_shift_diag_clean.md`](reports/phase3_density_shift_diag_clean.md) | clean re-run; plumbing survives |
-| eval report `eval_hygiene.test_evals_consumed` | **2** selection evals on σ₀ family (v2→v3); forking-paths noted |
+| [`reports/gate_floor_provenance.md`](reports/gate_floor_provenance.md) | floor chain → 0.5903 |
+| [`reports/finding_compress_physical_space.md`](reports/finding_compress_physical_space.md) | a-space PCA failure |
+| [`reports/phase4_lowrank_crps_val.md`](reports/phase4_lowrank_crps_val.md) | val-only iteration |
+| eval hygiene | Phase 4: 1 test score after val α fit |
 
 ---
 
 ## Next
 
-1. **Phase 4** on this μ: two-stage CRPS; val-only σ recalibration for ENCE; iterate on val, one test score per matrix cell.
-2. Month-clim: defer (Phase 5 variant only if free).
-3. Merge to main: defensible **only with** inference-isotonic wiring + floor provenance in the same merge (both now in tree — commit when asked).
+1. **ENCE recovery options (val only):** per-dim / depth-band σ scales; or longer stage-2; do not burn more test scores.
+2. Phase 5 matrix preregistration when ENCE path chosen (or admit Spearman as DA-ranking claim with ENCE caveat).
+3. Month-clim: defer. Phase 2 v3 HDF5 still open for error-channel stratum.
 
 ```bash
 tmux attach -t v3_hdf5_regen

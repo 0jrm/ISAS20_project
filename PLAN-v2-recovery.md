@@ -8,6 +8,8 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-16 | **Phase 4 low-rank CRPS run:** two-stage `lowrank_crps_v1`; test CRPS 0.715 / Spearman 0.519 PASS / ENCE 0.361 MISS after val α=1.13. §4.4 `mc_vs_diag_agreement_lowrank` PSD+MC green (max_rel≈0.057). | Mean recovered vs prior CRPS 1.15 on FAIL μ; absolute scale still off. |
+| 2026-07-16 | **Phase 4 low-rank CRPS unblocked.** Score-domain σ → induced σ₀ via `Σ_ρ = V diag(σ_z²) Vᵀ` (diag for CRPS); `dacov.density_lowrank_covariance`; config `config_argo_densityspice_lowrank_crps.json`. Merged Phase 3 PASS to `master`. | Resume two-stage CRPS on winning μ. |
 | 2026-07-16 | **Inference-isotonic claim locked.** Low-rank δσ₀ is *not* head-monotone (45.6% pre-iso neg profiles). Isotonic mandatory at inference; PLAN §3.2 distinguishes claims. Reports: `finding_compress_physical_space.md`, `gate_floor_provenance.md`; eval hygiene + blame-split in spice_v3 report. Pass = Phase 5 matrix admission. | Hard-head vs inference-stable are different chapter claims; floor chain is dissertation material. |
 | 2026-07-16 | **Low-rank δσ₀ PASS:** σ₀-space PCA R=16 + spice continue → chrono T **0.562** ≤ clean floor **0.590** (`phase3_lowrank_sigma0_spice_eval.md`). Pre-inv σ₀=0. a-space path retired. | In-head skill recovery clears corrected gate. |
 | 2026-07-16 | **Low-rank erratum:** a-space PCA on `(a−a_clim)` is a dead end — R=16 σ₀ recon RMSE 0.93 > clim 0.72 despite 94% a-EVR (softplus⁻¹). v1 train T=0.830 FAIL. Retarget to **σ₀-space** PCA (`delta_sigma0_basis`); ceiling R=16 σ₀ RMSE 0.026. | Nonlinear control-space ≠ linear skill. |

@@ -60,7 +60,7 @@ def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
     from evalphys.metrics import summarize_physical
     from model.density_spice import decode_sigma0_ctrl
     from model.model import PatchConvMLP
-    from model.prob_head import softplus_sigma, split_mu_sigma
+    from model.prob_head import split_mu_sigma
     from preproc.export_v2_cache import build_argo_cache
 
     set_headline_frozen(True)
@@ -108,24 +108,46 @@ def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
         out = model(x)
         if isinstance(out, (tuple, list)):
             out = out[0]
-        mu_raw, sigma_raw = split_mu_sigma(out, d)
-        # μ in standardized target space (matches CRPS training); a = a_clim + δa
-        from model.density_spice import encode_a_from_sigma0_ctrl
+        mu_raw, sigma_lat = split_mu_sigma(out, d)
+        n_scores = int(cfg["outputs"]["density_ctrl"])
+        n_spice = int(cfg["outputs"]["spice"])
+        basis = meta.get("delta_sigma0_basis")
+        # model forward already softplus+floor; do not softplus again
+        if basis is not None:
+            from model.density_spice import decode_sigma0_from_scores
 
-        a_clim = meta.get("a_clim")
-        if a_clim is None:
-            a_clim = encode_a_from_sigma0_ctrl(
-                np.asarray(meta["sigma0_ctrl_mean"], dtype=np.float64),
-                np.asarray(meta["dz_tilde"], dtype=np.float64),
-                np.asarray(meta["z_ctrl"], dtype=np.float64),
+            clim = meta.get("sigma0_clim", meta["sigma0_ctrl_mean"])
+            clim_t = torch.tensor(clim, dtype=torch.float32, device=device)
+            basis_t = torch.tensor(basis, dtype=torch.float32, device=device)
+            sig, z_tau = decode_sigma0_from_scores(
+                mu_raw, clim_t, n_scores, n_spice, basis_t
             )
-        a_clim_t = torch.tensor(a_clim, dtype=torch.float32, device=device)
-        a = mu_raw[:, :k] + a_clim_t
-        z_tau = mu_raw[:, k:]
-        sig = decode_sigma0_ctrl(a, dz)
-        sig_z = (sig - mu_s) / sd_s
-        mu = torch.cat([sig_z, z_tau], dim=-1)
-        sigma = softplus_sigma(sigma_raw, float(cfg.get("loss_config", {}).get("sigma_min", 1e-3)))
+            sig_z = (sig - mu_s) / sd_s
+            mu = torch.cat([sig_z, z_tau], dim=-1)
+            # Σ_ρ = V diag(σ_z²) Vᵀ → per-level std, then standardize
+            sz = sigma_lat[:, :n_scores]
+            st = sigma_lat[:, n_scores:]
+            var = (basis_t.unsqueeze(0) ** 2) * (sz.unsqueeze(-1) ** 2)
+            std_phys = torch.sqrt(var.sum(dim=1).clamp_min(1e-12))
+            sigma = torch.cat([std_phys / sd_s, st], dim=-1)
+        else:
+            # μ in standardized target space; a = a_clim + δa
+            from model.density_spice import encode_a_from_sigma0_ctrl
+
+            a_clim = meta.get("a_clim")
+            if a_clim is None:
+                a_clim = encode_a_from_sigma0_ctrl(
+                    np.asarray(meta["sigma0_ctrl_mean"], dtype=np.float64),
+                    np.asarray(meta["dz_tilde"], dtype=np.float64),
+                    np.asarray(meta["z_ctrl"], dtype=np.float64),
+                )
+            a_clim_t = torch.tensor(a_clim, dtype=torch.float32, device=device)
+            a = mu_raw[:, :k] + a_clim_t
+            z_tau = mu_raw[:, k:]
+            sig = decode_sigma0_ctrl(a, dz)
+            sig_z = (sig - mu_s) / sd_s
+            mu = torch.cat([sig_z, z_tau], dim=-1)
+            sigma = sigma_lat
         mu_np = mu.cpu().numpy()
         sig_np = sigma.cpu().numpy()
         mu_raw_np = mu_raw.cpu().numpy()

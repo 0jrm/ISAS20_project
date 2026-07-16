@@ -70,6 +70,35 @@ def density_ctrl_covariance(
     return arr[0] if single else arr
 
 
+def density_lowrank_covariance(
+    sigma_z: np.ndarray,
+    basis: np.ndarray,
+    *,
+    floor: float = 1e-8,
+) -> np.ndarray:
+    """Σ_ρ = V diag(σ_z²) Vᵀ on the control grid (low-rank δσ₀ path).
+
+    ``basis`` is PCA components ``(R, K)``; ``sigma_z`` is ``(R,)`` or ``(B, R)``.
+    """
+    V = np.asarray(basis, dtype=np.float64)  # (R, K)
+    if V.ndim != 2:
+        raise ValueError(f"basis must be (R, K), got {V.shape}")
+    sz = np.asarray(sigma_z, dtype=np.float64)
+    single = sz.ndim == 1
+    if single:
+        sz = sz[None, :]
+    if sz.shape[-1] != V.shape[0]:
+        raise ValueError(f"sigma_z last dim {sz.shape[-1]} != R={V.shape[0]}")
+    out = []
+    Vt = V.T  # (K, R)
+    for i in range(sz.shape[0]):
+        cov = (Vt * (sz[i] ** 2)) @ V
+        cov = cov + np.eye(cov.shape[0]) * float(floor)
+        out.append(cov)
+    arr = np.stack(out, axis=0)
+    return arr[0] if single else arr
+
+
 def export_profile_covariance(
     mu_a: np.ndarray,
     sigma_a: np.ndarray,
@@ -126,3 +155,34 @@ def mc_vs_diag_agreement(
     # avoid /0
     rel = np.abs(diag - mc_var) / np.maximum(mc_var, 1e-12)
     return {"max_rel": float(np.max(rel)), "mean_rel": float(np.mean(rel)), "pass": bool(np.max(rel) <= rtol)}
+
+
+def mc_vs_diag_agreement_lowrank(
+    sigma_z: np.ndarray,
+    basis: np.ndarray,
+    *,
+    n_draw: int = 200,
+    seed: int = 0,
+    rtol: float = 0.15,
+    floor: float = 1e-8,
+) -> dict[str, float]:
+    """§4.4 for score-σ export: diag(Σ_ρ) vs MC var of ``clim + scores @ V``.
+
+    ``basis`` is ``(R, K)`` PCA components (same layout as ``delta_sigma0_basis``).
+    """
+    rng = np.random.default_rng(seed)
+    V = np.asarray(basis, dtype=np.float64)  # (R, K)
+    sz = np.asarray(sigma_z, dtype=np.float64).reshape(-1)
+    if sz.size != V.shape[0]:
+        raise ValueError(f"sigma_z length {sz.size} != R={V.shape[0]}")
+    scores = rng.normal(size=(n_draw, sz.size)) * sz
+    prof = scores @ V  # (n_draw, K) — anomaly; clim cancels in var
+    mc_var = prof.var(axis=0)
+    analytic = density_lowrank_covariance(sz, V, floor=floor)
+    diag = np.diag(analytic)
+    rel = np.abs(diag - mc_var) / np.maximum(mc_var, 1e-12)
+    return {
+        "max_rel": float(np.max(rel)),
+        "mean_rel": float(np.mean(rel)),
+        "pass": bool(np.max(rel) <= rtol),
+    }

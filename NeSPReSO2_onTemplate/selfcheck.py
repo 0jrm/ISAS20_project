@@ -1773,9 +1773,16 @@ def test_prob_head_hetero_and_quantile():
 
 
 def test_dacov_psd_and_mc():
-    """Phase 4.4: spice Σ PSD + MC diagonal agreement."""
+    """Phase 4.4: spice Σ PSD + MC; low-rank score-σ Σ_ρ PSD + MC (§4.4)."""
     from sklearn.decomposition import PCA
-    from dacov import assert_psd, density_ctrl_covariance, mc_vs_diag_agreement, spice_covariance
+    from dacov import (
+        assert_psd,
+        density_ctrl_covariance,
+        density_lowrank_covariance,
+        mc_vs_diag_agreement,
+        mc_vs_diag_agreement_lowrank,
+        spice_covariance,
+    )
 
     rng = np.random.default_rng(1)
     pca = PCA(n_components=8).fit(rng.normal(size=(100, 32)))
@@ -1785,7 +1792,15 @@ def test_dacov_psd_and_mc():
     ag = mc_vs_diag_agreement(sz, pca, np.ones(32), n_draw=2000, seed=1, rtol=0.15)
     assert ag["pass"], ag
     assert_psd(density_ctrl_covariance(np.ones(16) * 0.1, np.ones(16)))
-
+    # low-rank δσ₀ score-σ export: Σ_ρ = V diag(σ_z²) Vᵀ — PSD + MC (PLAN §4.4)
+    V = rng.normal(size=(8, 64))
+    V /= np.linalg.norm(V, axis=1, keepdims=True)
+    cov_lr = density_lowrank_covariance(sz, V)
+    assert_psd(cov_lr)
+    diag_expect = (V**2 * (sz**2)[:, None]).sum(axis=0) + 1e-8
+    assert np.max(np.abs(np.diag(cov_lr) - diag_expect)) < 1e-10
+    ag_lr = mc_vs_diag_agreement_lowrank(sz, V, n_draw=2000, seed=1, rtol=0.15)
+    assert ag_lr["pass"], ag_lr
 
 def test_density_spice_prob_loss_crps_backward():
     """Phase 4.2: CRPS density_spice loss is finite and backprops."""
@@ -1823,6 +1838,51 @@ def test_density_spice_prob_loss_crps_backward():
     assert torch.isfinite(L)
     L.backward()
     assert out.grad is not None
+
+
+def test_density_spice_prob_loss_lowrank_crps_backward():
+    """Phase 4 low-rank: score-σ induces σ₀ std; CRPS backprops."""
+    from model.loss import DensitySpiceProbLoss
+    from model.density_spice import make_control_grid, normalized_dz
+
+    rng = np.random.default_rng(0)
+    depth = np.linspace(0, 2000, 201)
+    z = make_control_grid(depth, 64)
+    dz = normalized_dz(z)
+    R, K, n_spice = 16, 64, 16
+    basis = rng.normal(size=(R, K)).astype(np.float32)
+    basis /= np.linalg.norm(basis, axis=1, keepdims=True)
+    clim = np.linspace(24.0, 27.0, K).astype(np.float32)
+    loss = DensitySpiceProbLoss(
+        {"density_ctrl": R, "spice": n_spice},
+        dz,
+        device=torch.device("cpu"),
+        lambda_rho=1.0,
+        lambda_tau=1.0,
+        sigma0_mean=clim,
+        sigma0_std=np.ones(K, dtype=np.float32),
+        delta_sigma0_basis=basis,
+        sigma0_clim=clim,
+        n_ctrl=K,
+        prob_mode="crps",
+    )
+    B, D = 4, R + n_spice
+    out = torch.randn(B, 2 * D, requires_grad=True)
+    with torch.no_grad():
+        out[:, D:] = 0.5  # positive-ish σ latents (softplus applied upstream in model)
+    tgt = torch.randn(B, K + n_spice)
+    L = loss(out, tgt)
+    assert torch.isfinite(L)
+    L.backward()
+    assert out.grad is not None
+    # induced diag length K
+    with torch.no_grad():
+        from model.prob_head import split_mu_sigma
+
+        _, slat = split_mu_sigma(out.detach(), D)
+        sig = loss._sigma_target_space(slat)
+        assert sig.shape == (B, K + n_spice)
+        assert (sig > 0).all()
 
 
 def test_error_channel_log_norm():
@@ -1992,6 +2052,7 @@ if __name__ == "__main__":
     test_prob_head_hetero_and_quantile()
     test_dacov_psd_and_mc()
     test_density_spice_prob_loss_crps_backward()
+    test_density_spice_prob_loss_lowrank_crps_backward()
     test_error_channel_log_norm()
     test_stale_sat_gate_status()
     test_backend_equivalence_smoke()

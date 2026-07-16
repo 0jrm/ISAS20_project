@@ -759,13 +759,6 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         freeze_sigma: bool = False,
         target_err: torch.Tensor | None = None,
     ):
-        if delta_sigma0_basis is not None or (
-            n_ctrl is not None and int(outputs["density_ctrl"]) != int(n_ctrl)
-        ):
-            # ponytail: σ on score domain needs Jacobian for CRPS/NLL in σ₀ space; defer.
-            raise NotImplementedError(
-                "prob density_spice + low-rank δσ₀ not supported yet; train deterministic first"
-            )
         super().__init__(
             outputs,
             dz_tilde,
@@ -782,6 +775,10 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         )
         if prob_mode not in VALID_PROB_MODES:
             raise ValueError(f"prob_mode must be one of {VALID_PROB_MODES}, got {prob_mode!r}")
+        if prob_mode == "quantile" and self.delta_sigma0_basis is not None:
+            raise NotImplementedError(
+                "quantile + low-rank δσ₀ deferred; use crps/nll (score-σ → induced σ₀)"
+            )
         self.prob_mode = prob_mode
         self.nll_beta = float(nll_beta)
         self.sigma_min = float(sigma_min)
@@ -798,6 +795,33 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         if self.sigma0_mean is not None:
             sig_hat = (sig_hat - self.sigma0_mean) / self.sigma0_std
         return torch.cat([sig_hat, z_tau], dim=-1)
+
+    def _sigma_target_space(self, sigma_lat: torch.Tensor) -> torch.Tensor:
+        """Map latent σ to standardized (σ₀_ctrl || spice) for CRPS/NLL.
+
+        Full-rank: σ already per ctrl level (+ spice PCs).
+        Low-rank: density σ is on R scores; induce
+        ``σ_i = sqrt(Σ_r V[r,i]² σ_z[r]²) / σ0_std[i]`` (diag of Σ_ρ = V diag(σ_z²) Vᵀ).
+        """
+        if self.delta_sigma0_basis is None:
+            if sigma_lat.shape[-1] != self.k + self.n_spice:
+                raise ValueError(
+                    f"full-rank prob σ width {sigma_lat.shape[-1]} != K+spice "
+                    f"{self.k + self.n_spice}"
+                )
+            return sigma_lat
+        if sigma_lat.shape[-1] != self.d:
+            raise ValueError(
+                f"low-rank prob σ width {sigma_lat.shape[-1]} != R+spice {self.d}"
+            )
+        sz = sigma_lat[:, : self.n_scores]
+        st = sigma_lat[:, self.n_scores :]
+        # basis (R, K): var_i = Σ_r V[r,i]² σ_r²
+        var = (self.delta_sigma0_basis.unsqueeze(0) ** 2) * (sz.unsqueeze(-1) ** 2)
+        std_phys = torch.sqrt(var.sum(dim=1).clamp_min(1e-12))
+        if self.sigma0_std is not None:
+            std_phys = std_phys / self.sigma0_std
+        return torch.cat([std_phys, st], dim=-1)
 
     def _sigma_tot(self, sigma: torch.Tensor, indices=None) -> torch.Tensor:
         """Phase 4.7: σ_tot² = σ_pred² + σ_target² when target_err buffer present."""
@@ -826,16 +850,13 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
             # constraint during training (eval still uses a CRPS/NLL winner). Documented.
             return pinball_loss(q, target, QUANTILE_TAUS)
 
-        mu_raw, sigma = split_mu_sigma(output, self.d)
+        mu_raw, sigma_lat = split_mu_sigma(output, self.d)
         mu = self._mu_from_raw(mu_raw)
-        # Full-rank: σ predicted per ctrl level; network width == target width.
-        # Low-rank blocked in __init__.
+        sigma = self._sigma_tot(self._sigma_target_space(sigma_lat), indices)
         if sigma.shape[-1] != target.shape[-1]:
             raise ValueError(
-                f"prob σ width {sigma.shape[-1]} != target {target.shape[-1]} "
-                "(low-rank δa not supported for CRPS/NLL)"
+                f"prob σ width {sigma.shape[-1]} != target {target.shape[-1]}"
             )
-        sigma = self._sigma_tot(sigma, indices)
         if self.prob_mode == "crps":
             crps = gaussian_crps_torch(mu, sigma, target, sigma_min=self.sigma_min)
             w = torch.ones_like(crps)
