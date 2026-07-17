@@ -105,6 +105,13 @@ data/
 input/
 saved/
 !saved/README.md
+# Phase 5 matrix env pin (next to manifest; launcher asserts sha)
+!saved/runs/
+saved/runs/**
+!saved/runs/phase5_matrix/
+saved/runs/phase5_matrix/**
+!saved/runs/phase5_matrix/conda-env.lock.yml
+!saved/runs/phase5_matrix/conda-env.sha256
 datasets/
 
 # editor, os cache directory

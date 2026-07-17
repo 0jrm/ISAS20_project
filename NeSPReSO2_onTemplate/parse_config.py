@@ -69,6 +69,12 @@ def validate_config(config):
             "R<K ⇒ low-rank δa (PLAN §3.6)"
         )
         assert mode == "density_spice", "representation=density_spice requires loss_config.mode=density_spice"
+    if config.get("io", {}).get("representation") == "joint_eof":
+        assert set(outputs.keys()) == {"joint"}, f"joint_eof requires outputs {{joint}}, got {list(outputs)}"
+        assert int(outputs["joint"]) == 32, "joint_eof expects joint=32 (T1 / Phase 5 B)"
+        assert mode in ("combined", "pc_mse_only", "pred_profile_cached"), (
+            "joint_eof loss_config.mode must be combined|pc_mse_only|pred_profile_cached"
+        )
     dl = config.get("data_loader", {}).get("args", {})
     split_mode = dl.get("split_mode", "random")
     assert split_mode in ("random", "chronological"), f"split_mode must be random|chronological, got {split_mode!r}"

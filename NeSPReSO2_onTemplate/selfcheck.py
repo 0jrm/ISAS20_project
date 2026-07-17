@@ -18,10 +18,13 @@ from model.model import PatchConvMLP, PredictionModel
 from preproc.preproc_isas_sat import compute_input_dim, sat_patch_shape
 
 TOL = 1e-6
+# R4 2026-07-16: restored to live/original (b34efc8). Wrong dict at 3699887 was
+# unnormalized wmse (×6 = n_pc) — not a CombinedPCALoss math change. See
+# reports/ablation_preregistration.md §4.
 GOLDEN = {
-    "combined_loss": 0.05071902275085449,
+    "combined_loss": 0.008507695980370045,
     "pca_loss": 0.00037024958874098957,
-    "weighted_mse_loss": 0.0025833332911133766,
+    "weighted_mse_loss": 0.000430555606726557,
     "recon_temp_head": [20.078725814819336, 19.486875534057617, 19.124080657958984, 18.788761138916016, 18.34334945678711],
     "recon_sal_head": [36.001399993896484, 36.043731689453125, 36.02961349487305, 36.0516357421875, 36.07063293457031],
     "prediction_head": [-0.0486145056784153, -0.2789950966835022, -0.18031582236289978, -0.10186368972063065, -0.19932889938354492, -0.10338201373815536],
@@ -304,12 +307,11 @@ def test_prediction_model_v2():
 
 
 def test_combined_pca_loss_v2():
-    """Golden combined/weighted_mse values drift vs HEAD; PCA recon still matches.
+    """Pin CombinedPCALoss on the fixed synthetic batch (R4 classified 2026-07-16).
 
-    Audit 2026-07-16: fails identically on parent ``820e598`` (pre-Phase-0) and on
-    ``audit/phase0-1`` — combined_loss ~0.0085 vs golden 0.0507; weighted_mse ~0.00043
-    vs 0.00258; pca_loss + recon heads still match. Do NOT silently regenerate goldens
-    (numerical skill: needs re-derivation + human sign-off). Tracked in HANDOFF.md.
+    Parent ``820e598`` and HEAD agree bit-for-bit on live values (~0.0085 / ~0.00043).
+    The 0.0507 / 0.00258 dict was a bad regen at ``3699887`` (wmse without
+    ``weights/sum(weights)`` → exactly ×n_pc). Restored; hard-assert again.
     """
     pca_temp, pca_sal, temp_pcs, sal_pcs, n_components = _synthetic_pca_pair()
     pcs_np = np.hstack([temp_pcs, sal_pcs])[:4].astype(np.float32)
@@ -330,22 +332,11 @@ def test_combined_pca_loss_v2():
         weighted_mse = combined.weighted_mse_loss(pcs, targets)
         recon_t, recon_s = combined._reconstruct_profiles(pcs)
 
-    # Still assert the parts that remain valid
+    assert np.isclose(combined_loss.item(), GOLDEN["combined_loss"], rtol=0, atol=TOL)
     assert np.isclose(pca_loss.item(), GOLDEN["pca_loss"], rtol=0, atol=TOL)
+    assert np.isclose(weighted_mse.item(), GOLDEN["weighted_mse_loss"], rtol=0, atol=TOL)
     assert np.allclose(recon_t[0, :5].numpy(), GOLDEN["recon_temp_head"], rtol=0, atol=TOL)
     assert np.allclose(recon_s[0, :5].numpy(), GOLDEN["recon_sal_head"], rtol=0, atol=TOL)
-    # Known-failing golden combination terms — skip with reason (pre-existing)
-    if not (
-        np.isclose(combined_loss.item(), GOLDEN["combined_loss"], rtol=0, atol=TOL)
-        and np.isclose(weighted_mse.item(), GOLDEN["weighted_mse_loss"], rtol=0, atol=TOL)
-    ):
-        print(
-            "selfcheck SKIP test_combined_pca_loss_v2 combined/weighted_mse golden: "
-            f"got combined={combined_loss.item():.6g} (golden {GOLDEN['combined_loss']}), "
-            f"wmse={weighted_mse.item():.6g} (golden {GOLDEN['weighted_mse_loss']}); "
-            "pre-existing on 820e598 — needs human golden re-derivation"
-        )
-        return
 
 
 def test_pred_profile_cached_matches_combined():
@@ -1802,6 +1793,64 @@ def test_dacov_psd_and_mc():
     ag_lr = mc_vs_diag_agreement_lowrank(sz, V, n_draw=2000, seed=1, rtol=0.15)
     assert ag_lr["pass"], ag_lr
 
+
+def test_dacov_sigma_recalib_scales_export():
+    """Σ export must use α-scaled σ: Σ = V diag((α σ)²) Vᵀ (not raw σ)."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from dacov import apply_sigma_recalib, density_lowrank_covariance, load_sigma_recalib
+
+    rng = np.random.default_rng(2)
+    R, K = 4, 16
+    V = rng.normal(size=(R, K))
+    V /= np.linalg.norm(V, axis=1, keepdims=True)
+    sz = np.abs(rng.normal(size=R)) + 0.1
+    alphas = np.array([0.5, 1.0, 1.5, 2.0], dtype=np.float64)
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "sigma_recalib_per_dim.json"
+        p.write_text(json.dumps({"alphas": alphas.tolist(), "method": "per_dim"}) + "\n")
+        a_load = load_sigma_recalib(p)
+    assert np.allclose(a_load, alphas)
+    cov_raw = density_lowrank_covariance(sz, V, floor=0.0)
+    cov_scaled = density_lowrank_covariance(sz, V, alphas=alphas, floor=0.0)
+    cov_manual = density_lowrank_covariance(apply_sigma_recalib(sz, alphas), V, floor=0.0)
+    assert np.allclose(cov_scaled, cov_manual)
+    # score-space: diag var_r scales by α_r² → level diag = Σ_r V[r,k]² (α_r σ_r)²
+    expect_diag = (V**2 * ((alphas * sz) ** 2)[:, None]).sum(axis=0)
+    assert np.allclose(np.diag(cov_scaled), expect_diag, rtol=0, atol=1e-10)
+    assert not np.allclose(cov_raw, cov_scaled)
+
+
+def test_dacov_ts_jacobian_export():
+    """§4.4 gate-critical: Σ_ρ/Σ_τ → Σ_T/Σ_S via inversion J; PSD + MC diag agree."""
+    from dacov import assert_psd, ts_covariance_from_sigma0_spice
+
+    rng = np.random.default_rng(3)
+    n_z = 12
+    depth = np.linspace(0, 200, n_z)
+    T = 25.0 - 0.05 * depth + rng.normal(scale=0.01, size=n_z)
+    S = 36.0 + 0.001 * depth + rng.normal(scale=0.005, size=n_z)
+    # simple diagonal Σ in (σ₀,τ) — MC by perturbing T/S through J would be circular;
+    # check PSD + that diag(Σ_T) scales with diag(Σ_ρ) when J is well-conditioned
+    Sigma_rho = np.diag(np.full(n_z, 0.01))
+    Sigma_tau = np.diag(np.full(n_z, 0.001))
+    out = ts_covariance_from_sigma0_spice(
+        Sigma_rho, Sigma_tau, T, S, depth, lat=25.0, lon=-90.0, floor=1e-10
+    )
+    assert_psd(out["Sigma_T"])
+    assert_psd(out["Sigma_S"])
+    assert out["Sigma_T"].shape == (n_z, n_z)
+    assert np.all(np.diag(out["Sigma_T"]) > 0)
+    assert np.all(np.diag(out["Sigma_S"]) > 0)
+
+
+def test_joint_eof_roundtrip():
+    from model.joint_eof import selfcheck_joint_eof_roundtrip
+
+    selfcheck_joint_eof_roundtrip()
+
 def test_density_spice_prob_loss_crps_backward():
     """Phase 4.2: CRPS density_spice loss is finite and backprops."""
     from model.loss import DensitySpiceProbLoss
@@ -2051,6 +2100,9 @@ if __name__ == "__main__":
     test_density_spice_monotone_and_roundtrip()
     test_prob_head_hetero_and_quantile()
     test_dacov_psd_and_mc()
+    test_dacov_sigma_recalib_scales_export()
+    test_dacov_ts_jacobian_export()
+    test_joint_eof_roundtrip()
     test_density_spice_prob_loss_crps_backward()
     test_density_spice_prob_loss_lowrank_crps_backward()
     test_error_channel_log_norm()

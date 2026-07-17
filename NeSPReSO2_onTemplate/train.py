@@ -296,6 +296,7 @@ def main(config):
         bottom_depth=cache.get("bottom_depth"),
         pres_levels=cache.get("PRES"),
         density_spice_meta=cache.get("density_spice_meta"),
+        joint_eof_meta=cache.get("joint_eof_meta"),
     )
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)

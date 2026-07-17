@@ -8,6 +8,11 @@
 
 | Date | Change | Why |
 |------|--------|-----|
+| 2026-07-17 | **Phase 5/6 critical-path close:** conda env lock + `launch_matrix` sha assert; joint-EOF train path (B); §5.1 archive before results; Σ→T/S Jacobian in `dacov` (Phase 6 E4/E5 gate); OSSE prereg + ISOP scaffold pre-winner; prereg commits full-cell tables + winner depth×season strata. | Human: B closed, env pinned, Jacobian not a leftover. |
+| 2026-07-16 | **R4 classified + goldens restored:** parent=`820e598` and HEAD agree on live combined/wmse (~0.0085/0.00043); wrong dict at `3699887` was unnormalized wmse (×6). Hard-assert restored. Prereg §4 records classification (not waive). `dacov` α kwarg + selfcheck pin. Matrix launch unblocked (C×CRPS first). | Conditional human ACK: semantic→block, procedural→regen+sign-off. |
+| 2026-07-16 | **Phase 5 preregistered:** `reports/ablation_preregistration.md` locks 3×3×3 matrix, C=low-rank+isotonic, test-once rule, run order, R4 path. | PLAN §5.2 requires prereg before first GPU cell. |
+| 2026-07-16 | **Phase 4 ENCE PASS:** longer stage-2 `s2b` (ep→250, lr 5e-5) + val per-dim σ → test ENCE **0.160** / Spearman **0.540** / CRPS 0.698. Anchors cleared. Next = Phase 5 preregistration. | Dimensional under-dispersion; train-time σ + val scales transfer. |
+| 2026-07-16 | **ENCE recovery (val-only σ scales):** `ence_recalib_val.py` — per_dim val ENCE 0.027 PASS / test 0.231 MISS on s2; depth_band worse on test. Longer stage-2 `s2b` launched. | Dimensional under-dispersion (50–200 m ×2.2); global α insufficient. |
 | 2026-07-16 | **Phase 4 low-rank CRPS run:** two-stage `lowrank_crps_v1`; test CRPS 0.715 / Spearman 0.519 PASS / ENCE 0.361 MISS after val α=1.13. §4.4 `mc_vs_diag_agreement_lowrank` PSD+MC green (max_rel≈0.057). | Mean recovered vs prior CRPS 1.15 on FAIL μ; absolute scale still off. |
 | 2026-07-16 | **Phase 4 low-rank CRPS unblocked.** Score-domain σ → induced σ₀ via `Σ_ρ = V diag(σ_z²) Vᵀ` (diag for CRPS); `dacov.density_lowrank_covariance`; config `config_argo_densityspice_lowrank_crps.json`. Merged Phase 3 PASS to `master`. | Resume two-stage CRPS on winning μ. |
 | 2026-07-16 | **Inference-isotonic claim locked.** Low-rank δσ₀ is *not* head-monotone (45.6% pre-iso neg profiles). Isotonic mandatory at inference; PLAN §3.2 distinguishes claims. Reports: `finding_compress_physical_space.md`, `gate_floor_provenance.md`; eval hygiene + blame-split in spice_v3 report. Pass = Phase 5 matrix admission. | Hard-head vs inference-stable are different chapter claims; floor chain is dissertation material. |
@@ -324,7 +329,7 @@ Frozen evalphys only. Required table: {CRPS, ENCE, PIT sup-dev, spread-skill slo
 
 ## Phase 5 — Consolidation and the ablation matrix
 
-**Prerequisite (R4 / audit):** root-cause and either re-derive or formally waive the `test_combined_pca_loss_v2` combined/weighted_mse golden drift (fails identically on pre-Phase-0 `820e598`) **before launching the matrix**. PCA recon heads still match; the unexplained combination-term drift must not propagate as a silent question mark across every matrix cell.
+**Prerequisite (R4 / audit):** **CLEARED 2026-07-16.** Classification: live loss on parent `820e598` ≡ HEAD; golden dict was a bad regen (`3699887`, unnormalized wmse ×n_pc). Goldens restored + hard-assert; see `reports/ablation_preregistration.md` §4. Not a silent waive.
 
 **Objective:** one backbone, one pre-registered comparison, archive the sprawl.
 

@@ -311,6 +311,7 @@ class PCALoss(nn.Module):
         true_profiles: Mapping[str, torch.Tensor] | None = None,
         bottom_depth: np.ndarray | None = None,
         pres_levels: np.ndarray | None = None,
+        joint_eof_meta: Mapping[str, Any] | None = None,
     ):
         super().__init__()
         if mode not in VALID_LOSS_MODES:
@@ -322,6 +323,9 @@ class PCALoss(nn.Module):
         self.profile_scales = dict(DEFAULT_PROFILE_SCALES)
         if profile_scales:
             self.profile_scales.update(profile_scales)
+        self.joint_eof = joint_eof_meta is not None
+        if self.joint_eof and list(outputs.keys()) != ["joint"]:
+            raise ValueError("joint_eof_meta requires outputs {'joint': R}")
 
         dev = device or torch.device("cpu")
         self.use_bathy = bottom_depth is not None and pres_levels is not None
@@ -345,10 +349,28 @@ class PCALoss(nn.Module):
                 f"{name}_mean",
                 torch.tensor(pca.mean_, dtype=torch.float32, device=dev).unsqueeze(0),
             )
-            if mode == "pred_profile_cached":
+            if mode == "pred_profile_cached" and not self.joint_eof:
                 if true_profiles is None or name not in true_profiles:
                     raise ValueError(f"pred_profile_cached requires true_profiles[{name!r}]")
                 self.register_buffer(f"{name}_true_profiles", true_profiles[name])
+
+        if self.joint_eof:
+            meta = joint_eof_meta
+            self.n_lev = int(meta["n_lev"])
+            for key in ("T_mean", "T_std", "S_mean", "S_std"):
+                self.register_buffer(
+                    f"joint_{key}",
+                    torch.tensor(np.asarray(meta[key], dtype=np.float32), device=dev),
+                )
+            if true_profiles is None or "temperature" not in true_profiles or "salinity" not in true_profiles:
+                raise ValueError("joint_eof PCALoss requires true_profiles temperature+salinity")
+            for name in ("temperature", "salinity"):
+                arr = true_profiles[name]
+                if not torch.is_tensor(arr):
+                    arr = torch.tensor(np.asarray(arr, dtype=np.float32), device=dev)
+                else:
+                    arr = arr.to(device=dev)
+                self.register_buffer(f"{name}_true_profiles", arr)
 
     def _components(self, name):
         return getattr(self, f"{name}_components")
@@ -362,10 +384,42 @@ class PCALoss(nn.Module):
     def inverse_transform(self, pcs, components, mean):
         return torch_reconstruct_profile(pcs, components, mean)
 
+    def _decode_joint_ts(self, pcs_joint: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        from model.joint_eof import torch_reconstruct_joint_eof
+
+        return torch_reconstruct_joint_eof(
+            pcs_joint,
+            self._components("joint"),
+            self._mean("joint"),
+            self.joint_T_mean,
+            self.joint_T_std,
+            self.joint_S_mean,
+            self.joint_S_std,
+            self.n_lev,
+        )
+
     def forward(self, pcs, targets, indices=None):
         depth_mask = None
         if self.use_bathy and indices is not None:
             depth_mask = bathy_depth_mask(indices, self.bottom_depth, self.pres_levels, pcs.device)
+
+        if self.joint_eof:
+            if indices is None:
+                raise ValueError("joint_eof PCALoss requires batch indices")
+            pred_t, pred_s = self._decode_joint_ts(pcs)
+            true_t = self.temperature_true_profiles[indices]
+            true_s = self.salinity_true_profiles[indices]
+            total = pcs.new_tensor(0.0)
+            for name, pred, true in (
+                ("temperature", pred_t, true_t),
+                ("salinity", pred_s, true_s),
+            ):
+                if depth_mask is not None:
+                    mse = masked_profile_mse(pred, true, depth_mask)
+                else:
+                    mse = nn.functional.mse_loss(pred, true)
+                total = total + mse / self.profile_scales.get(name, 1.0)
+            return total
 
         if self.mode == "pred_profile_cached":
             if indices is None:
@@ -479,6 +533,7 @@ class CombinedPCALoss(nn.Module):
         surface_residual_layout: Mapping[str, Any] | None = None,
         bottom_depth: np.ndarray | None = None,
         pres_levels: np.ndarray | None = None,
+        joint_eof_meta: Mapping[str, Any] | None = None,
     ):
         super().__init__()
         if mode not in VALID_LOSS_MODES:
@@ -489,6 +544,7 @@ class CombinedPCALoss(nn.Module):
         self.slices = output_slices(outputs)
         self.combined_pca_scale = combined_pca_scale or DEFAULT_COMBINED_PCA_SCALE
         self.combined_mse_scale = combined_mse_scale or DEFAULT_COMBINED_MSE_SCALE
+        self.joint_eof_meta = joint_eof_meta
 
         if mode == "decoder":
             if decoders is None:
@@ -518,6 +574,7 @@ class CombinedPCALoss(nn.Module):
                 true_profiles=true_profiles,
                 bottom_depth=bottom_depth,
                 pres_levels=pres_levels,
+                joint_eof_meta=joint_eof_meta,
             )
 
         self.weighted_mse_loss = genWeightedMSELoss(weights, device)
@@ -580,6 +637,9 @@ class CombinedPCALoss(nn.Module):
             if sal_name is not None:
                 return recon[temp_name], recon[sal_name]
             return recon
+
+        if self.joint_eof_meta is not None and self.pca_loss is not None:
+            return self.pca_loss._decode_joint_ts(pcs)
 
         temp_name = self.output_order[0]
         sal_name = self.output_order[1] if len(self.output_order) > 1 else None
@@ -888,6 +948,7 @@ def make_loss(
     bottom_depth=None,
     pres_levels=None,
     density_spice_meta: Mapping[str, Any] | None = None,
+    joint_eof_meta: Mapping[str, Any] | None = None,
     **kwargs,
 ) -> nn.Module:
     scales = loss_scales or {}
@@ -955,6 +1016,10 @@ def make_loss(
             device,
             cached=true_profiles,
         )
+    elif joint_eof_meta is not None:
+        if true_profiles is None:
+            raise ValueError("joint_eof requires cache true_profiles temperature+salinity")
+        cached_profiles = true_profiles
 
     decoders = None
     latent_weights = weights
@@ -991,5 +1056,5 @@ def make_loss(
         surface_residual_layout=surface_residual_layout,
         bottom_depth=bottom_depth,
         pres_levels=pres_levels,
-        **kwargs,
+        joint_eof_meta=joint_eof_meta,
     )

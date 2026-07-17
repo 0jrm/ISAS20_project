@@ -52,25 +52,12 @@ def _cal_bundle(mu, sigma, y, depth=None):
     }
 
 
-def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
+def _split_indices(cfg: dict, cache: dict) -> dict:
     from base.split_utils import build_split_indices
-    from evalphys.calibration import season_from_juld
-    from evalphys.constants import DEPTH_BAND_LABELS
-    from evalphys.gsw_backend import set_headline_frozen
-    from evalphys.metrics import summarize_physical
-    from model.density_spice import decode_sigma0_ctrl
-    from model.model import PatchConvMLP
-    from model.prob_head import split_mu_sigma
-    from preproc.export_v2_cache import build_argo_cache
-
-    set_headline_frozen(True)
-    cache_path = build_argo_cache(cfg)
-    with open(cache_path, "rb") as f:
-        cache = pickle.load(f)
 
     n = int(cache["inputs"].shape[0])
     dl = cfg["data_loader"]["args"]
-    indices = build_split_indices(
+    return build_split_indices(
         n,
         cache.get("JULD"),
         {
@@ -84,6 +71,20 @@ def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
         dataset_tag=cache.get("dataset_tag", "argo_v2"),
         v2_src=cfg.get("io", {}).get("v2_src"),
     )
+
+
+def predict_mu_sigma(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
+    """Forward pass → standardized (μ, σ, y) for calibration (no physical decode)."""
+    from model.density_spice import decode_sigma0_ctrl
+    from model.model import PatchConvMLP
+    from model.prob_head import split_mu_sigma
+    from preproc.export_v2_cache import build_argo_cache
+
+    cache_path = build_argo_cache(cfg)
+    with open(cache_path, "rb") as f:
+        cache = pickle.load(f)
+
+    indices = _split_indices(cfg, cache)
     idx = np.asarray(indices[split], dtype=int)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -131,7 +132,6 @@ def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
             std_phys = torch.sqrt(var.sum(dim=1).clamp_min(1e-12))
             sigma = torch.cat([std_phys / sd_s, st], dim=-1)
         else:
-            # μ in standardized target space; a = a_clim + δa
             from model.density_spice import encode_a_from_sigma0_ctrl
 
             a_clim = meta.get("a_clim")
@@ -153,8 +153,32 @@ def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
         mu_raw_np = mu_raw.cpu().numpy()
 
     y = np.asarray(cache["targets"][idx], dtype=np.float64)
+    return {
+        "cache_path": cache_path,
+        "cache": cache,
+        "idx": idx,
+        "mu": mu_np,
+        "sigma": sig_np,
+        "y": y,
+        "mu_raw": mu_raw_np,
+        "meta": meta,
+        "k": k,
+    }
+
+
+def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
+    from evalphys.calibration import season_from_juld
+    from evalphys.gsw_backend import set_headline_frozen
+    from evalphys.metrics import summarize_physical
+
+    set_headline_frozen(True)
+    pred = predict_mu_sigma(cfg, checkpoint, split=split)
+    cache, idx = pred["cache"], pred["idx"]
+    mu_np, sig_np, y = pred["mu"], pred["sigma"], pred["y"]
+    meta, k = pred["meta"], pred["k"]
+
     # Physical T/S for stability report
-    T_hat, S_hat, inv = decode_density_spice_to_ts(mu_raw_np, cache, indices=idx)
+    T_hat, S_hat, inv = decode_density_spice_to_ts(pred["mu_raw"], cache, indices=idx)
     depth = _load_depth(cache)
     T_true = np.asarray(cache["profiles"]["temperature"], dtype=np.float64).T[idx]
     S_true = np.asarray(cache["profiles"]["salinity"], dtype=np.float64).T[idx]
@@ -202,7 +226,7 @@ def run_phase4_eval(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
 
     return {
         "checkpoint": str(checkpoint),
-        "cache": cache_path,
+        "cache": pred["cache_path"],
         "split": split,
         "n": int(idx.size),
         "inversion": inv,

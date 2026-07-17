@@ -12,14 +12,16 @@ Paths in JSON (`data_path`, `cache_dir`, etc.) are relative to the template root
 
 | File | Purpose | Input dim | Cache tag | Status |
 |------|---------|----------:|-----------|--------|
-| `config_argo.json` | Point L4 scalars, 16+16 PCA, chronological | 9 | `argo_v2` | production |
-| `config_argo_chrono_dates.json` | Same as above with explicit date split ranges | 9 | `argo_v2` | ablation |
-| `config_argo_pred_profile_cached.json` | ARGO point + `pred_profile_cached` loss mode | 9 | `argo_v2` | ablation |
-| `config_argo_patch_l4.json` | 5×5×7 L4 patch + basin means + bathy | 535 | `argo_l4` | production |
+| `config_argo.json` | Point L4 scalars, 16+16 PCA, chronological (matrix **A**) | 9 | `argo_v2` | production |
+| `config_argo_joint_eof.json` | Joint T/S EOF-32 (matrix **B**) | 9 | `argo_v2` | production |
+| `config_argo_densityspice_lowrank_crps.json` | Low-rank δσ₀ + spice CRPS (matrix **C**) | 9 | `argo_v2` | production |
+| `config_argo_chrono_dates.json` | Same as A with explicit date split ranges | 9 | `argo_v2` | ablation |
 | `config_argo_smoke.json` | 2-epoch ARGO point smoke | 9 | `argo_v2` | smoke |
 | `config_argo_l3_smoke.json` | L3 mask-native patch smoke | 46881 | `argo_v2` | smoke |
 | `config_argo_l3_l4_smoke.json` | L3 + L4 mask-augment smoke | 46881 | `argo_v2` | smoke |
-| `config_argo_patch_l4_smoke.json` | 16-sample L4 patch cache/train smoke | 535 | `argo_l4` | smoke |
+| `config_argo_densityspice*.json` | Phase 3/4 density_spice family | 9 | `argo_v2` | research |
+
+Archived (§5.1 kill list, **before** matrix results): [`archive/`](archive/) — anom / point_cube / residual / patch_l4 / field variants.
 
 ## ISAS (`isas/`)
 

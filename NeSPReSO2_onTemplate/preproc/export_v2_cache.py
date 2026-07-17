@@ -248,6 +248,34 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
             "density_spice_meta": block["density_spice_meta"],
             "representation": "density_spice",
         }
+    elif representation == "joint_eof":
+        from base.split_utils import build_split_indices
+        from model.joint_eof import fit_joint_eof, transform_joint_eof
+
+        if set(outputs.keys()) != {"joint"}:
+            raise KeyError(f"joint_eof requires outputs {{joint}}, got {list(outputs)}")
+        n_comp = int(outputs["joint"])
+        dl_cfg = dict((config.get("data_loader") or {}).get("args") or {})
+        splits = build_split_indices(
+            n, juld, dl_cfg, dataset_tag=dataset_tag, v2_src=v2_src
+        )
+        T = _station_major(profiles_ts["temperature"], n)
+        S = _station_major(profiles_ts["salinity"], n)
+        tr = splits["train"]
+        packed = fit_joint_eof(T[tr], S[tr], n_comp)
+        pca = packed.pop("pca")
+        meta = {k: packed[k] for k in ("T_mean", "T_std", "S_mean", "S_std", "n_lev", "n_comp")}
+        pcs = transform_joint_eof(T, S, meta, pca)  # (N, R)
+        targets = pcs.astype(np.float32)
+        pca_models = {"joint": pca}
+        pcs_by_name = {"joint": pcs.T}  # (R, N) like other branches
+        weights = get_pca_weights(pca_models, pcs_by_name, ["joint"])
+        profiles = profiles_ts
+        true_profiles = {"temperature": T.astype(np.float32), "salinity": S.astype(np.float32)}
+        payload_extra = {
+            "joint_eof_meta": meta,
+            "representation": "joint_eof",
+        }
     else:
         target_cols = []
         pcs_by_name = {}
