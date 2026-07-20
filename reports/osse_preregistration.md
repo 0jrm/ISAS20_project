@@ -12,6 +12,7 @@
 | 2026-07-17 | Initial E0–E5 lock + pins | Pre-winner scientific posture |
 | 2026-07-17 | Lock E5 QC rule, LC box, depth bands, OI constants, artifact paths | Close under-specified knobs before physical-space winner lands |
 | 2026-07-17 | Winner = A×CRPS; cast-column v1 runner lands (ISAS 2021 grid absent) | E3–E5 use A-path `export_ts_covariance_pca`; R_cal = diag(Σ) in v1 |
+| 2026-07-20 | **R_cal v2: full `Σ_T = V diag((ασ)²) Vᵀ` Schur-localized** (Gaussian `L_loc = L_v = 150 m`, reuses locked pin — no new tuned number); `diag(Σ∘ρ)=diag(Σ)` ⇒ σ̄ and E5-τ unchanged. Locked **before** the promotion test number was read. | Closes HANDOFF Next #2. §1/§2 always specified full vertical `Σ_T`; v1 diag was a documented stopgap because raw rank-`n_T` Σ is near-null over `n_z≫n_T` levels (cond(B+R)~2e8) and destabilizes column OI. Localization restores full rank while keeping the structure the CRPS head resolves. Claim rules (E3>E2, E4≥E3) **unchanged**. |
 
 ---
 
@@ -66,14 +67,14 @@ Ties on overall T: lower MLD RMSE, then lower D26 RMSE.
 | Seed | 42 (cast-month iteration order only; no random cast thinning) |
 | `B` | vertical only: `σ_clim(z) c(z,z') σ_clim(z')`, Gaussian `L_v = 150 m` |
 | `R_fixed` | `diag(depth-dependent test RMSE²)` — Dai et al. convention; **fit RMSE on test once per cast source** (E1 clim / E2 ISOP / E3 NeSPReSO), never retuned after first write |
-| `R_cal` | full vertical `Σ_T` / `Σ_S` from `dacov.export_ts_covariance_lowrank` for density_spice winner; A/B winners use PC-score Σ → native via PCA `V` then same floor. Floor = `1e-8` on diag after export |
+| `R_cal` | full vertical `Σ_T` / `Σ_S` = `V diag((ασ)²) Vᵀ` (A-path `export_ts_covariance_pca`), **Schur-localized** in depth: `R = (Σ ∘ ρ) + 1e-8·I`, `ρ_ij = exp(-½((z_i−z_j)/L_loc)²)`, `L_loc = L_v = 150 m` (reuse locked B length; no new tuned pin). Val-α applied; val-only global inflation as v1. `dacov.localize_covariance`. `--rcal diag` reproduces the v1 diagonal fallback |
 | `H` | truth-grid → cast levels (linear in depth) |
 | Horizontal spread | fixed Gaussian `L_h = 100 km` for map scoring (**identical** for all E) |
 | OI | column-wise univariate T and S after inversion; no time stepping |
 
 ### 2.1 E5 QC threshold (locked procedure — not a free number)
 
-1. On **val** only, for each cast compute `σ̄ = mean_z √diag(Σ_T)` from the same `R_cal` path used at test.
+1. On **val** only, for each cast compute `σ̄ = mean_z √diag(Σ_T)` from the same `R_cal` path used at test. (Localization preserves `diag(Σ_T)`, so `σ̄` and `τ` are identical to the v1 diagonal form — the QC rule is unchanged by the v2 upgrade.)
 2. Set `τ = median({σ̄_val})` (P50).
 3. At test: keep cast iff `σ̄_test ≤ τ`.
 4. Report retention % and skill; **do not** retune `τ` toward test skill.

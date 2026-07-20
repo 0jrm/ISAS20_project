@@ -100,7 +100,7 @@ def monthly_clim(T: np.ndarray, months: np.ndarray) -> dict[int, np.ndarray]:
 
 
 def selfcheck() -> None:
-    from dacov import assert_psd, export_ts_covariance_pca
+    from dacov import assert_psd, export_ts_covariance_pca, localize_covariance
     from sklearn.decomposition import PCA
 
     rng = np.random.default_rng(0)
@@ -119,6 +119,14 @@ def selfcheck() -> None:
     pack = export_ts_covariance_pca(np.ones(8) * 0.2, pca_T, pca_S, n_T=4, floor=FLOOR)
     assert_psd(pack["Sigma_T"])
     _ = oi_update(x_b, x_true, B, pack["Sigma_T"])
+    # Structured (localized full) R_cal: PSD, diag preserved, OI still improves.
+    R_loc = localize_covariance(pack["Sigma_T"], z, L_loc=L_V_M, floor=FLOOR)
+    assert_psd(R_loc)
+    assert np.allclose(np.diag(R_loc), np.diag(pack["Sigma_T"]) + FLOOR), "localize changed diag"
+    x_a_loc = oi_update(x_b, x_true, B, R_loc)
+    assert float(np.sqrt(np.mean((x_a_loc - x_true) ** 2))) < float(
+        np.sqrt(np.mean((x_b - x_true) ** 2))
+    ), "localized full R_cal did not improve on background"
     # E5 threshold rule
     sigbar = np.array([0.1, 0.2, 0.3, 0.4])
     tau = float(np.median(sigbar))
@@ -152,9 +160,11 @@ def run_cast_column(
     n_levels: int = 60,
     max_casts: int | None = None,
     out_json: Path | None = None,
+    rcal_form: str = "full",
+    rcal_loc_m: float = L_V_M,
 ) -> dict:
     from base.split_utils import build_split_indices, sample_dates
-    from dacov import export_ts_covariance_pca
+    from dacov import export_ts_covariance_pca, localize_covariance
     from model.joint_eof import fit_joint_eof, reconstruct_joint_eof, transform_joint_eof
     from scripts.isop_modas_baseline import design_matrix, fit_ridge, per_level_rmse, predict
     from scripts.phase5_physical_space_score import _decode_pcs_to_ts
@@ -284,6 +294,8 @@ def run_cast_column(
         "alpha_recipe": recipe,
         "e5_tau": tau,
         "r_cal_inflation": infl,
+        "r_cal_form": rcal_form,
+        "r_cal_loc_m": float(rcal_loc_m) if rcal_form == "full" else None,
         "winner_ckpt": str(ckpt),
         "experiments": {},
     }
@@ -322,10 +334,15 @@ def run_cast_column(
                     sigma[i], pca_T, pca_S, n_T=n_T, floor=FLOOR, level_idx=lev
                 )["Sigma_T"]
                 Sig_s = infl * Sig_s
-                # ponytail: full Σ off-diagonals destabilize column OI (RMSE≫diag-only);
-                # v1 uses diagonal R_cal. Upgrade = localization / sqrt-filter.
-                R_cal = np.maximum(np.diag(Sig_s), FLOOR)
-                sigbar[i] = float(np.mean(np.sqrt(R_cal)))
+                # Structured R_cal = full CRPS-head Σ = V diag((ασ)²) Vᵀ, Schur-
+                # localized in depth (L_loc) so the rank-n_T low-rank Σ stays PSD
+                # and full-rank for column OI. diag(Σ∘ρ)=diag(Σ), so σ̄/τ below are
+                # localization-invariant. `diag` reproduces the v1 diagonal fallback.
+                if rcal_form == "full":
+                    R_cal = localize_covariance(Sig_s, depth, L_loc=rcal_loc_m, floor=FLOOR)
+                else:
+                    R_cal = np.maximum(np.diag(Sig_s), FLOOR)
+                sigbar[i] = float(np.mean(np.sqrt(np.maximum(np.diag(Sig_s), FLOOR))))
                 X_a[i] = oi_update(x_b[i], T_nes[i], B, R_cal)
             if exp == "E5":
                 keep = sigbar <= tau
@@ -376,7 +393,12 @@ def write_results_md(results: dict, path: Path) -> None:
         f"**Winner ckpt:** `{results['winner_ckpt']}`",
         f"**E5 τ (val P50 σ̄):** {results['e5_tau']:.4f}",
         f"**R_cal val inflation:** {results.get('r_cal_inflation', 1.0):.3f}× (mean diag(Σ) → mean RMSE²)",
-        f"**R_cal form:** diagonal of Σ_T only (full matrix off-diagonals destabilize v1 column OI)",
+        (
+            f"**R_cal form:** full Σ_T = V diag((ασ)²) Vᵀ, Schur-localized "
+            f"(Gaussian L_loc={results.get('r_cal_loc_m')} m; diag preserved)"
+            if results.get("r_cal_form", "full") == "full"
+            else "**R_cal form:** diagonal of Σ_T only (v1 fallback; off-diagonals dropped)"
+        ),
         "",
         "> Mode `cast_column`: truth = ARGO at cast columns. Map-level ISAS20 + L_h not wired (no 2021 ISAS year on disk).",
         "> E0≡E1 when background is monthly clim and E1 casts are the same clim.",
@@ -431,10 +453,19 @@ def main() -> int:
     ap.add_argument("--n-levels", type=int, default=60)
     ap.add_argument("--max-casts", type=int, default=None)
     ap.add_argument(
-        "--out",
-        type=Path,
-        default=_ROOT / "saved/runs/phase6_osse/cast_column_s42.json",
+        "--rcal",
+        choices=["full", "diag"],
+        default="full",
+        help="E4/E5 R_cal: 'full' = localized Σ_T (planned); 'diag' = v1 fallback",
     )
+    ap.add_argument(
+        "--rcal-loc-m",
+        type=float,
+        default=L_V_M,
+        help="Gaussian vertical localization length for full R_cal (m; reuses locked L_v)",
+    )
+    default_out = _ROOT / "saved/runs/phase6_osse/cast_column_s42.json"
+    ap.add_argument("--out", type=Path, default=default_out)
     args = ap.parse_args()
     if args.selfcheck:
         selfcheck()
@@ -461,8 +492,16 @@ def main() -> int:
         n_levels=args.n_levels,
         max_casts=args.max_casts,
         out_json=args.out,
+        rcal_form=args.rcal,
+        rcal_loc_m=args.rcal_loc_m,
     )
-    md = _ROOT.parent / "reports" / "osse_results.md"
+    # Only the canonical default run writes the committed report; a custom
+    # --out (smoke / ablation) writes its md alongside its json so it can't
+    # silently clobber reports/osse_results.md.
+    if args.out == default_out:
+        md = _ROOT.parent / "reports" / "osse_results.md"
+    else:
+        md = args.out.with_suffix(".md")
     write_results_md(results, md)
     print("wrote", args.out)
     print("wrote", md)

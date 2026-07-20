@@ -363,6 +363,52 @@ def export_ts_covariance_pca(
     return {"Sigma_T": Sigma_T, "Sigma_S": Sigma_S, "n_T": nt, "n_S": ns}
 
 
+def vertical_taper(depth: np.ndarray, L_loc: float) -> np.ndarray:
+    """Gaussian vertical taper ρ[i,j] = exp(-½((z_i − z_j)/L_loc)²).
+
+    A correlation (unit-diagonal) kernel gram matrix over depth — hence PSD.
+    ``L_loc`` in the same units as ``depth`` (metres here).
+    """
+    z = np.asarray(depth, dtype=np.float64).reshape(-1)
+    d = z[:, None] - z[None, :]
+    return np.exp(-0.5 * (d / float(L_loc)) ** 2)
+
+
+def localize_covariance(
+    cov: np.ndarray,
+    depth: np.ndarray,
+    *,
+    L_loc: float,
+    floor: float = 1e-8,
+) -> np.ndarray:
+    """Schur-localize a (low-rank) Σ for stable column OI: R = (Σ ∘ ρ_L) + floor·I.
+
+    The CRPS-head covariance ``Σ = V diag(σ²) Vᵀ`` is rank ``R`` (= #PC scores)
+    over ``n_z ≫ R`` levels, so it is near-null in ``n_z − R`` directions. Fed
+    to OI as R directly, the analysis trusts the obs *infinitely* in those
+    directions (the diag-only v1 fell back to the diagonal to dodge this).
+
+    Localizing with a Gaussian vertical taper (`vertical_taper`) fixes it while
+    keeping the structure the head actually resolves:
+      * ``ρ_ii = 1`` ⇒ ``diag(Σ ∘ ρ) = diag(Σ)`` — the per-level variance budget
+        (and thus σ̄ / the E5 QC threshold) is unchanged vs the diagonal form;
+      * near-diagonal correlations from ``V`` are retained, spurious long-range
+        ones (an artefact of a rank-``R`` basis spanning all depths) are tapered
+        to ~0, restoring full rank / good conditioning;
+      * Schur product of two PSD matrices is PSD (ρ is a kernel gram), so R is PSD.
+    """
+    C = np.asarray(cov, dtype=np.float64)
+    if C.ndim != 2 or C.shape[0] != C.shape[1]:
+        raise ValueError(f"cov must be square, got {C.shape}")
+    rho = vertical_taper(depth, L_loc)
+    if rho.shape != C.shape:
+        raise ValueError(f"taper {rho.shape} != cov {C.shape}")
+    R = C * rho
+    R = 0.5 * (R + R.T)  # kill FP asymmetry before OI solve
+    R = R + np.eye(R.shape[0]) * float(floor)
+    return R
+
+
 def assert_psd(cov: np.ndarray, *, tol: float = -1e-8) -> float:
     w = np.linalg.eigvalsh(np.asarray(cov, dtype=np.float64))
     amin = float(np.min(w))
