@@ -75,9 +75,8 @@ def _split_indices(cfg: dict, cache: dict) -> dict:
 
 def predict_mu_sigma(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
     """Forward pass → standardized (μ, σ, y) for calibration (no physical decode)."""
-    from model.density_spice import decode_sigma0_ctrl
     from model.model import PatchConvMLP
-    from model.prob_head import split_mu_sigma
+    from model.prob_head import softplus_sigma, split_mu_sigma
     from preproc.export_v2_cache import build_argo_cache
 
     cache_path = build_argo_cache(cfg)
@@ -99,6 +98,36 @@ def predict_mu_sigma(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
 
     x = torch.tensor(cache["inputs"][idx], dtype=torch.float32, device=device)
     d = int(sum(cfg["outputs"].values()))
+    mode = cfg.get("loss_config", {}).get("mode", "combined")
+
+    # A/B: calibration in PC space (targets are PCA coeffs)
+    if mode != "density_spice":
+        with torch.no_grad():
+            out = model(x)
+            if isinstance(out, (tuple, list)):
+                out = out[0]
+            mu, raw = split_mu_sigma(out, d)
+            # model forward already softplus+floor on σ head; still clamp via softplus_sigma for safety
+            sigma = softplus_sigma(raw)
+            mu_np = mu.cpu().numpy()
+            sig_np = sigma.cpu().numpy()
+            mu_raw_np = mu.cpu().numpy()
+        y = np.asarray(cache["targets"][idx], dtype=np.float64)
+        return {
+            "cache_path": cache_path,
+            "cache": cache,
+            "idx": idx,
+            "mu": mu_np,
+            "sigma": sig_np,
+            "y": y,
+            "mu_raw": mu_raw_np,
+            "meta": {},
+            "k": d,
+            "space": "pcs",
+        }
+
+    from model.density_spice import decode_sigma0_ctrl
+
     meta = cache["density_spice_meta"]
     dz = torch.tensor(meta["dz_tilde"], dtype=torch.float32, device=device)
     mu_s = torch.tensor(meta["sigma0_ctrl_mean"], dtype=torch.float32, device=device)
@@ -163,6 +192,7 @@ def predict_mu_sigma(cfg: dict, checkpoint: Path, split: str = "test") -> dict:
         "mu_raw": mu_raw_np,
         "meta": meta,
         "k": k,
+        "space": "density_spice",
     }
 
 

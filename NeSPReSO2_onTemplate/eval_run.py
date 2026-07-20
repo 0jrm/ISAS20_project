@@ -75,6 +75,7 @@ def raw_profile_rmse(
     bottom_depth=None,
     pres_levels=None,
     clim_profiles=None,
+    joint_eof_meta=None,
 ):
     """RMSE in physical space vs cache ``profiles`` (not PCA-reconstructed targets)."""
     idx = np.asarray(indices, dtype=int)
@@ -93,6 +94,19 @@ def raw_profile_rmse(
             sel = masked[valid]
             return float(np.sqrt(np.nanmean(sel ** 2))) if sel.size else float("nan")
         return float(np.sqrt(np.nanmean(diff ** 2)))
+
+    # ponytail: joint EOF is T/S via destandardize, not a 'joint' profile key
+    if joint_eof_meta is not None and list(outputs.keys()) == ["joint"]:
+        from model.joint_eof import reconstruct_joint_eof
+
+        meta = {k: joint_eof_meta[k] for k in ("T_mean", "T_std", "S_mean", "S_std", "n_lev")}
+        pred_t, pred_s = reconstruct_joint_eof(pred_pcs, meta, pca_models["joint"])
+        out = {}
+        for name, pred_nz in (("temperature", pred_t), ("salinity", pred_s)):
+            # reconstruct_joint_eof → (N, n_z); cache profiles → (n_depth, N)
+            diff = pred_nz.T - true_profiles[name][:, idx]
+            out[name] = _masked_rmse(diff)
+        return out
 
     if decoders is not None:
         pred_t = torch.tensor(pred_pcs, dtype=torch.float32, device=device)
@@ -157,11 +171,14 @@ def main(config, checkpoint_path: str, split: str = "test"):
     if loss_cfg.get("mode") == "decoder":
         decoders = load_decoders_from_dir(loss_cfg["decoder_dir"], outputs, device)
 
+    joint_eof_meta = data_loader.cache.get("joint_eof_meta")
     true_profiles = data_loader.cache.get("true_profiles")
     if true_profiles is None and data_loader.profiles:
         n = data_loader.cache["inputs"].shape[0]
+        # joint_eof scores T/S profiles, not a 'joint' profile array
+        profile_names = ("temperature", "salinity") if joint_eof_meta is not None else tuple(outputs)
         true_profiles = {}
-        for name in outputs:
+        for name in profile_names:
             arr = np.asarray(data_loader.profiles[name], dtype=np.float32)
             if arr.shape[1] == n:
                 arr = arr.T
@@ -197,6 +214,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
             steric_calibration=data_loader.cache.get("steric_calibration"),
         ),
         clim_profiles=data_loader.cache.get("clim_profiles"),
+        joint_eof_meta=joint_eof_meta,
     )
 
     total_loss = 0.0
@@ -245,6 +263,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
             bottom_depth=data_loader.cache.get("bottom_depth"),
             pres_levels=data_loader.cache.get("PRES"),
             clim_profiles=data_loader.cache.get("clim_profiles"),
+            joint_eof_meta=joint_eof_meta,
         ),
     }
     if loss_cfg.get("mode") != "decoder" and pca_tgt is not None:

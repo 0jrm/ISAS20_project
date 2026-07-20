@@ -56,6 +56,8 @@ class MetricTracker:
     def update(self, key, value, n=1):
         if self.writer is not None:
             self.writer.add_scalar(key, value)
+        if key not in self._data.index:
+            self._data.loc[key] = [0, 0, 0]
         self._data.loc[key, "total"] += value * n
         self._data.loc[key, "counts"] += n
         self._data.loc[key, "average"] = self._data.loc[key, "total"] / self._data.loc[key, "counts"]

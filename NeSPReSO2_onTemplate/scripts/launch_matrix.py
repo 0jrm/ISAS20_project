@@ -27,6 +27,10 @@ _ENV_SHA = _MANIFEST_DIR / "conda-env.sha256"
 _ENV_LOCK_TRACKED = _REPO / "reports" / "phase5_conda-env.lock.yml"
 _ENV_SHA_TRACKED = _REPO / "reports" / "phase5_conda-env.sha256"
 _SEEDS = (42, 43, 44)
+# Protocol v2: stage-2 early-stops on val ENCE (never val loss). v1 = archived.
+_PROTOCOL = "v2"
+_STAGE2_STOP = "val_ence"
+_STAGE2_ENCE_PATIENCE = 40
 
 _CFG = {
     "C": "config/argo/config_argo_densityspice_lowrank_crps.json",
@@ -82,7 +86,9 @@ def _cells(*, only_rep: str | None, only_head: str | None):
 
 
 def _cell_id(rep: str, head: str, seed: int) -> str:
-    return f"p5_{rep}_{head}_s{seed}"
+    if _PROTOCOL == "v1":
+        return f"p5_{rep}_{head}_s{seed}"
+    return f"p5_{rep}_{head}_{_PROTOCOL}_s{seed}"
 
 
 def _prepare_cfg(rep: str, head: str, seed: int, out: Path) -> Path | None:
@@ -91,21 +97,28 @@ def _prepare_cfg(rep: str, head: str, seed: int, out: Path) -> Path | None:
         return None
     cfg = json.loads((_ROOT / tmpl).read_text())
     cfg["seed"] = int(seed)
-    cfg["name"] = f"NeSPReSO2_ARGO_GoM_p5_{rep}_{head}"
-    cfg.setdefault("trainer", {})["save_dir"] = f"saved/phase5_matrix/{rep}_{head}/"
+    cfg["name"] = f"NeSPReSO2_ARGO_GoM_p5_{rep}_{head}_{_PROTOCOL}"
+    save_leaf = f"{rep}_{head}" if _PROTOCOL == "v1" else f"{rep}_{head}_{_PROTOCOL}"
+    cfg.setdefault("trainer", {})["save_dir"] = f"saved/phase5_matrix/{save_leaf}/"
+    cfg.setdefault("trainer", {})["protocol"] = _PROTOCOL
     arch = cfg.setdefault("arch", {}).setdefault("args", {})
     lc = cfg.setdefault("loss_config", {})
     if head == "det":
+        # Deterministic μ head — do not inherit CRPS stage-1 freeze_sigma / short epochs.
         arch["probabilistic"] = False
+        for k in ("n_quantiles", "sigma_min"):
+            arch.pop(k, None)
+        lc.pop("prob_mode", None)
+        lc.pop("freeze_sigma", None)
         if rep == "C":
             lc["mode"] = "density_spice"
-            lc["prob_mode"] = "mse"
-            lc["freeze_sigma"] = True
-        else:
-            lc.pop("prob_mode", None)
-            lc.pop("freeze_sigma", None)
-            if rep == "B":
-                lc["mode"] = "combined"
+            tr = cfg.setdefault("trainer", {})
+            tr["epochs"] = 150
+            tr["early_stop"] = 40
+            tr["monitor"] = "min val_loss"
+            tr.pop("compute_val_ence", None)
+        elif rep == "B":
+            lc["mode"] = "combined"
     elif head == "CRPS":
         arch["probabilistic"] = True
         arch["n_quantiles"] = 0
@@ -123,13 +136,54 @@ def _prepare_cfg(rep: str, head: str, seed: int, out: Path) -> Path | None:
     return out
 
 
+def _cell_already_done(r: dict) -> bool:
+    """Skip retrain if twostage manifest or model_best already exists."""
+    cid = r["id"]
+    if r.get("twostage"):
+        man = _MANIFEST_DIR / "twostage" / cid / "manifest.json"
+        if man.is_file():
+            try:
+                obj = json.loads(man.read_text())
+                s2 = obj.get("stage2_ckpt")
+                if s2 and Path(s2).is_file():
+                    return True
+            except (json.JSONDecodeError, OSError):
+                return False
+        return False
+    # det / A-B single-stage: look for model_best under save_dir from prepared cfg
+    cfg_path = r.get("config")
+    if not cfg_path:
+        return False
+    try:
+        cfg = json.loads(Path(cfg_path).read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    name = cfg.get("name", "")
+    save_dir = Path(cfg.get("trainer", {}).get("save_dir", "saved/"))
+    # train.py nests models/<name>/<run_id>/model_best.pth with run_id=cid
+    cand = _ROOT / save_dir / "models" / name / cid / "model_best.pth"
+    return cand.is_file()
+
+
 def _selfcheck() -> None:
     cells = list(_cells(only_rep="C", only_head="CRPS"))
     assert cells == [("C", "CRPS", s) for s in _SEEDS], cells
-    assert _cell_id("C", "CRPS", 42) == "p5_C_CRPS_s42"
+    assert _cell_id("C", "CRPS", 42) == f"p5_C_CRPS_{_PROTOCOL}_s42"
     assert _CFG["B"] is not None and (_ROOT / _CFG["B"]).is_file()
+    # C×det must validate (no freeze_sigma without probabilistic arch)
+    import sys
+
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from parse_config import validate_config
+
+    tmp = _MANIFEST_DIR / "_selfcheck_C_det.json"
+    prepared = _prepare_cfg("C", "det", 42, tmp)
+    assert prepared is not None
+    validate_config(json.loads(prepared.read_text()))
+    tmp.unlink(missing_ok=True)
     sha = assert_env_hash()
-    print(f"launch_matrix selfcheck OK (env sha={sha[:12]}…)")
+    print(f"launch_matrix selfcheck OK (env sha={sha[:12]}… protocol={_PROTOCOL})")
 
 
 def main() -> int:
@@ -173,7 +227,7 @@ def main() -> int:
             note = "joint_eof io.representation=joint_eof; CombinedPCALoss + T/S decode"
         if head in ("CRPS", "NLL") and rep in ("A", "B"):
             note = (note + "; " if note else "") + (
-                f"{rep} prob: hetero head on PC space (CombinedPCALoss; twostage is C-only)"
+                f"{rep} prob: PCAHeteroLoss on PC space; twostage + val-ENCE stop"
             )
         rows.append(
             {
@@ -184,20 +238,23 @@ def main() -> int:
                 "config": str(prepared) if prepared else None,
                 "status": status,
                 "note": note,
-                "twostage": head in ("CRPS", "NLL") and rep == "C",
+                "twostage": head in ("CRPS", "NLL"),
             }
         )
 
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "prereg": str(_REPO / "reports" / "ablation_preregistration.md"),
+        "protocol": _PROTOCOL,
+        "stage2_stop": _STAGE2_STOP,
+        "stage2_ence_patience": _STAGE2_ENCE_PATIENCE,
         "env_lock": str(_ENV_LOCK if _ENV_LOCK.is_file() else _ENV_LOCK_TRACKED),
         "env_sha256": env_sha,
         "seeds": list(_SEEDS),
         "stage1_epochs": args.stage1_epochs,
         "stage2_epochs": args.stage2_epochs,
         "error_channels": "deferred_until_v3_hdf5",
-        "eval_rule": "val_only_selection_recalib; one_test_score_per_frozen_cell",
+        "eval_rule": "val_only_selection_recalib; one_test_score_per_frozen_cell; cell_mean_not_per_seed_pass",
         "cells": rows,
     }
     man_path = _MANIFEST_DIR / "manifest.json"
@@ -222,6 +279,12 @@ def main() -> int:
         if r["status"] != "ready":
             print(f"skip {r['id']}: {r['status']} — {r['note']}")
             continue
+        if _cell_already_done(r):
+            r["status"] = "done_existing"
+            r["note"] = (r.get("note") + "; " if r.get("note") else "") + "skipped_existing_ckpt"
+            print(f"skip {r['id']}: already done")
+            man_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            continue
         if launched >= args.max_launch:
             print(f"max-launch={args.max_launch} reached; remaining stay pending in manifest")
             break
@@ -229,10 +292,15 @@ def main() -> int:
             assert_env_hash()
         cid = r["id"]
         log = _MANIFEST_DIR / f"{cid}.log"
-        in_job = bool(os.environ.get("SLURM_JOB_ID"))
+        # Only skip outer srun when this job already has a Slurm GPU allocation.
+        have_gpu_alloc = bool(
+            os.environ.get("SLURM_GPUS_ON_NODE")
+            or os.environ.get("SLURM_JOB_GPUS")
+            or os.environ.get("SLURM_STEP_GPUS")
+        )
         prefix = (
             []
-            if in_job
+            if have_gpu_alloc
             else ["srun", "--ntasks=1", "--cpus-per-task=8", "--gres=gpu:1"]
         )
         conda_prefix = [
@@ -257,6 +325,10 @@ def main() -> int:
                 str(args.stage1_epochs),
                 "--stage2-epochs",
                 str(args.stage2_epochs),
+                "--stage2-stop",
+                _STAGE2_STOP,
+                "--stage2-ence-patience",
+                str(_STAGE2_ENCE_PATIENCE),
                 "--parent-tag",
                 cid,
                 "--workdir",

@@ -121,9 +121,11 @@ def main() -> int:
     val = predict_mu_sigma(cfg, ckpt, split="val")
     mu_v, sg_v, y_v = val["mu"], val["sigma"], val["y"]
     k = int(val["k"])
-    z_ctrl = np.asarray(val["meta"]["z_ctrl"], dtype=np.float64)
+    z_ctrl = None
+    if val.get("meta") and "z_ctrl" in val["meta"]:
+        z_ctrl = np.asarray(val["meta"]["z_ctrl"], dtype=np.float64)
 
-    recipes = ("none", "global", "per_dim", "depth_band")
+    recipes = ("none", "global", "per_dim") + (("depth_band",) if z_ctrl is not None else ())
     val_rows = {}
     scales = {}
     for mode in recipes:
@@ -171,11 +173,12 @@ def main() -> int:
 
     # Depth-band α summary (for diagnosis)
     band_alphas = {}
-    a_db = scales["depth_band"]
-    for label, bmask in _band_masks(z_ctrl).items():
-        cols = np.where(bmask)[0]
-        if cols.size:
-            band_alphas[label] = float(a_db[cols[0]])
+    if "depth_band" in scales and z_ctrl is not None:
+        a_db = scales["depth_band"]
+        for label, bmask in _band_masks(z_ctrl).items():
+            cols = np.where(bmask)[0]
+            if cols.size:
+                band_alphas[label] = float(a_db[cols[0]])
 
     out = {
         "checkpoint": str(ckpt),
@@ -258,6 +261,23 @@ def main() -> int:
         ]
     lines.append(f"**Note:** {out['note']}")
     out_m.write_text("\n".join(lines) + "\n")
+
+    # Persist inference recipe next to ckpt (Phase 5 matrix rule)
+    alpha_path = ckpt.parent / "sigma_recalib_per_dim.json"
+    alpha_path.write_text(
+        json.dumps(
+            {
+                "method": best,
+                "alphas": scales[best].tolist(),
+                "fit_split": "val",
+                "checkpoint": str(ckpt),
+                "val_ence": val_rows[best]["ence"],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    print(f"wrote {alpha_path}")
     print(f"wrote {out_j} and {out_m}")
     print(f"BEST={best} VAL_PASS={best_pass} ENCE={val_rows[best]['ence']:.4f}")
     return 0

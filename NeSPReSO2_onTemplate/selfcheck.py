@@ -1009,6 +1009,41 @@ def test_raw_profile_rmse_decoder_indexing():
     assert abs(rmse["temperature"] - 0.5) < 1e-6
 
 
+def test_raw_profile_rmse_joint_eof():
+    """joint_eof path reports T/S RMSE via destandardize, not a fake 'joint' profile key."""
+    from collections import OrderedDict
+
+    from eval_run import raw_profile_rmse
+    from model.joint_eof import fit_joint_eof, reconstruct_joint_eof, transform_joint_eof
+
+    rng = np.random.default_rng(0)
+    n, n_z, n_comp = 20, 30, 6
+    T = 20 + rng.normal(size=(n, n_z)).cumsum(axis=1) * 0.01
+    S = 36 + rng.normal(size=(n, n_z)) * 0.05
+    meta = fit_joint_eof(T[:15], S[:15], n_comp)
+    pca = meta.pop("pca")
+    te = np.arange(15, n)
+    pcs = transform_joint_eof(T[te], S[te], meta, pca)
+    T_hat, S_hat = reconstruct_joint_eof(pcs, meta, pca)
+    true = {
+        "temperature": np.zeros((n_z, n), dtype=np.float64),
+        "salinity": np.zeros((n_z, n), dtype=np.float64),
+    }
+    true["temperature"][:, te] = T[te].T
+    true["salinity"][:, te] = S[te].T
+    rmse = raw_profile_rmse(
+        pcs.astype(np.float32),
+        true,
+        {"joint": pca},
+        OrderedDict([("joint", n_comp)]),
+        te,
+        joint_eof_meta=meta,
+    )
+    assert "temperature" in rmse and "salinity" in rmse and "joint" not in rmse
+    assert abs(rmse["temperature"] - float(np.sqrt(np.mean((T_hat - T[te]) ** 2)))) < 1e-5
+    assert abs(rmse["salinity"] - float(np.sqrt(np.mean((S_hat - S[te]) ** 2)))) < 1e-5
+
+
 def test_stratified_eval_bins_and_aggregate():
     from eval_stratified import (
         bin_coverage,
@@ -1823,17 +1858,48 @@ def test_dacov_sigma_recalib_scales_export():
     assert not np.allclose(cov_raw, cov_scaled)
 
 
+def test_dacov_pca_ts_export():
+    """A-path (Phase-5 winner): separate T/S PCA → Σ_T/Σ_S; PSD + MC diag."""
+    from sklearn.decomposition import PCA
+
+    from dacov import assert_psd, export_ts_covariance_pca, mc_vs_diag_agreement
+
+    rng = np.random.default_rng(5)
+    n_z, n_T, n_S = 24, 8, 8
+    pca_T = PCA(n_components=n_T).fit(rng.normal(size=(80, n_z)))
+    pca_S = PCA(n_components=n_S).fit(rng.normal(size=(80, n_z)))
+    sz = np.abs(rng.normal(size=n_T + n_S)) + 0.1
+    alphas = np.linspace(0.7, 1.3, n_T + n_S)
+    pack = export_ts_covariance_pca(sz, pca_T, pca_S, n_T=n_T, alphas=alphas, floor=1e-10)
+    assert_psd(pack["Sigma_T"])
+    assert_psd(pack["Sigma_S"])
+    assert pack["Sigma_T"].shape == (n_z, n_z)
+    ag_T = mc_vs_diag_agreement(
+        alphas[:n_T] * sz[:n_T], pca_T, np.ones(n_z), n_draw=2000, seed=5, rtol=0.15
+    )
+    ag_S = mc_vs_diag_agreement(
+        alphas[n_T:] * sz[n_T:], pca_S, np.ones(n_z), n_draw=2000, seed=6, rtol=0.15
+    )
+    assert ag_T["pass"], ag_T
+    assert ag_S["pass"], ag_S
+
+
 def test_dacov_ts_jacobian_export():
-    """§4.4 gate-critical: Σ_ρ/Σ_τ → Σ_T/Σ_S via inversion J; PSD + MC diag agree."""
-    from dacov import assert_psd, ts_covariance_from_sigma0_spice
+    """§4.4 gate-critical: lowrank Σ → Σ_T/Σ_S via inversion J; PSD + linear MC."""
+    from sklearn.decomposition import PCA
+
+    from dacov import (
+        assert_psd,
+        export_ts_covariance_lowrank,
+        mc_vs_diag_agreement_ts_linear,
+        ts_covariance_from_sigma0_spice,
+    )
 
     rng = np.random.default_rng(3)
     n_z = 12
     depth = np.linspace(0, 200, n_z)
     T = 25.0 - 0.05 * depth + rng.normal(scale=0.01, size=n_z)
     S = 36.0 + 0.001 * depth + rng.normal(scale=0.005, size=n_z)
-    # simple diagonal Σ in (σ₀,τ) — MC by perturbing T/S through J would be circular;
-    # check PSD + that diag(Σ_T) scales with diag(Σ_ρ) when J is well-conditioned
     Sigma_rho = np.diag(np.full(n_z, 0.01))
     Sigma_tau = np.diag(np.full(n_z, 0.001))
     out = ts_covariance_from_sigma0_spice(
@@ -1844,6 +1910,56 @@ def test_dacov_ts_jacobian_export():
     assert out["Sigma_T"].shape == (n_z, n_z)
     assert np.all(np.diag(out["Sigma_T"]) > 0)
     assert np.all(np.diag(out["Sigma_S"]) > 0)
+    ag = mc_vs_diag_agreement_ts_linear(
+        out["Sigma_T"],
+        out["Sigma_S"],
+        Sigma_rho,
+        Sigma_tau,
+        out["Jinv_per_level"],
+        n_draw=800,
+        seed=3,
+        rtol=0.15,
+    )
+    assert ag["pass"], ag
+
+    # Winning-path entry: score-σ → Σ_ρ_ctrl → native → Σ_T/Σ_S
+    R, K = 4, 8
+    z_ctrl = np.linspace(0, 200, K)
+    V = rng.normal(size=(R, K))
+    V /= np.linalg.norm(V, axis=1, keepdims=True)
+    pca = PCA(n_components=R).fit(rng.normal(size=(40, n_z)))
+    sz_rho = np.abs(rng.normal(size=R)) + 0.05
+    sz_sp = np.abs(rng.normal(size=R)) + 0.05
+    pack = export_ts_covariance_lowrank(
+        sz_rho,
+        V,
+        sz_sp,
+        pca,
+        np.ones(n_z),
+        T=T,
+        S=S,
+        z_ctrl=z_ctrl,
+        depth=depth,
+        lat=25.0,
+        lon=-90.0,
+        alphas_rho=np.array([0.8, 1.0, 1.2, 0.9]),
+        floor=1e-10,
+    )
+    assert_psd(pack["Sigma_T"])
+    assert_psd(pack["Sigma_S"])
+    assert pack["Sigma_rho_ctrl"].shape == (K, K)
+    assert pack["Sigma_rho_native"].shape == (n_z, n_z)
+    ag2 = mc_vs_diag_agreement_ts_linear(
+        pack["Sigma_T"],
+        pack["Sigma_S"],
+        pack["Sigma_rho_native"],
+        pack["Sigma_tau"],
+        pack["Jinv_per_level"],
+        n_draw=800,
+        seed=4,
+        rtol=0.15,
+    )
+    assert ag2["pass"], ag2
 
 
 def test_joint_eof_roundtrip():
@@ -2077,6 +2193,7 @@ if __name__ == "__main__":
     test_decoder_profile_loss()
     test_decoder_profile_loss_nan_mask()
     test_raw_profile_rmse_decoder_indexing()
+    test_raw_profile_rmse_joint_eof()
     test_stratified_eval_bins_and_aggregate()
     test_stratified_eval_l3_cache_smoke()
     test_static_stability_readiness_synthetic()
@@ -2101,6 +2218,7 @@ if __name__ == "__main__":
     test_prob_head_hetero_and_quantile()
     test_dacov_psd_and_mc()
     test_dacov_sigma_recalib_scales_export()
+    test_dacov_pca_ts_export()
     test_dacov_ts_jacobian_export()
     test_joint_eof_roundtrip()
     test_density_spice_prob_loss_crps_backward()

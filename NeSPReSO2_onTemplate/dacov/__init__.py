@@ -301,7 +301,7 @@ def export_ts_covariance_lowrank(
     alphas_rho: np.ndarray | None = None,
     floor: float = 1e-8,
 ) -> dict[str, np.ndarray]:
-    """Winning-path export: score-σ → Σ_ρ_ctrl → native → Σ_T/Σ_S via inversion J."""
+    """C-path export: score-σ → Σ_ρ_ctrl → native → Σ_T/Σ_S via inversion J."""
     Sigma_rho_ctrl = density_lowrank_covariance(sigma_z_rho, basis_rho, floor=floor, alphas=alphas_rho)
     Sigma_rho = upsample_cov_linear(Sigma_rho_ctrl, z_ctrl, depth)
     Sigma_tau = spice_covariance(sigma_z_spice, pca_spice, spice_std, floor=floor)
@@ -317,6 +317,50 @@ def export_ts_covariance_lowrank(
     out["Sigma_tau"] = Sigma_tau
     out["Sigma_rho_ctrl"] = Sigma_rho_ctrl
     return out
+
+
+def export_ts_covariance_pca(
+    sigma_z: np.ndarray,
+    pca_T,
+    pca_S,
+    *,
+    n_T: int | None = None,
+    alphas: np.ndarray | None = None,
+    floor: float = 1e-8,
+    level_idx: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """A-path (Phase-5 default): separate T/S PCA score-σ → Σ_T, Σ_S.
+
+    ``sigma_z`` is ``(n_T+n_S,)`` or ``(B, n_T+n_S)``; optional ``alphas`` same layout.
+    ``level_idx`` optionally restricts rows of V (OSSE depth subsample).
+    No inversion Jacobian — profiles are linear in PC scores.
+    """
+    sz = np.asarray(sigma_z, dtype=np.float64)
+    if alphas is not None:
+        sz = apply_sigma_recalib(sz, alphas)
+    single = sz.ndim == 1
+    if single:
+        sz = sz[None, :]
+    nt = int(n_T) if n_T is not None else int(pca_T.n_components_)
+    ns = int(pca_S.n_components_)
+    if sz.shape[-1] != nt + ns:
+        raise ValueError(f"sigma_z last dim {sz.shape[-1]} != n_T+n_S={nt + ns}")
+
+    def _one(pca, sz_block: np.ndarray) -> np.ndarray:
+        V = np.asarray(pca.components_.T, dtype=np.float64)  # (n_z, R)
+        if level_idx is not None:
+            V = V[np.asarray(level_idx, dtype=int)]
+        out = []
+        for i in range(sz_block.shape[0]):
+            cov = (V * (sz_block[i] ** 2)) @ V.T
+            cov = cov + np.eye(cov.shape[0]) * float(floor)
+            out.append(cov)
+        arr = np.stack(out, axis=0)
+        return arr[0] if single else arr
+
+    Sigma_T = _one(pca_T, sz[:, :nt])
+    Sigma_S = _one(pca_S, sz[:, nt : nt + ns])
+    return {"Sigma_T": Sigma_T, "Sigma_S": Sigma_S, "n_T": nt, "n_S": ns}
 
 
 def assert_psd(cov: np.ndarray, *, tol: float = -1e-8) -> float:
@@ -379,4 +423,52 @@ def mc_vs_diag_agreement_lowrank(
         "max_rel": float(np.max(rel)),
         "mean_rel": float(np.mean(rel)),
         "pass": bool(np.max(rel) <= rtol),
+    }
+
+
+def mc_vs_diag_agreement_ts_linear(
+    Sigma_T: np.ndarray,
+    Sigma_S: np.ndarray,
+    Sigma_rho: np.ndarray,
+    Sigma_tau: np.ndarray,
+    Jinv_per_level: np.ndarray,
+    *,
+    n_draw: int = 200,
+    seed: int = 0,
+    rtol: float = 0.15,
+) -> dict[str, float]:
+    """Linear Δ-method MC: draw δ(σ₀,τ), apply block Jinv → compare diag(Σ_T/Σ_S).
+
+    Validates Big @ Σ_στ @ Bigᵀ algebra (not nonlinear Newton). Ceiling: full
+    nonlinear MC through ``ts_from_sigma0_spice`` if DA needs inversion curvature.
+    """
+    rng = np.random.default_rng(seed)
+    Sr = np.asarray(Sigma_rho, dtype=np.float64)
+    St = np.asarray(Sigma_tau, dtype=np.float64)
+    n_z = Sr.shape[0]
+    C = np.zeros((n_z, n_z), dtype=np.float64)
+    Sig = np.block([[Sr, C], [C.T, St]])
+    # PSD-symmetrize for multivariate_normal
+    Sig = 0.5 * (Sig + Sig.T)
+    draws = rng.multivariate_normal(np.zeros(2 * n_z), Sig, size=int(n_draw))
+    Jinv = np.asarray(Jinv_per_level, dtype=np.float64)
+    dT = np.empty((n_draw, n_z), dtype=np.float64)
+    dS = np.empty((n_draw, n_z), dtype=np.float64)
+    for k in range(n_z):
+        d_st = np.column_stack([draws[:, k], draws[:, n_z + k]])
+        d_ts = d_st @ Jinv[k].T
+        dT[:, k] = d_ts[:, 0]
+        dS[:, k] = d_ts[:, 1]
+    mc_T = dT.var(axis=0)
+    mc_S = dS.var(axis=0)
+    a_T = np.diag(np.asarray(Sigma_T, dtype=np.float64))
+    a_S = np.diag(np.asarray(Sigma_S, dtype=np.float64))
+    rel_T = np.abs(a_T - mc_T) / np.maximum(mc_T, 1e-12)
+    rel_S = np.abs(a_S - mc_S) / np.maximum(mc_S, 1e-12)
+    max_rel = float(max(np.max(rel_T), np.max(rel_S)))
+    return {
+        "max_rel": max_rel,
+        "mean_rel_T": float(np.mean(rel_T)),
+        "mean_rel_S": float(np.mean(rel_S)),
+        "pass": bool(max_rel <= rtol),
     }

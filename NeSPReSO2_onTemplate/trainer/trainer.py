@@ -203,6 +203,11 @@ class Trainer(BaseTrainer):
     def _valid_epoch(self, epoch):
         self.model.eval()
         self.valid_metrics.reset()
+        want_ence = (
+            getattr(self, "mnt_metric", None) == "ence"
+            or bool(self.config["trainer"].get("compute_val_ence"))
+        )
+        mu_chunks, sig_chunks, y_chunks = [], [], []
         with torch.no_grad():
             for batch_idx, (data, target, indices) in enumerate(self.valid_data_loader):
                 data = data.to(self.device)
@@ -215,10 +220,46 @@ class Trainer(BaseTrainer):
                 self.valid_metrics.update("loss", loss.item())
                 for met in self.metric_ftns:
                     self.valid_metrics.update(met.__name__, met(output, target, indices, self.valid_data_loader))
+                if want_ence:
+                    mu, sigma = self._pred_mu_sigma_for_ence(output, target, indices)
+                    if mu is not None:
+                        mu_chunks.append(mu.detach().cpu())
+                        sig_chunks.append(sigma.detach().cpu())
+                        y_chunks.append(target.detach().cpu())
+
+        if want_ence and mu_chunks:
+            from evalphys.calibration import ence as ence_fn
+
+            mu = torch.cat(mu_chunks, dim=0).numpy()
+            sigma = torch.cat(sig_chunks, dim=0).numpy()
+            y = torch.cat(y_chunks, dim=0).numpy()
+            en = ence_fn(mu, sigma, y).get("ence")
+            if en is not None and np.isfinite(en):
+                self.valid_metrics.update("ence", float(en))
 
         for name, p in self.model.named_parameters():
             self.writer.add_histogram(name, p, bins="auto")
         return self.valid_metrics.result()
+
+    def _pred_mu_sigma_for_ence(self, output, target, indices):
+        """Map hetero head output → (μ, σ) in target space for val ENCE early-stop."""
+        from model.prob_head import softplus_sigma, split_mu_sigma
+
+        crit = self.criterion
+        if hasattr(crit, "_mu_from_raw") and hasattr(crit, "_sigma_target_space"):
+            d = int(crit.d)
+            if output.shape[-1] < 2 * d:
+                return None, None
+            mu_raw, sigma_lat = split_mu_sigma(output, d)
+            mu = crit._mu_from_raw(mu_raw)
+            sigma = crit._sigma_tot(crit._sigma_target_space(sigma_lat), indices)
+            return mu, sigma
+        # A/B PCA hetero: output is 2·d PCs
+        d = int(target.shape[-1])
+        if output.shape[-1] != 2 * d:
+            return None, None
+        mu, raw = split_mu_sigma(output, d)
+        return mu, softplus_sigma(raw)
 
     def _progress(self, batch_idx):
         base = "[{}/{} ({:.0f}%)]"

@@ -511,6 +511,41 @@ class DecoderProfileLoss(nn.Module):
         return total
 
 
+class PCAHeteroLoss(nn.Module):
+    """PC-space heteroscedastic CRPS/NLL (matrix A/B). Targets are PCA coeffs."""
+
+    def __init__(
+        self,
+        *,
+        prob_mode: str = "crps",
+        nll_beta: float = 0.5,
+        sigma_min: float = 1e-3,
+        freeze_sigma: bool = False,
+    ):
+        super().__init__()
+        if prob_mode not in VALID_PROB_MODES:
+            raise ValueError(f"prob_mode must be one of {VALID_PROB_MODES}, got {prob_mode!r}")
+        self.prob_mode = str(prob_mode)
+        self.nll_beta = float(nll_beta)
+        self.sigma_min = float(sigma_min)
+        self.freeze_sigma = bool(freeze_sigma)
+
+    def forward(self, output, target, indices=None, inputs=None):
+        from evalphys.calibration import gaussian_crps_torch
+        from model.prob_head import beta_nll, softplus_sigma, split_mu_sigma
+
+        d = int(target.shape[-1])
+        mu, raw = split_mu_sigma(output, d)
+        if self.prob_mode == "mse" or self.freeze_sigma:
+            return torch.mean((mu - target) ** 2)
+        sigma = softplus_sigma(raw, sigma_min=self.sigma_min)
+        if self.prob_mode == "crps":
+            return torch.mean(gaussian_crps_torch(mu, sigma, target, sigma_min=self.sigma_min))
+        if self.prob_mode == "nll":
+            return beta_nll(mu, sigma, target, beta=self.nll_beta, sigma_min=self.sigma_min)
+        raise ValueError(f"PCAHeteroLoss unsupported prob_mode={self.prob_mode!r}")
+
+
 class CombinedPCALoss(nn.Module):
     def __init__(
         self,
@@ -1005,6 +1040,15 @@ def make_loss(
             delta_sigma0_basis=basis,
             sigma0_clim=sigma0_clim,
             n_ctrl=n_ctrl,
+        )
+
+    # A/B matrix cells: PC-space hetero when probabilistic
+    if mode in ("combined", "pc_mse_only") and cfg.get("prob_mode"):
+        return PCAHeteroLoss(
+            prob_mode=str(cfg["prob_mode"]),
+            nll_beta=float(cfg.get("nll_beta", 0.5)),
+            sigma_min=float(cfg.get("sigma_min", 1e-3)),
+            freeze_sigma=bool(cfg.get("freeze_sigma", False)),
         )
 
     cached_profiles = None

@@ -66,6 +66,18 @@ def main() -> int:
     ap.add_argument("--prob-mode", default="crps", choices=("crps", "nll", "quantile"))
     ap.add_argument("--stage1-epochs", type=int, default=None)
     ap.add_argument("--stage2-epochs", type=int, default=None)
+    ap.add_argument(
+        "--stage2-stop",
+        default="val_ence",
+        choices=("val_ence", "fixed", "val_loss"),
+        help="protocol v2 default=val_ence; fixed=s2b-class budget; val_loss=legacy v1",
+    )
+    ap.add_argument(
+        "--stage2-ence-patience",
+        type=int,
+        default=40,
+        help="epochs without val-ENCE improvement before stop (protocol v2)",
+    )
     ap.add_argument("--parent-tag", default=None, help="shared run parent id")
     ap.add_argument("--workdir", default=None, help="temp dir for stage configs")
     args = ap.parse_args()
@@ -85,7 +97,8 @@ def main() -> int:
     else:
         arch["n_quantiles"] = 0
     lc = s1.setdefault("loss_config", {})
-    lc["mode"] = "density_spice"
+    # Preserve representation mode (density_spice for C; combined for A/B).
+    lc.setdefault("mode", base.get("loss_config", {}).get("mode", "combined"))
     lc["prob_mode"] = "mse"
     lc["freeze_sigma"] = True
     if args.stage1_epochs is not None:
@@ -117,7 +130,7 @@ def main() -> int:
     arch2["probabilistic"] = True
     arch2["n_quantiles"] = 9 if args.prob_mode == "quantile" else 0
     lc2 = s2.setdefault("loss_config", {})
-    lc2["mode"] = "density_spice"
+    lc2.setdefault("mode", base.get("loss_config", {}).get("mode", "combined"))
     lc2["prob_mode"] = args.prob_mode
     lc2["freeze_sigma"] = False
     # μ LR × 0.1 relative to base
@@ -126,8 +139,23 @@ def main() -> int:
     # Resume bumps start_epoch to stage1_epoch+1; total epochs must cover stage2 steps.
     s1_ep = int(args.stage1_epochs or base.get("trainer", {}).get("epochs", 2))
     s2_ep = int(args.stage2_epochs or base.get("trainer", {}).get("epochs", 2))
-    s2.setdefault("trainer", {})["epochs"] = s1_ep + s2_ep
-    s2.setdefault("trainer", {})["save_period"] = 1
+    tr2 = s2.setdefault("trainer", {})
+    tr2["epochs"] = s1_ep + s2_ep
+    tr2["save_period"] = 1
+    # Protocol v2 (Phase 5 amendment 2026-07-17): early-stop stage-2 on val ENCE,
+    # never on val loss/CRPS — loss plateaus before calibration matures (s2 vs s2b).
+    if args.stage2_stop == "val_ence":
+        tr2["monitor"] = "min val_ence"
+        tr2["early_stop"] = int(args.stage2_ence_patience)
+        tr2["compute_val_ence"] = True
+        tr2["protocol"] = "v2_val_ence"
+    elif args.stage2_stop == "fixed":
+        tr2["monitor"] = "off"
+        tr2["early_stop"] = 0
+        tr2["protocol"] = "v2_fixed_budget"
+    else:
+        # legacy v1 — val_loss early-stop (retained only for archaeology)
+        tr2["protocol"] = "v1_val_loss"
     s2_path = work / "stage2.json"
     _write_json(s2_path, s2)
 
@@ -147,6 +175,8 @@ def main() -> int:
     manifest = {
         "parent_tag": parent,
         "prob_mode": args.prob_mode,
+        "protocol": tr2.get("protocol", "v1_val_loss"),
+        "stage2_stop": args.stage2_stop,
         "stage1_ckpt": str(s1_ckpt),
         "stage2_ckpt": str(s2_ckpt),
         "stage1_config": str(s1_path),

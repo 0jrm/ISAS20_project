@@ -1,9 +1,17 @@
 # Phase 5 — Ablation matrix preregistration
 
-**Status:** PRE-REGISTERED 2026-07-16; **R4 CLASSIFIED + GOLDENS RESTORED** (same day)  
+**Status:** PRE-REGISTERED 2026-07-16; **R4 CLASSIFIED + GOLDENS RESTORED** (same day); **physical-space CRPS ruler amended 2026-07-17**  
 **Plan:** [`PLAN-v2-recovery.md`](../PLAN-v2-recovery.md) §5.2  
 **Branch:** `residual_cube`  
 **Gate:** do not launch matrix cells until this file exists in git history ahead of the first matrix commit (timestamp check).
+
+### Changelog
+
+| Date | Change | Why |
+|------|--------|-----|
+| 2026-07-17 | **Physical-space CRPS/ENCE is the §3 judgment ruler.** Latent-space CRPS/ENCE (PC scores for A/B; dens/spice control for C) remain **diagnostics only** — basis-dependent, not cross-comparable. Cross-rep pick uses ensemble CRPS after decode to native T/S (M≈100 latent draws → cell decode path → `diagnostics.readiness.ensemble_crps` per depth). Same category as the gate-floor repair: frozen metric suite still had a basis-dependence hole vs the rule's intent. Test-eval counter: +1 consultation per cell for this rescoring; **final pick made once** from the physical-space table. A/B **mean-path** isotonic (T1-D) reported for ΔT / σ₀; **member-wise iso CRPS deferred** to ranking finalists only (`--iso-ensemble`). | Implementation gap vs cross-rep decision intent; eval-only fix. |
+| 2026-07-17 | Protocol v2 stage-2 val-ENCE stop + no-survivors fallback (§3.1). | Restore Phase 4 s2b fidelity. |
+| 2026-07-16 | Initial prereg + R4 golden restore. | Unlock matrix launch. |
 
 ---
 
@@ -62,7 +70,12 @@ Full-rank softplus+cumsum is **not** a matrix cell; it remains the hard-head cla
 
 - Data, split, backbone width, epoch/early-stop policy, loss-scale derivation procedure
 - Seed set `{42, 43, 44}`
-- **Two-stage CRPS/NLL schedule:** stage-1 μ MSE (σ frozen) → stage-2 unfreeze σ, μ LR × 0.1; epoch budget matches Phase 4 s2b (stage-2 continue allowed if val CRPS still falling)
+- **Two-stage CRPS/NLL schedule (protocol v2 — amended 2026-07-17):**
+  - stage-1 μ MSE (σ frozen), early-stop on val loss as before
+  - stage-2 unfreeze σ, μ LR × 0.1
+  - **Stage-2 early-stop on val ENCE** with patience 40 (ceiling = stage-1 + 190 epochs) — **never** on val CRPS/loss
+  - Rationale: Phase 4 s2 (val-loss early-stop) → test ENCE 0.231; s2b (longer stage-2) → 0.160. Loss plateaus before calibration matures. Matrix v1 reproduced the s2 failure (cell mean ENCE 0.225); amendment restores fidelity to the pre-existing s2b procedure, not a post-hoc tune toward test.
+  - Applies **uniformly** to every probabilistic cell (C/A/B × CRPS/NLL) — identical rule, no per-cell constants
 - **Val-fit per-dim σ recalibration** (`ence_recalib_val.py` → `sigma_recalib_per_dim.json`) applied identically before CRPS/ENCE/PIT/spread-skill and before §4.4 Σ export
 
 **Det-MSE heads:** no σ branch; calibration metrics marked N/A (not FAIL).
@@ -70,8 +83,9 @@ Full-rank softplus+cumsum is **not** a matrix cell; it remains the hard-head cla
 ### Eval hygiene (matrix rule — explicit)
 
 - All model selection, early-stop, and σ recalibration on **val only**
-- Test scored **exactly once per cell** after recipe frozen (ckpt + α + isotonic path)
-- Dissertation number = **3-seed mean ± std** — never a single-seed cherry-pick
+- Test scored **exactly once per frozen cell×protocol** after recipe frozen (ckpt + α + isotonic path)
+- Dissertation number = **3-seed mean ± std** — never a single-seed cherry-pick; **cell pass/fail is judged on the mean**, not per-seed counts
+- Protocol v1 C×CRPS scores retained in the record as `protocol v1 (short stage-2 / val-loss early-stop)` — evidence that under-trained stage-2 fails calibration (UQ chapter). Test-eval counter: C×CRPS reaches two consultations per seed once v2 is scored; logged in `reports/phase5_C_CRPS.md`
 
 ### Run order
 
@@ -99,14 +113,25 @@ Every cell × seed emits evalphys JSON; aggregate = mean ± std over seeds.
 
 ## 3. Decision rule (dissertation default model)
 
-1. Restrict to cells with **ENCE < 0.20** on chronological test (prob heads) **or** det-MSE cells that clear the Phase 3 skill floor (T RMSE ≤ 0.5903) with reported stability cost.
-2. Among survivors: **lowest CRPS** (prob) / lowest T RMSE (if comparing to a lone det survivor).
+1. Restrict to cells with **cell-mean physical-space ENCE < 0.20** on chronological test (prob heads; mean±std over seeds; ensemble μ/σ after decode) **or** det-MSE cells that clear the Phase 3 skill floor (T RMSE ≤ 0.5903) with reported stability cost. *Admission filter may use the locked latent ENCE table already scored under protocol v2; final ranking uses physical-space metrics only.*
+2. Among survivors: **lowest cell-mean physical-space ensemble CRPS** (T+S mean over depths; prob) / lowest T RMSE (if comparing to a lone det survivor). Latent CRPS is not used for ranking.
 3. Ties: lower **dρ/dz RMSE**.
-4. Secondary: Spearman ≫ 0.12 required for any DA-ranking claim.
+4. Secondary: Spearman ≫ 0.12 required for any DA-ranking claim (physical-space spread vs \|err\|).
+5. **Stability column required** for every cell: σ₀ / N² violation rates (profile). Inference-time isotonic (T1-D / §3.6 opt-2) may be bolted onto A/B survivors; report **mean-path** projection cost (ΔT RMSE) + post-iso violations as labeled rows. **Member-wise iso → physical CRPS** (`--iso-ensemble`) is deferred to the ranking finalists after the mean-path / raw-ensemble table picks contenders — not required for the full 9×3 matrix pass.
 
-**Mechanical pick:** apply the rule above; do not hand-edit the winner.
+**Mechanical pick:** apply the rule above on the physical-space table; do not hand-edit the winner.
 **Report all cells:** `reports/ablation_summary.md` must include the **full evalphys table for every cell** (mean±std over seeds) — losing cells are the comparative-architecture chapter, not footnotes.
-**Pre-committed stratified readout:** the winner's calibration table **depth band × season** is reported alongside the headline CRPS/ENCE/Spearman (so the Phase 4 val→test shift finding carries into final numbers, not only an s2b footnote).
+**Pre-committed stratified readout:** the winner's calibration table **depth band × season** is reported alongside the headline physical CRPS/ENCE/Spearman (so the Phase 4 val→test shift finding carries into final numbers, not only an s2b footnote).
+
+### 3.1 No-survivors fallback (pre-registered 2026-07-17, before protocol-v2 scores)
+
+If **no** probabilistic cell clears cell-mean ENCE < 0.20 under protocol v2:
+
+1. **Winner** = lowest cell-mean test CRPS among prob cells (ENCE reported and **flagged**, not used as a hard gate for selection).
+2. **Separate labeled row:** deeper post-hoc recalibration on val only (e.g. isotonic-on-val σ mapping rather than per-dim scalar α), applied identically, reported as `recalib_isotonic_val` — **not** silently merged into the headline.
+3. **Threshold stays 0.20** — no post-hoc refinement toward observed means (prospectus allowance unused).
+
+Human ACK for protocol-v2 amendment + this fallback: 2026-07-17 message (restore s2b-class stage-2 fidelity; not motivated by matrix test scores).
 
 ---
 
@@ -169,4 +194,4 @@ Every cell × seed emits evalphys JSON; aggregate = mean ± std over seeds.
 - No random-split dissertation numbers.
 - No cross-tag raw RMSE (use `eval_matched.py` only if ISAS appendix needed).
 - No silent L4-as-truth.
-- No burning test scores while tuning α — fit on val only; **one test score per frozen cell**.
+- No burning test scores while tuning α — fit on val only; **one latent test score per frozen cell** under protocol v2, then **one physical-space rescoring consultation** (amended 2026-07-17) for the final pick. No further test peeks.
