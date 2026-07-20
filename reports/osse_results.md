@@ -5,7 +5,7 @@
 **Winner ckpt:** `/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s42_s2/p5_A_CRPS_v2_s42_s2/model_best.pth`
 **E5 τ (val P50 σ̄):** 0.3449
 **R_cal val inflation:** 1.000× (mean diag(Σ) → mean RMSE²)
-**R_cal form:** diagonal of Σ_T only (full matrix off-diagonals destabilize v1 column OI)
+**R_cal form:** full Σ_T = V diag((ασ)²) Vᵀ, Schur-localized (Gaussian L_loc=150.0 m; diag preserved)
 
 > Mode `cast_column`: truth = ARGO at cast columns. Map-level ISAS20 + L_h not wired (no 2021 ISAS year on disk).
 > E0≡E1 when background is monthly clim and E1 casts are the same clim.
@@ -18,8 +18,8 @@
 | E1 | R_fixed_clim | 1.5382 | — |
 | E2 | R_fixed_isop | 0.5410 | — |
 | E3 | R_fixed_nespreso | 0.5454 | — |
-| E4 | R_cal | 0.5463 | — |
-| E5 | R_cal_QC_tau=0.3449_keep=0.444 | 1.3934 | 0.444 |
+| E4 | R_cal | 0.6160 | — |
+| E5 | R_cal_QC_tau=0.3449_keep=0.444 | 1.4008 | 0.444 |
 
 ## Claims
 
@@ -34,5 +34,5 @@
 | E1 | 2.1986 | 3.1613 | 2.1013 | 0.3772 |
 | E2 | 1.1934 | 1.0184 | 0.6068 | 0.1523 |
 | E3 | 1.1510 | 1.0231 | 0.6343 | 0.1673 |
-| E4 | 1.1575 | 1.0203 | 0.6358 | 0.1680 |
-| E5 | 1.9420 | 2.8169 | 1.9453 | 0.3525 |
+| E4 | 1.2119 | 1.1481 | 0.7678 | 0.1887 |
+| E5 | 1.9488 | 2.8348 | 1.9547 | 0.3546 |
