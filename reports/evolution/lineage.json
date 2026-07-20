@@ -1,0 +1,90 @@
+{
+  "meta": {
+    "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
+    "note": "Populated strictly from report headers and reports/gate_floor_provenance.md. Nodes with no stated hypothesis in their source are marked hypothesis: UNSTATED rather than guessed."
+  },
+  "nodes": [
+    {"id": "phase0_evalphys", "phase": "Phase 0", "hypothesis": "UNSTATED", "change": "Freeze a versioned, tested metrics package (N-squared, sigma0 monotonicity, CRPS/ENCE/PIT/spread-skill) that every later phase must import unchanged.", "judgment_number": null, "gate": "audit", "verdict": "survivor", "source_files": ["NeSPReSO2_onTemplate/evalphys/METRICS_MANIFEST.json", "PLAN-v2-recovery.md"]},
+
+    {"id": "t2_stale_audit", "phase": "Phase 1", "hypothesis": "UNSTATED", "change": "Audit train/val/test splits for stale (time-constant) satellite input fields.", "judgment_number": "0.0% stale, all splits, all channels", "gate": "stale fraction > 5% in val or test embargoes headline metrics", "verdict": "survivor", "source_files": ["reports/stale_by_split.md", "reports/stale_by_split.json", "reports/phase1_decisive_tests.md"]},
+
+    {"id": "t1_basis_stability", "phase": "Phase 1", "hypothesis": "Soft representation changes (joint T/S EOF = B, monotone-density+spice PCA = C) cut sigma0/N-squared static-stability violation rates by >=5x versus the separate-PCA baseline (A), at <=10% RMSE cost.", "change": "T1 decisive test: reconstruct held-out truth through bases A/B/C/D; measure sigma0 and N-squared violation rates and per-band RMSE.", "judgment_number": "profile viol A=21.51% B=22.63% C=21.83% D=0.48%", "gate": "B/C >=5x N-squared cut at <=10% RMSE cost", "verdict": "killed", "source_files": ["reports/t1_basis_stability.md", "reports/t1_basis_stability.json", "reports/phase1_decisive_tests.md"]},
+
+    {"id": "d_monotone_head", "phase": "Phase 1", "hypothesis": "A hard monotone sigma0 constraint (T1 variant D) fixes static-stability violations that no soft basis change can.", "change": "softplus+cumsum control-grid density parameterization, evaluated as T1 variant D.", "judgment_number": "D profile viol 0.48% (vs A 21.51%)", "gate": "human escalation R1 (B/C rule not met -> escalate)", "verdict": "survivor", "source_files": ["reports/t1_basis_stability.md", "reports/phase1_decisive_tests.md"]},
+
+    {"id": "phase3_hard_density_head", "phase": "Phase 3", "hypothesis": "A hard monotone density parameterization recovers physical stability at an acceptable, and in the upper ocean negative, T-RMSE cost versus the separate-PCA baseline.", "change": "Implement sigma0 control-grid softplus+cumsum head + spice PCA-16 + Newton (SA,CT) inversion (PLAN-v2-recovery.md Phase 3.2-3.4).", "judgment_number": "sigma0 viol 21.51%->0.48%; E beats A on T RMSE in 0-800m", "gate": "human sign-off", "verdict": "survivor", "source_files": ["PLAN-v2-recovery.md"]},
+
+    {"id": "phase3_deepband_fix", "phase": "Phase 3", "hypothesis": "UNSTATED", "change": "Diagnosed and fixed a deep-band (>800m) sigma0 bias: linear interpolation of native sigma0 onto the control grid left ~12% negative increments that softplus-clamp encoding turned into cumulative bias; fixed by isotonic-projecting control-grid sigma0 before softplus encode.", "judgment_number": null, "gate": "T1-E (E/A ratio <= 1.0 on all T depth bands)", "verdict": "erratum", "source_files": ["PLAN-v2-recovery.md"]},
+
+    {"id": "phase3_densonly_ablation", "phase": "Phase 3", "hypothesis": "Multi-task interference between the density and spice loss terms explains the chronological skill gap versus the argo16 baseline.", "change": "lambda_tau=0 density-only ablation (config_argo_densityspice_densonly.json).", "judgment_number": "pred sigma0 + true tau = 0.547 (approx v10 0.522)", "gate": "interference test", "verdict": "killed", "source_files": ["reports/phase3_densonly_blame_swap.md", "reports/phase3_densonly_eval.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase3_opt2_gate_v1", "phase": "Phase 3", "hypothesis": "Isotonic sigma0 projection at inference (fallback option 2) alone clears the published skill floor on the chronological split.", "change": "argo16 + isotonic projection + re-inversion, evaluated on chronological test.", "judgment_number": "T=0.514 vs published floor 0.4574", "gate": "published floor (0.416 x 1.10)", "verdict": "killed", "source_files": ["PLAN-v2-recovery.md", "reports/gate_floor_provenance.md"]},
+
+    {"id": "phase3_leakage_erratum", "phase": "Phase 3", "hypothesis": "UNSTATED", "change": "Discovered argo16_scales checkpoint has no split_mode key (defaults random); its published 0.4158 is a random-split number and its training set overlaps the 2021-2022 chronological test era, so all chronological evaluations of that checkpoint (the 0.514 gate figure; density-shift-diag mse_sigma 0.21) are leaked-optimistic. Corrected floor = same-split clean-chrono argo16 raw x 1.10.", "judgment_number": "leaked 0.514 -> clean chrono raw 0.5367 -> corrected floor 0.5903", "gate": null, "verdict": "erratum", "source_files": ["reports/gate_floor_provenance.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase3_argo16_isotonic_gate", "phase": "Phase 3", "hypothesis": "On a clean (non-leaked) chronologically-trained checkpoint, isotonic projection + re-inversion clears the corrected same-split floor while zeroing pre-inversion sigma0 violations.", "change": "argo16_chrono_clean (early stop ep 814) + isotonic projection + re-inversion.", "judgment_number": "T=0.5367 (unchanged by isotonic); pre-inv sigma0=0; floor 0.5903", "gate": "corrected same-split floor (raw x 1.10)", "verdict": "survivor", "source_files": ["reports/phase3_argo16_isotonic_gate_clean.md", "reports/gate_floor_provenance.md"]},
+
+    {"id": "phase3_a_space_lowrank", "phase": "Phase 3", "hypothesis": "A low-rank (R=16) PCA basis on the softplus-inverse ('a-space') density increments recovers in-head skill under the low-rank control-vector setting.", "change": "PCA-16 on (a - a_clim); predict scores, decode via softplus+cumsum.", "judgment_number": "a-space recon RMSE 0.925 (worse than clim 0.722); train T=0.830", "gate": "skill floor", "verdict": "killed", "source_files": ["reports/phase3_lowrank_delta_a_eval.md", "reports/finding_compress_physical_space.md"]},
+
+    {"id": "phase3_sigma0_space_lowrank", "phase": "Phase 3", "hypothesis": "Compressing linearly in physical sigma0 space (not the nonlinear a-space preimage), then applying the monotonicity constraint only at inference, preserves low-rank skill.", "change": "PCA-16 on (sigma0 - clim); isotonic projection + PCHIP + inversion applied at inference only; spice-continue.", "judgment_number": "sigma0 recon RMSE 0.026; T=0.562 <= floor 0.590", "gate": "corrected same-split floor 0.5903", "verdict": "survivor", "source_files": ["reports/phase3_lowrank_sigma0_spice_eval.md", "reports/finding_compress_physical_space.md"]},
+
+    {"id": "phase4_prob_head", "phase": "Phase 4", "hypothesis": "UNSTATED", "change": "Heteroscedastic head (mu, sigma) with CRPS/NLL/quantile loss switch, two-stage mu-then-sigma schedule, and dacov Sigma export.", "judgment_number": null, "gate": "smoke acceptance", "verdict": "survivor", "source_files": ["reports/phase4_prob_smoke.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase4_lowrank_crps_v1", "phase": "Phase 4", "hypothesis": "Two-stage CRPS training on the low-rank sigma0 head produces calibrated predictive uncertainty out of the box.", "change": "lowrank_crps_v1 two-stage run, global sigma scale only.", "judgment_number": "test CRPS 0.715 (PASS), Spearman 0.519 (PASS), ENCE 0.361 (MISS)", "gate": "ENCE < 0.20", "verdict": "killed", "source_files": ["reports/phase4_lowrank_crps_eval.md", "reports/phase4_lowrank_crps_val.md"]},
+
+    {"id": "phase4_ence_recalib_s2b", "phase": "Phase 4", "hypothesis": "A longer stage-2 schedule (s2b) plus val-only per-dimension sigma recalibration recovers ENCE calibration on the test split.", "change": "stage-2 epochs -> 250, lr 5e-5; per-dim val-fitted alpha scales applied at inference.", "judgment_number": "test ENCE 0.160 (PASS); Spearman 0.540; CRPS 0.698", "gate": "ENCE < 0.20", "verdict": "survivor", "source_files": ["reports/phase4_ence_recalib_s2b.md", "reports/phase4_ence_recalib.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase5_prereg", "phase": "Phase 5", "hypothesis": "UNSTATED", "change": "Pre-register the 3 (representation) x 3 (head) x 3 (seed) ablation matrix and archive the non-competing model variants before any GPU cell launches.", "judgment_number": null, "gate": "prereg file committed before first launch (git timestamp)", "verdict": "survivor", "source_files": ["reports/ablation_preregistration.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase5_protocol_v1_failure", "phase": "Phase 5", "hypothesis": "Early-stopping stage-2 on validation loss/CRPS (as in the original prereg transcription) is an adequate protocol for every probabilistic matrix cell.", "change": "C x CRPS run under protocol v1 (val-loss early stop).", "judgment_number": "test ENCE 0.225+/-0.020 (mean, 3 seeds)", "gate": "ENCE < 0.20", "verdict": "killed", "source_files": ["reports/phase5_C_CRPS.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase5_matrix_v2_latent", "phase": "Phase 5", "hypothesis": "Under a corrected protocol (stage-2 early-stop on val ENCE, patience 40, uniform across cells), the 3x3 representation x head matrix identifies clear per-cell survivors on latent-space CRPS/NLL/ENCE and T RMSE.", "change": "9 cells x 3 seeds scored under protocol v2.", "judgment_number": "see reports/evolution/PROVENANCE.json:tbl_matrix_latent", "gate": "ENCE < 0.20 (prob cells) / T <= 0.5903 (det cells)", "verdict": "survivor", "source_files": ["reports/phase5_A_CRPS.md", "reports/phase5_A_NLL.md", "reports/phase5_A_det.md", "reports/phase5_B_CRPS.md", "reports/phase5_B_NLL.md", "reports/phase5_B_det.md", "reports/phase5_C_CRPS.md", "reports/phase5_C_NLL.md", "reports/phase5_C_det.md"]},
+
+    {"id": "phase5_c_det_overfit", "phase": "Phase 5", "hypothesis": "Phase 3's single-run low-rank sigma0+spice admission pass (T=0.562) will replicate as the C x det matrix cell under the fair, locked 3-seed protocol.", "change": "C x det scored under protocol v2 with locked seeds/schedule.", "judgment_number": "0.609+/-0.012 vs admission 0.562", "gate": "floor 0.5903", "verdict": "killed", "source_files": ["reports/finding_C_det_gate_overfit.md", "reports/phase5_C_det.md"]},
+
+    {"id": "phase5_physical_rescoring", "phase": "Phase 5", "hypothesis": "The latent PC-space CRPS/ENCE ranking of matrix cells survives a like-for-like decode to physical (T,S) space, making cross-representation ranking valid.", "change": "phase5_physical_space_score.py: ensemble CRPS/ENCE computed after decode to T/S for every cell (amends prereg 2026-07-17).", "judgment_number": "see reports/evolution/PROVENANCE.json:tbl_matrix_physical", "gate": "physical ENCE < 0.20 / T <= 0.5903", "verdict": "superseded", "source_files": ["reports/ablation_summary.md", "PLAN-v2-recovery.md"]},
+
+    {"id": "phase5_winner_A_CRPS", "phase": "Phase 5", "hypothesis": "UNSTATED", "change": "Apply the pre-registered Section 3 decision rule (best physical CRPS among ENCE<0.20 survivors) to the physical-space table.", "judgment_number": "A x CRPS: T=0.559, CRPS=0.119, ENCE=0.153, Spearman=0.756", "gate": "Section 3 decision rule", "verdict": "survivor", "source_files": ["reports/ablation_summary.md"]},
+
+    {"id": "phase5_winner_strata", "phase": "Phase 5", "hypothesis": "The A x CRPS winner's calibration holds uniformly across depth band and season, not only in the pooled overall number.", "change": "Depth-band x season strata scoring of the winner in physical T space.", "judgment_number": "overall ENCE(T)=0.236; worst 0-50m and 50-200m all seasons, >800m all seasons", "gate": "ENCE(T) < 0.20 per stratum", "verdict": "killed", "source_files": ["reports/phase5_A_CRPS_physical_strata.md"]},
+
+    {"id": "phase6_osse_prereg", "phase": "Phase 6", "hypothesis": "UNSTATED", "change": "Pre-register the E0-E5 OSSE experiment table, R construction, and QC rule before the Phase-5 matrix winner identity is known.", "judgment_number": null, "gate": "prereg precedes runs (git timestamp)", "verdict": "survivor", "source_files": ["reports/osse_preregistration.md"]},
+
+    {"id": "phase6_osse_v1", "phase": "Phase 6", "hypothesis": "Calibrated NeSPReSO casts beat an ISOP/MODAS-class synthetic-cast baseline inside the same OI update (E3>E2), and calibrated R (diagonal fallback) does not hurt versus fixed R (E4>=E3).", "change": "cast-column v1 OSSE run (2021, n=1101); R_cal = diag(Sigma_T) only (full matrix destabilized v1 column OI).", "judgment_number": "E2=0.5410 E3=0.5454 E4(diag)=0.5463", "gate": "E3>E2 / E4>=E3", "verdict": "killed", "source_files": ["reports/osse_results.md", "HANDOFF.md"]},
+
+    {"id": "phase6_rcal_v2_prereg", "phase": "Phase 6", "hypothesis": "Schur-localizing the full CRPS-head covariance Sigma_T in depth restores OI numerical stability while retaining the cross-level structure the head resolves.", "change": "Pre-register full localized Sigma_T = V diag((alpha*sigma)^2) V^T, Gaussian L_loc=L_v=150m, locked before the promotion run is read (commit 0422a51).", "judgment_number": null, "gate": "locked pre-run", "verdict": "survivor", "source_files": ["reports/osse_preregistration.md"]},
+
+    {"id": "phase6_rcal_v2_promotion", "phase": "Phase 6", "hypothesis": "The full localized (structured) Sigma_T covariance improves the OSSE analysis versus the diagonal-only fallback, because it carries genuine cross-level observation-error structure.", "change": "Canonical cast-column run (2021, n=1101) with the pre-registered full localized R_cal (commit 490de67).", "judgment_number": "E4_full=0.6160 vs E4_diag=0.5463 vs E3=0.5454", "gate": "E4>=E3 / diag-control comparison", "verdict": "killed", "source_files": ["reports/osse_results.md", "HANDOFF.md", "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json"]}
+  ],
+  "edges": [
+    {"from": "phase0_evalphys", "to": "t1_basis_stability", "kind": "led_to"},
+    {"from": "phase0_evalphys", "to": "t2_stale_audit", "kind": "led_to"},
+    {"from": "t1_basis_stability", "to": "d_monotone_head", "kind": "led_to"},
+    {"from": "d_monotone_head", "to": "phase3_hard_density_head", "kind": "led_to"},
+    {"from": "t2_stale_audit", "to": "phase3_hard_density_head", "kind": "led_to"},
+    {"from": "phase3_hard_density_head", "to": "phase3_deepband_fix", "kind": "led_to"},
+    {"from": "phase3_hard_density_head", "to": "phase3_densonly_ablation", "kind": "led_to"},
+    {"from": "phase3_densonly_ablation", "to": "phase3_a_space_lowrank", "kind": "led_to"},
+    {"from": "phase3_a_space_lowrank", "to": "phase3_sigma0_space_lowrank", "kind": "superseded_by"},
+    {"from": "phase3_opt2_gate_v1", "to": "phase3_leakage_erratum", "kind": "led_to"},
+    {"from": "phase3_leakage_erratum", "to": "phase3_opt2_gate_v1", "kind": "erratum_of"},
+    {"from": "phase3_leakage_erratum", "to": "phase3_argo16_isotonic_gate", "kind": "led_to"},
+    {"from": "t1_basis_stability", "to": "phase5_prereg", "kind": "led_to"},
+    {"from": "phase3_sigma0_space_lowrank", "to": "phase5_prereg", "kind": "led_to"},
+    {"from": "phase3_argo16_isotonic_gate", "to": "phase5_prereg", "kind": "led_to"},
+    {"from": "phase4_prob_head", "to": "phase4_lowrank_crps_v1", "kind": "led_to"},
+    {"from": "phase4_lowrank_crps_v1", "to": "phase4_ence_recalib_s2b", "kind": "superseded_by"},
+    {"from": "phase4_ence_recalib_s2b", "to": "phase5_prereg", "kind": "led_to"},
+    {"from": "phase5_prereg", "to": "phase5_protocol_v1_failure", "kind": "led_to"},
+    {"from": "phase5_protocol_v1_failure", "to": "phase5_matrix_v2_latent", "kind": "superseded_by"},
+    {"from": "phase5_matrix_v2_latent", "to": "phase5_c_det_overfit", "kind": "led_to"},
+    {"from": "phase5_matrix_v2_latent", "to": "phase5_physical_rescoring", "kind": "led_to"},
+    {"from": "phase5_physical_rescoring", "to": "phase5_winner_A_CRPS", "kind": "led_to"},
+    {"from": "phase5_winner_A_CRPS", "to": "phase5_winner_strata", "kind": "led_to"},
+    {"from": "phase5_winner_A_CRPS", "to": "phase6_osse_prereg", "kind": "led_to"},
+    {"from": "phase6_osse_prereg", "to": "phase6_osse_v1", "kind": "led_to"},
+    {"from": "phase6_osse_v1", "to": "phase6_rcal_v2_prereg", "kind": "led_to"},
+    {"from": "phase6_rcal_v2_prereg", "to": "phase6_rcal_v2_promotion", "kind": "led_to"},
+    {"from": "phase6_osse_v1", "to": "phase6_rcal_v2_promotion", "kind": "superseded_by"}
+  ]
+}
