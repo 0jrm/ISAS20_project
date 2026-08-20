@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "frozen_date": "2026-07-16",
+  "version": "1.2.0",
+  "frozen_date": "2026-08-20",
   "N2_TOL": 1e-08,
   "SIGMA0_TOL": 0.0,
   "gsw_backend_headline": "gsw",
@@ -23,6 +23,11 @@
       "version": "1.1.0",
       "date": "2026-07-16",
       "note": "Additive: \u03c3\u2080-monotonicity violation metric; configurable gsw backend (headline pinned to reference gsw); exclude_top_m semantics fixed."
+    },
+    {
+      "version": "1.2.0",
+      "date": "2026-08-20",
+      "note": "Additive: max N\u00b2 depth, heave-vs-shape T split, calibrated steric vs ADT (Loop Current 2 cm RMS gate)."
     }
   ]
 }

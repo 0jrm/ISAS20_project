@@ -1,0 +1,116 @@
+{
+    "name": "NeSPReSO2_ARGO_GoM_heave_residual",
+    "n_gpu": 1,
+    "seed": 42,
+    "arch": {
+        "type": "HeaveResidual",
+        "args": {
+            "input_dim": 11,
+            "output_dim": 35,
+            "n_warp": 3,
+            "dropout_prob": 0.2,
+            "d_model": 128,
+            "head_layers": [1024, 1024],
+            "patch_shape": null,
+            "n_enc": 8,
+            "n_sat": 3,
+            "probabilistic": true,
+            "sigma_min": 0.001
+        }
+    },
+    "input_params": {
+        "timecos": true,
+        "timesin": true,
+        "latcos": true,
+        "latsin": true,
+        "loncos": true,
+        "lonsin": true,
+        "oni": true,
+        "roni": true,
+        "sss": true,
+        "sst": true,
+        "ssh": true,
+        "sat": true
+    },
+    "io": {
+        "dataset_tag": "argo_v2",
+        "cache_dir": "../data/cache",
+        "spatial_pad": 0,
+        "temporal_pad": 0,
+        "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
+        "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
+        "v2_reload": false,
+        "refit_pca": true,
+        "steric_vs_sla": true
+    },
+    "outputs": {
+        "warp": 3,
+        "temperature": 16,
+        "salinity": 16
+    },
+    "loss_scales": {
+        "heave_geom_scale": 1.0,
+        "heave_pc_scale": 1.0,
+        "heave_dtdz_scale": 0.1
+    },
+    "steric": {
+        "enabled": true,
+        "scale": 0.01,
+        "subsample_dz": 5,
+        "min_calibration_r": 0.0
+    },
+    "density": {
+        "enabled": false,
+        "checkpoint": "",
+        "stats_path": "",
+        "stab_weight": 0.0,
+        "smooth_weight": 0.0
+    },
+    "data_loader": {
+        "type": "NeSPReSODataLoader",
+        "args": {
+            "cache_path": "../data/cache/train_ready_3adcff404b0b.pkl",
+            "batch_size": 512,
+            "shuffle": true,
+            "split_mode": "chronological",
+            "train_frac": 0.7,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
+            "split": "train",
+            "num_workers": 0,
+            "pin_memory": false
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args": {
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": false
+        }
+    },
+    "loss": "heave_residual_loss",
+    "loss_config": {
+        "mode": "heave_residual",
+        "prob_mode": "crps",
+        "sigma_min": 0.001
+    },
+    "metrics": [],
+    "lr_scheduler": {
+        "type": "StepLR",
+        "args": {
+            "step_size": 100000,
+            "gamma": 1.0
+        }
+    },
+    "trainer": {
+        "epochs": 8000,
+        "save_dir": "saved/",
+        "save_period": 1,
+        "log_interval": 10,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": 500,
+        "tensorboard": true
+    }
+}

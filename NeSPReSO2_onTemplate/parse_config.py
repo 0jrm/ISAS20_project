@@ -33,8 +33,9 @@ def validate_config(config):
         assert os.path.isfile(density["stats_path"]), f"missing density stats: {density['stats_path']}"
     steric = config.get("steric") or {}
     if steric.get("enabled"):
-        assert config.get("io", {}).get("anomaly_targets"), (
-            "steric.enabled requires io.anomaly_targets=true (clim_steric + calibration in cache)"
+        io = config.get("io", {}) or {}
+        assert io.get("anomaly_targets") or io.get("steric_vs_sla"), (
+            "steric.enabled requires io.anomaly_targets=true or io.steric_vs_sla=true"
         )
     loss_cfg = config.get("loss_config") or {}
     mode = loss_cfg.get("mode", "combined")
@@ -54,6 +55,13 @@ def validate_config(config):
             assert int(arch_args.get("n_quantiles") or 0) == 9, "quantile mode requires n_quantiles=9"
         if loss_cfg.get("prob_mode") == "mse" and loss_cfg.get("freeze_sigma"):
             assert arch_args.get("probabilistic"), "freeze_sigma stage-1 needs probabilistic arch"
+    if mode == "heave_residual":
+        assert set(outputs) >= {"warp", "temperature", "salinity"}, (
+            "heave_residual requires outputs warp+temperature+salinity"
+        )
+        if loss_cfg.get("prob_mode") in ("crps", "nll"):
+            assert arch_args.get("probabilistic"), "heave_residual crps/nll require arch.args.probabilistic=true"
+            assert not arch_args.get("n_quantiles"), "heave_residual crps/nll require n_quantiles=0"
     if mode == "decoder":
         assert loss_cfg.get("decoder_dir"), "decoder mode requires loss_config.decoder_dir"
     if mode == "density_spice" or config.get("io", {}).get("representation") == "density_spice":

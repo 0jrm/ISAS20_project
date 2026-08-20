@@ -33,7 +33,9 @@ ENV/
 *.log
 
 # Large data (kept out of git; GitHub rejects >100MB files)
-data/
+data/*
+!data/indices/
+!data/indices/*.txt
 *.h5
 
 # Model artifacts and run logs (see NeSPReSO2_onTemplate/saved/README.md)

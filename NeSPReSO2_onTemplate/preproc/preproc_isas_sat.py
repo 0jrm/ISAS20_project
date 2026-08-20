@@ -21,7 +21,7 @@ from model.loss import OUTPUT_H5_VARS, get_pca_weights, true_profiles_numpy
 PATCH_ORDER_DOC = "time_major_row_major_lat_lon"
 
 ENCODING_KEYS = ("timecos", "timesin", "latcos", "latsin", "loncos", "lonsin")
-SCALAR_EXTRA_KEYS = ("basin_sss", "basin_sst", "basin_ssh", "bathy_depth")
+SCALAR_EXTRA_KEYS = ("oni", "roni", "basin_sss", "basin_sst", "basin_ssh", "bathy_depth")
 CENTER_SCALAR_KEYS = ("center_sss", "center_sst", "center_ssh")
 ENGINEERED_PATCH_KEYS = (
     "patch_ssh_gradient",
@@ -366,6 +366,10 @@ def build_argo_l4_input_matrix(
         cols.append(np.cos(2 * np.pi * lon / 360))
     if input_params.get("lonsin"):
         cols.append(np.sin(2 * np.pi * lon / 360))
+
+    from preproc.enso import enso_column_list
+
+    cols.extend(enso_column_list(juld, input_params))
 
     basin_means = basin_means or {}
     if input_params.get("basin_sss"):
@@ -773,6 +777,10 @@ def build_input_matrix(
         cols.append(np.cos(2 * np.pi * lon / 360))
     if input_params.get("lonsin"):
         cols.append(np.sin(2 * np.pi * lon / 360))
+
+    from preproc.enso import enso_column_list
+
+    cols.extend(enso_column_list(juld, input_params))
 
     for key in ("sss", "sst", "ssh"):
         if not input_params.get(key):

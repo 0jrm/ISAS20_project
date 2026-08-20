@@ -21,7 +21,7 @@ DEFAULT_COMBINED_MSE_SCALE = 0.0255
 
 OUTPUT_H5_VARS = {"temperature": "TEMP", "salinity": "PSAL"}
 
-VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice")
+VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice", "heave_residual")
 VALID_PROB_MODES = ("mse", "crps", "nll", "quantile")
 
 
@@ -962,6 +962,207 @@ class DensitySpiceProbLoss(DensitySpiceLoss):
         return nll
 
 
+def _station_major(arr: np.ndarray, n: int) -> np.ndarray:
+    a = np.asarray(arr, dtype=np.float32)
+    if a.ndim != 2:
+        raise ValueError(f"expected 2-D profiles, got {a.shape}")
+    if a.shape[0] == n:
+        return a
+    if a.shape[1] == n:
+        return a.T
+    raise ValueError(f"cannot align profile shape {a.shape} to n={n}")
+
+
+class HeaveResidualLoss(nn.Module):
+    """Geometry + warped-residual PCs (+ optional dT/dz and steric). Ignores z-PCA targets."""
+
+    def __init__(
+        self,
+        outputs,
+        device,
+        *,
+        true_profiles: Mapping[str, np.ndarray],
+        pres_levels: np.ndarray,
+        lat: np.ndarray,
+        lon: np.ndarray,
+        train_idx: np.ndarray | None = None,
+        clim_profiles: Mapping[str, np.ndarray] | None = None,
+        steric_config=None,
+        steric_meta=None,
+        loss_scales: Mapping[str, Any] | None = None,
+        loss_config: Mapping[str, Any] | None = None,
+    ):
+        super().__init__()
+        from sklearn.decomposition import PCA
+
+        from evalphys.metrics import isotherm_depth, mixed_layer_depth
+        from model.heave import decode_warp
+        from model.warp import torch_unwarp_from_canonical, torch_warp_to_canonical, warp_to_canonical
+
+        cfg = loss_config or {}
+        scales = loss_scales or {}
+        self.outputs = OrderedDict(outputs)
+        self.n_warp = int(self.outputs.get("warp", 3))
+        self.n_t = int(self.outputs["temperature"])
+        self.n_s = int(self.outputs["salinity"])
+        self.d = self.n_warp + self.n_t + self.n_s
+        self.prob_mode = cfg.get("prob_mode")
+        self.sigma_min = float(cfg.get("sigma_min", 1e-3))
+        self.nll_beta = float(cfg.get("nll_beta", 0.5))
+        self.freeze_sigma = bool(cfg.get("freeze_sigma", False))
+        self.geom_scale = float(scales.get("heave_geom_scale", 1.0))
+        self.pc_scale = float(scales.get("heave_pc_scale", 1.0))
+        self.dtdz_scale = float(scales.get("heave_dtdz_scale", 0.1))
+        self.needs_inputs = False
+
+        T = _station_major(true_profiles["temperature"], lat.shape[0])
+        S = _station_major(true_profiles["salinity"], lon.shape[0])
+        z = np.asarray(pres_levels, dtype=np.float64).reshape(-1)
+        n = T.shape[0]
+        lat_a = np.asarray(lat, dtype=np.float64).reshape(-1)
+        lon_a = np.asarray(lon, dtype=np.float64).reshape(-1)
+        mld = mixed_layer_depth(T, S, z, lat_a, lon_a)
+        d26, _ = isotherm_depth(T, z, 26.0)
+        mld = np.where(np.isfinite(mld), mld, 50.0)
+        d26 = np.where(np.isfinite(d26), d26, 120.0)
+
+        if clim_profiles is not None:
+            T_clim = _station_major(clim_profiles["temperature"], n)
+            S_clim = _station_major(clim_profiles["salinity"], n)
+        else:
+            T_clim = np.broadcast_to(np.nanmean(T, axis=0), T.shape).copy()
+            S_clim = np.broadcast_to(np.nanmean(S, axis=0), S.shape).copy()
+
+        T_w = warp_to_canonical(T, z, mld, d26)
+        S_w = warp_to_canonical(S, z, mld, d26)
+        T_prior = warp_to_canonical(T_clim, z, mld, d26)
+        S_prior = warp_to_canonical(S_clim, z, mld, d26)
+        T_res = np.nan_to_num(T_w - T_prior, nan=0.0)
+        S_res = np.nan_to_num(S_w - S_prior, nan=0.0)
+        idx = np.arange(n) if train_idx is None else np.asarray(train_idx, dtype=int)
+        pca_t = PCA(n_components=self.n_t).fit(T_res[idx])
+        pca_s = PCA(n_components=self.n_s).fit(S_res[idx])
+        t_pcs = pca_t.transform(T_res)
+        s_pcs = pca_s.transform(S_res)
+
+        self.register_buffer("z", torch.tensor(z, dtype=torch.float32, device=device))
+        self.register_buffer("T_true", torch.tensor(T, dtype=torch.float32, device=device))
+        self.register_buffer("S_true", torch.tensor(S, dtype=torch.float32, device=device))
+        self.register_buffer("T_clim", torch.tensor(T_clim, dtype=torch.float32, device=device))
+        self.register_buffer("S_clim", torch.tensor(S_clim, dtype=torch.float32, device=device))
+        self.register_buffer("mld_true", torch.tensor(mld, dtype=torch.float32, device=device))
+        self.register_buffer("d26_true", torch.tensor(d26, dtype=torch.float32, device=device))
+        self.register_buffer("t_pcs_true", torch.tensor(t_pcs, dtype=torch.float32, device=device))
+        self.register_buffer("s_pcs_true", torch.tensor(s_pcs, dtype=torch.float32, device=device))
+        self.register_buffer(
+            "t_components", torch.tensor(pca_t.components_, dtype=torch.float32, device=device)
+        )
+        self.register_buffer(
+            "t_mean", torch.tensor(pca_t.mean_, dtype=torch.float32, device=device)
+        )
+        self.register_buffer(
+            "s_components", torch.tensor(pca_s.components_, dtype=torch.float32, device=device)
+        )
+        self.register_buffer(
+            "s_mean", torch.tensor(pca_s.mean_, dtype=torch.float32, device=device)
+        )
+        self._decode_warp = decode_warp
+        self._warp = torch_warp_to_canonical
+        self._unwarp = torch_unwarp_from_canonical
+        self.z_bot = float(z[-1])
+
+        self.steric_helper = None
+        if steric_config and steric_config.get("enabled", False) and steric_meta is not None:
+            sla = getattr(steric_meta, "ssh_obs_sla", None)
+            clim_h = getattr(steric_meta, "clim_steric", None)
+            cal = getattr(steric_meta, "steric_calibration", None)
+            if sla is not None and clim_h is not None and cal is not None:
+                self.steric_helper = StericConstraint(
+                    dataset=steric_meta, device=device, config=steric_config
+                )
+
+    def _mu_sigma(self, output):
+        from model.prob_head import split_mu_sigma, softplus_sigma
+
+        if output.shape[-1] == 2 * self.d:
+            mu, raw = split_mu_sigma(output, self.d)
+            if self.prob_mode in (None, "mse") or self.freeze_sigma:
+                return mu, None
+            return mu, softplus_sigma(raw, sigma_min=self.sigma_min)
+        if output.shape[-1] != self.d:
+            raise ValueError(f"heave output dim {output.shape[-1]} != {self.d} (or 2*{self.d})")
+        return output, None
+
+    def decode_ts(self, mu: torch.Tensor):
+        mld, d26, stretch = self._decode_warp(mu[:, : self.n_warp], self.z_bot)
+        t_pc = mu[:, self.n_warp : self.n_warp + self.n_t]
+        s_pc = mu[:, self.n_warp + self.n_t :]
+        T_res = t_pc @ self.t_components + self.t_mean
+        S_res = s_pc @ self.s_components + self.s_mean
+        return mld, d26, T_res, S_res
+
+    def physical_ts(self, mu: torch.Tensor, indices) -> tuple[torch.Tensor, torch.Tensor]:
+        idx = torch.as_tensor(indices, dtype=torch.long, device=mu.device)
+        mld, d26, T_res, S_res = self.decode_ts(mu)
+        T_prior = self._warp(self.T_clim[idx], self.z, mld, d26)
+        S_prior = self._warp(self.S_clim[idx], self.z, mld, d26)
+        T = self._unwarp(T_prior + T_res, self.z, mld, d26)
+        S = self._unwarp(S_prior + S_res, self.z, mld, d26)
+        return T, S
+
+    def forward(self, output, target, indices=None, inputs=None):
+        del target  # z-PCA scores are the wrong residual
+        from evalphys.calibration import gaussian_crps_torch
+        from model.prob_head import beta_nll
+
+        if indices is None:
+            raise ValueError("heave_residual loss requires batch indices")
+        idx = torch.as_tensor(indices, dtype=torch.long, device=output.device)
+        mu, sigma = self._mu_sigma(output)
+        mld, d26, stretch = self._decode_warp(mu[:, : self.n_warp], self.z_bot)
+        geom_loss = (
+            ((mld - self.mld_true[idx]) / 50.0) ** 2 + ((d26 - self.d26_true[idx]) / 120.0) ** 2
+        ).mean()
+
+        t_pc = mu[:, self.n_warp : self.n_warp + self.n_t]
+        s_pc = mu[:, self.n_warp + self.n_t :]
+        t_tgt = self.t_pcs_true[idx]
+        s_tgt = self.s_pcs_true[idx]
+        # ponytail: CRPS diagonal R on (mld_m, d26_m, stretch, residual PCs); σ_warp is logit-scale
+        state = torch.cat([mld.unsqueeze(1), d26.unsqueeze(1), stretch.unsqueeze(1), t_pc, s_pc], dim=1)
+        y = torch.cat(
+            [
+                self.mld_true[idx].unsqueeze(1),
+                self.d26_true[idx].unsqueeze(1),
+                torch.ones(idx.shape[0], 1, device=mu.device, dtype=mu.dtype),
+                t_tgt,
+                s_tgt,
+            ],
+            dim=1,
+        )
+        if sigma is None or self.prob_mode in (None, "mse"):
+            pc_loss = torch.mean((torch.cat([t_pc, s_pc], dim=1) - torch.cat([t_tgt, s_tgt], dim=1)) ** 2)
+        elif self.prob_mode == "crps":
+            pc_loss = torch.mean(gaussian_crps_torch(state, sigma, y, sigma_min=self.sigma_min))
+        elif self.prob_mode == "nll":
+            pc_loss = beta_nll(state, sigma, y, beta=self.nll_beta, sigma_min=self.sigma_min)
+        else:
+            raise ValueError(f"heave_residual unsupported prob_mode={self.prob_mode!r}")
+
+        T_hat, S_hat = self.physical_ts(mu, idx)
+        z = self.z
+        band = (z[1:] >= 50.0) & (z[1:] < 200.0)
+        dz = torch.diff(z).clamp_min(1e-3)
+        dtdz_p = torch.diff(T_hat, dim=1) / dz
+        dtdz_t = torch.diff(self.T_true[idx], dim=1) / dz
+        dtdz_loss = torch.mean((dtdz_p[:, band] - dtdz_t[:, band]) ** 2)
+
+        loss = self.geom_scale * geom_loss + self.pc_scale * pc_loss + self.dtdz_scale * dtdz_loss
+        if self.steric_helper is not None:
+            loss = loss + self.steric_helper(T_hat, S_hat, idx)
+        return loss
+
+
 def make_loss(
     *,
     pca_models,
@@ -991,6 +1192,31 @@ def make_loss(
     mode = cfg.get("mode", "combined")
     if mode not in VALID_LOSS_MODES:
         raise ValueError(f"unknown loss_config.mode {mode!r}; expected one of {VALID_LOSS_MODES}")
+
+    if mode == "heave_residual":
+        profiles = true_profiles or kwargs.get("profiles")
+        if profiles is None:
+            raise ValueError("heave_residual requires true_profiles (or profiles) in cache")
+        lat = kwargs.get("lat")
+        lon = kwargs.get("lon")
+        if lat is None or lon is None:
+            raise ValueError("heave_residual requires lat/lon")
+        if pres_levels is None:
+            raise ValueError("heave_residual requires pres_levels")
+        return HeaveResidualLoss(
+            outputs=outputs,
+            device=device,
+            true_profiles=profiles,
+            pres_levels=np.asarray(pres_levels),
+            lat=np.asarray(lat),
+            lon=np.asarray(lon),
+            train_idx=kwargs.get("train_idx"),
+            clim_profiles=clim_profiles,
+            steric_config=steric_config,
+            steric_meta=steric_meta,
+            loss_scales=scales,
+            loss_config=cfg,
+        )
 
     if mode == "density_spice":
         meta = density_spice_meta or {}

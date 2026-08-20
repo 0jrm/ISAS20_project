@@ -53,10 +53,18 @@ def default_manifest() -> dict:
             },
             {
                 "version": "1.1.0",
-                "date": date.today().isoformat(),
+                "date": "2026-07-16",
                 "note": (
                     "Additive: σ₀-monotonicity violation metric; configurable gsw backend "
                     "(headline pinned to reference gsw); exclude_top_m semantics fixed."
+                ),
+            },
+            {
+                "version": "1.2.0",
+                "date": date.today().isoformat(),
+                "note": (
+                    "Additive: max N² depth, heave-vs-shape T split, calibrated steric vs ADT "
+                    "(Loop Current 2 cm RMS gate)."
                 ),
             },
         ],

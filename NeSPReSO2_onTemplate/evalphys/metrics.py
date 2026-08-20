@@ -352,6 +352,130 @@ def steric_height_cm(
     return eta_m * 100.0
 
 
+def max_n2_depth(
+    T: np.ndarray,
+    S: np.ndarray,
+    depth: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+) -> np.ndarray:
+    """Depth [m] of maximum N² on each profile (gsw.Nsquared mid-interface)."""
+    T = _as_profiles_levels(T)
+    S = _as_profiles_levels(S)
+    n_prof = T.shape[0]
+    gsw = get_gsw()
+    sa, ct, p = to_teos10(T, S, depth, lat, lon)
+    lat_v = np.asarray(lat, dtype=np.float64).reshape(n_prof)
+    out = np.full(n_prof, np.nan, dtype=np.float64)
+    for i in range(n_prof):
+        n2_i, p_mid_i = gsw.Nsquared(sa[i], ct[i], p[i], lat_v[i])
+        if not np.any(np.isfinite(n2_i)):
+            continue
+        k = int(np.nanargmax(n2_i))
+        out[i] = float(-gsw.z_from_p(p_mid_i[k], lat_v[i]))
+    return out
+
+
+def heave_vs_shape_split(
+    T_pred: np.ndarray,
+    T_true: np.ndarray,
+    depth: np.ndarray,
+    d26_pred: np.ndarray,
+    d26_true: np.ndarray,
+    *,
+    z_lo: float = 50.0,
+    z_hi: float = 200.0,
+) -> dict[str, Any]:
+    """Shift pred so D26 matches truth; T RMSE in ``[z_lo, z_hi)`` before/after.
+
+    Shift: ``T_shifted(z) = interp T_pred(z - (d26_true - d26_pred))``.
+    ``heave_fraction`` is the share of band RMSE² removed by the shift.
+    """
+    T_pred = _as_profiles_levels(T_pred)
+    T_true = _as_profiles_levels(T_true)
+    z = np.asarray(depth, dtype=np.float64).reshape(-1)
+    d26_pred = np.asarray(d26_pred, dtype=np.float64).reshape(-1)
+    d26_true = np.asarray(d26_true, dtype=np.float64).reshape(-1)
+    band = _band_mask(z, z_lo, z_hi)
+    n = T_pred.shape[0]
+    shifted = np.empty_like(T_pred)
+    for i in range(n):
+        dz = float(d26_true[i] - d26_pred[i]) if np.isfinite(d26_true[i]) and np.isfinite(d26_pred[i]) else 0.0
+        shifted[i] = np.interp(z - dz, z, T_pred[i], left=np.nan, right=np.nan)
+
+    def _band_rmse(a, b):
+        err2 = (a[:, band] - b[:, band]) ** 2
+        m = np.isfinite(err2)
+        return float(np.sqrt(np.mean(err2[m]))) if m.any() else float("nan")
+
+    rmse0 = _band_rmse(T_pred, T_true)
+    rmse1 = _band_rmse(shifted, T_true)
+    if np.isfinite(rmse0) and rmse0 > 0:
+        frac = float(max(0.0, 1.0 - (rmse1 / rmse0) ** 2))
+    else:
+        frac = float("nan")
+    return {
+        "rmse_50_200": rmse0,
+        "rmse_50_200_heave_aligned": rmse1,
+        "heave_fraction": frac,
+        "n": int(n),
+    }
+
+
+def steric_vs_adt(
+    T: np.ndarray,
+    S: np.ndarray,
+    depth: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    ssh_obs_sla: np.ndarray,
+    *,
+    T_clim: np.ndarray | None = None,
+    S_clim: np.ndarray | None = None,
+    clim_steric_m: np.ndarray | None = None,
+    alpha: float = 1.0,
+    beta: float = 0.0,
+    lat_range: tuple[float, float] | None = None,
+    lon_range: tuple[float, float] | None = None,
+) -> dict[str, Any]:
+    """Calibrated steric vs observed SLA; RMS in cm. Optional LC lat/lon subset."""
+    from evalphys.constants import LC_LAT_RANGE, LC_LON_RANGE, STERIC_LC_RMS_CM
+
+    eta_cm = steric_height_cm(T, S, depth, lat, lon, T_clim=T_clim, S_clim=S_clim)
+    eta_m = eta_cm / 100.0
+    sla = np.asarray(ssh_obs_sla, dtype=np.float64).reshape(-1)
+    lat = np.asarray(lat, dtype=np.float64).reshape(-1)
+    lon = np.asarray(lon, dtype=np.float64).reshape(-1)
+    if clim_steric_m is None:
+        clim_steric_m = np.zeros_like(eta_m)
+    else:
+        clim_steric_m = np.asarray(clim_steric_m, dtype=np.float64).reshape(-1)
+    pred_sla = float(alpha) * (eta_m - clim_steric_m) + float(beta)
+    resid_cm = (pred_sla - sla) * 100.0
+    valid = np.isfinite(resid_cm)
+    lo_lat, hi_lat = lat_range if lat_range is not None else LC_LAT_RANGE
+    lo_lon, hi_lon = lon_range if lon_range is not None else LC_LON_RANGE
+    box = valid & (lat >= lo_lat) & (lat <= hi_lat) & (lon >= lo_lon) & (lon <= hi_lon)
+
+    def _rms(mask):
+        if not mask.any():
+            return None
+        return float(np.sqrt(np.mean(resid_cm[mask] ** 2)))
+
+    rms_all = _rms(valid)
+    rms_lc = _rms(box)
+    return {
+        "rms_cm": rms_all,
+        "rms_cm_lc": rms_lc,
+        "n": int(valid.sum()),
+        "n_lc": int(box.sum()),
+        "gate_cm": float(STERIC_LC_RMS_CM),
+        "lc_pass": (rms_lc is not None) and (rms_lc <= float(STERIC_LC_RMS_CM)),
+        "alpha": float(alpha),
+        "beta": float(beta),
+    }
+
+
 def _rmse_bias(pred: np.ndarray, true: np.ndarray) -> dict[str, float | None]:
     m = np.isfinite(pred) & np.isfinite(true)
     if not m.any():

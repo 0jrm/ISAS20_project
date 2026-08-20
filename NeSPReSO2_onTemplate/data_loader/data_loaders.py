@@ -76,7 +76,26 @@ class NeSPReSODataLoader(DataLoader):
         if weight_key not in self.cache:
             weight_key = "weights"
 
-        inputs = torch.tensor(self.cache["inputs"], dtype=torch.float32)
+        from preproc.enso import inject_enso_columns
+        from preproc.preproc_isas_sat import compute_input_dim, count_encoding_dims
+
+        raw_in = np.asarray(self.cache["inputs"], dtype=np.float32)
+        ip = self.cache.get("input_params") or {}
+        # config flags may add oni/roni after the cache was built
+        cfg_ip = kwargs.pop("input_params", None) or ip
+        self._cfg_input_params = cfg_ip
+        spatial_pad = int(self.cache.get("spatial_pad", 0))
+        temporal_pad = int(self.cache.get("temporal_pad", 0))
+        expected = compute_input_dim(cfg_ip, spatial_pad, temporal_pad)
+        raw_in = inject_enso_columns(
+            raw_in,
+            self.cache["JULD"],
+            dataset_tag=self.cache.get("dataset_tag", "argo_v2"),
+            input_params=cfg_ip,
+            n_enc_base=count_encoding_dims(cfg_ip) or 6,
+            expected_dim=expected,
+        )
+        inputs = torch.tensor(raw_in, dtype=torch.float32)
         use_err = bool(kwargs.pop("use_error_channels", False))
         if use_err and "inputs_err" in self.cache:
             err = torch.tensor(self.cache["inputs_err"], dtype=torch.float32)
@@ -128,7 +147,7 @@ class NeSPReSODataLoader(DataLoader):
         self.LON = self.cache["LON"]
         self.PRES = self.cache.get("PRES")
         self.profiles = self.cache.get("profiles")
-        self.input_params = self.cache.get("input_params", {})
+        self.input_params = getattr(self, "_cfg_input_params", None) or self.cache.get("input_params", {})
         self.dataset_tag = self.cache.get("dataset_tag", "unknown")
         self.l3_enabled = bool(self.cache.get("l3_enabled", False))
         self.l3_channel_metadata = self.cache.get("l3_channel_metadata")

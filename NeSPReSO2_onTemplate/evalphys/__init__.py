@@ -1,4 +1,4 @@
-"""Frozen physical + probabilistic evaluation metrics (evalphys v1.1.0)."""
+"""Frozen physical + probabilistic evaluation metrics (evalphys v1.2.0)."""
 
 from evalphys.calibration import (
     apply_strata,
@@ -9,16 +9,19 @@ from evalphys.calibration import (
     spread_skill,
     summarize_calibration,
 )
-from evalphys.constants import DEPTH_BANDS, N2_TOL, N2_TOL_SWEEP, VERSION
+from evalphys.constants import DEPTH_BANDS, LC_LAT_RANGE, LC_LON_RANGE, N2_TOL, N2_TOL_SWEEP, STERIC_LC_RMS_CM, VERSION
 from evalphys.gsw_backend import get_gsw
 from evalphys.manifest import load_manifest, write_manifest
 from evalphys.metrics import (
     drhodz_rmse,
+    heave_vs_shape_split,
     isotherm_depth,
+    max_n2_depth,
     mixed_layer_depth,
     sigma0_monotonicity_violations,
     static_stability_violations,
     steric_height_cm,
+    steric_vs_adt,
     summarize_physical,
     to_teos10,
     ts_rmse_by_band,
@@ -26,8 +29,11 @@ from evalphys.metrics import (
 
 __all__ = [
     "DEPTH_BANDS",
+    "LC_LAT_RANGE",
+    "LC_LON_RANGE",
     "N2_TOL",
     "N2_TOL_SWEEP",
+    "STERIC_LC_RMS_CM",
     "VERSION",
     "apply_strata",
     "drhodz_rmse",
@@ -35,7 +41,9 @@ __all__ = [
     "gaussian_crps",
     "gaussian_crps_torch",
     "get_gsw",
+    "heave_vs_shape_split",
     "isotherm_depth",
+    "max_n2_depth",
     "load_manifest",
     "mixed_layer_depth",
     "pit_histogram",
@@ -43,6 +51,7 @@ __all__ = [
     "spread_skill",
     "static_stability_violations",
     "steric_height_cm",
+    "steric_vs_adt",
     "summarize_calibration",
     "summarize_physical",
     "to_teos10",

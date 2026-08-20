@@ -197,6 +197,20 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
     lon = ds.LON.astype(np.float32)[:n]
     juld = ds.TIME.astype(np.float32)[:n]
 
+    from preproc.enso import inject_enso_columns
+    from preproc.preproc_isas_sat import compute_input_dim, count_encoding_dims
+
+    inputs = inject_enso_columns(
+        inputs,
+        juld,
+        dataset_tag=dataset_tag,
+        input_params=input_params,
+        n_enc_base=count_encoding_dims(input_params) or 6,
+        expected_dim=compute_input_dim(
+            input_params, int(io_cfg.get("spatial_pad", 0)), int(io_cfg.get("temporal_pad", 0))
+        ),
+    )
+
     # Always keep physical T/S for eval / density_spice construction
     raw_profiles = {
         "temperature": np.asarray(ds.TEMP, dtype=np.float32),
@@ -282,6 +296,8 @@ def build_argo_cache(config: Dict, force: bool = False) -> str:
         pca_models = {}
         refit_pca = bool(io_cfg.get("refit_pca", True))
         for name, n_comp in outputs.items():
+            if name == "warp":
+                continue
             if name not in ("temperature", "salinity"):
                 raise KeyError(f"ponytail: v2 export only knows temperature/salinity, got {name}")
             prof = profiles_ts[name]

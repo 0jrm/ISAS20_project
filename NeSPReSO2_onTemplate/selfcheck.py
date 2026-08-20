@@ -1705,7 +1705,7 @@ def test_steric_train_calibration():
 
 
 def test_evalphys_frozen_metrics():
-    """evalphys v1.1.0 synthetic checks (PLAN-v2-recovery Phase 0 + audit)."""
+    """evalphys v1.2.0 synthetic checks (PLAN-v2-recovery Phase 0 + thermocline helpers)."""
     from evalphys.calibration import ence, gaussian_crps, spread_skill
     from evalphys.constants import N2_TOL, SIGMA_MIN_DEFAULT, VERSION
     from evalphys.manifest import load_manifest
@@ -1735,6 +1735,108 @@ def test_evalphys_frozen_metrics():
     crps = gaussian_crps(mu, np.full(n, SIGMA_MIN_DEFAULT), y)
     mae = np.abs(mu - y)
     assert np.mean(np.abs(crps - mae)) / np.mean(mae) < 0.01
+
+    from evalphys.metrics import heave_vs_shape_split, isotherm_depth, max_n2_depth
+
+    T2 = np.broadcast_to(28.0 - 0.04 * depth, (2, depth.size)).copy()
+    T2h = np.empty_like(T2)
+    for i in range(2):
+        T2h[i] = np.interp(depth + 12.0, depth, T2[i], left=T2[i, 0], right=T2[i, -1])
+    d26_t, _ = isotherm_depth(T2, depth, 26.0)
+    d26_p, _ = isotherm_depth(T2h, depth, 26.0)
+    split = heave_vs_shape_split(T2h, T2, depth, d26_p, d26_t)
+    assert split["heave_fraction"] > 0.4
+    z_n2 = max_n2_depth(T, S, depth, lat, lon)
+    assert np.all(np.isfinite(z_n2))
+
+
+def test_warp_roundtrip_and_enso():
+    from base.split_utils import dates_to_juld
+    from model.warp import unwarp_from_canonical, warp_to_canonical
+    from preproc.enso import inject_enso_columns, lookup_enso
+    from preproc.preproc_isas_sat import compute_input_dim
+
+    z = np.linspace(0, 400, 81)
+    T = np.broadcast_to(28.0 - 0.04 * z, (3, z.size)).copy()
+    mld = np.array([30.0, 50.0, 70.0])
+    d26 = np.array([100.0, 120.0, 150.0])
+    Tc = warp_to_canonical(T, z, mld, d26)
+    T2 = unwarp_from_canonical(Tc, z, mld, d26)
+    assert np.nanmax(np.abs(T2 - T)) < 0.05
+
+    flags = {
+        "timecos": True, "timesin": True, "latcos": True, "latsin": True,
+        "loncos": True, "lonsin": True, "oni": True, "roni": True,
+        "sss": True, "sst": True, "ssh": True, "sat": True,
+    }
+    assert compute_input_dim(flags, 0, 0) == 11
+    juld = dates_to_juld(["2015-06-15"], dataset_tag="argo_v2")
+    oni_roni = lookup_enso(juld, dataset_tag="argo_v2")
+    assert oni_roni.shape == (1, 2)
+    assert np.isfinite(oni_roni).all()
+    x = np.zeros((1, 9), dtype=np.float32)
+    x2 = inject_enso_columns(x, juld, dataset_tag="argo_v2", input_params=flags, expected_dim=11)
+    assert x2.shape == (1, 11)
+
+
+def test_heave_residual_forward_loss():
+    from model.heave import HeaveResidual
+    from model.loss import HeaveResidualLoss
+
+    torch.manual_seed(0)
+    n, nz = 24, 40
+    z = np.linspace(0, 400, nz).astype(np.float32)
+    lat = np.full(n, 26.0)
+    lon = np.full(n, -86.0)
+    T = np.broadcast_to(28.0 - 0.04 * z, (n, nz)).copy() + 0.1 * np.random.default_rng(0).normal(size=(n, nz))
+    S = np.broadcast_to(36.0 + 0.002 * z, (n, nz)).copy()
+    model = HeaveResidual(
+        input_dim=11, output_dim=11, n_warp=3, n_enc=8, n_sat=3,
+        head_layers=[32], probabilistic=True, dropout_prob=0.0,
+    )
+    # outputs warp3 + T4 + S4 = 11
+    x = torch.randn(8, 11)
+    y = torch.zeros(8, 32)
+    out = model(x)
+    assert out.shape[-1] == 22  # mu+sigma
+    loss_fn = HeaveResidualLoss(
+        outputs={"warp": 3, "temperature": 4, "salinity": 4},
+        device=torch.device("cpu"),
+        true_profiles={"temperature": T.astype(np.float32), "salinity": S.astype(np.float32)},
+        pres_levels=z,
+        lat=lat,
+        lon=lon,
+        train_idx=np.arange(n),
+        loss_config={"mode": "heave_residual", "prob_mode": "crps"},
+    )
+    idx = torch.arange(8)
+    loss = loss_fn(out, y[:8], indices=idx)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters() if p.requires_grad)
+
+
+def test_heave_config_validates():
+    from base.util import read_json
+    from parse_config import validate_config
+
+    cfg = read_json("config/argo/config_argo_heave_residual.json")
+    validate_config(cfg)
+
+
+def test_thermocline_scorecard_synthetic():
+    from scripts.thermocline_scorecard import _pca16_ceiling, _score_pair, _synthetic, _warp_clim_ceiling
+
+    syn = _synthetic(n=12, nz=50, seed=1)
+    row = _score_pair(
+        syn["T_pred"], syn["S_pred"], syn["T_true"], syn["S_true"],
+        syn["z"], syn["lat"], syn["lon"], syn["sla"], "syn",
+    )
+    assert row["heave_vs_shape"]["heave_fraction"] > 0.3
+    t_pca, s_pca = _pca16_ceiling(syn["T_true"], syn["S_true"], n_comp=8)
+    assert t_pca.shape == syn["T_true"].shape
+    t_w, s_w = _warp_clim_ceiling(syn["T_true"], syn["S_true"], syn["z"], syn["lat"], syn["lon"])
+    assert t_w.shape == syn["T_true"].shape
 
 
 def test_density_spice_monotone_and_roundtrip():
@@ -2214,6 +2316,10 @@ if __name__ == "__main__":
     test_steric_loss_grad()
     test_steric_train_calibration()
     test_evalphys_frozen_metrics()
+    test_warp_roundtrip_and_enso()
+    test_heave_residual_forward_loss()
+    test_heave_config_validates()
+    test_thermocline_scorecard_synthetic()
     test_density_spice_monotone_and_roundtrip()
     test_prob_head_hetero_and_quantile()
     test_dacov_psd_and_mc()

@@ -158,7 +158,7 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         arch_args["n_enc"] = int(arch_args.get("n_enc", 6))
         arch_args["n_sat"] = int(arch_args.get("n_sat", 3))
         arch_args["patch_shape"] = None
-    elif arch.get("type") in ("PatchConvMLP", "PatchMaskConvMLP"):
+    elif arch.get("type") in ("PatchConvMLP", "PatchMaskConvMLP", "HeaveResidual"):
         from preproc.preproc_isas_sat import (
             compute_input_dim,
             count_patch_channels,

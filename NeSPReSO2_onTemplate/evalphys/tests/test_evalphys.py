@@ -1,4 +1,4 @@
-"""evalphys v1.1.0 regression tests."""
+"""evalphys v1.2.0 regression tests."""
 
 from __future__ import annotations
 
@@ -227,3 +227,41 @@ def test_summarize_physical_smoke():
     assert "static_stability_pred" in out
     assert "1e-08" in out["static_stability_pred"]
     assert "sigma0_monotonicity_pred" in out
+
+
+def test_max_n2_and_heave_split():
+    from evalphys.metrics import heave_vs_shape_split, isotherm_depth, max_n2_depth
+
+    n_prof, n_lev = 4, 80
+    depth = np.linspace(0, 400, n_lev)
+    lat = np.full(n_prof, 26.0)
+    lon = np.full(n_prof, -86.0)
+    T = np.broadcast_to(28.0 - 0.04 * depth, (n_prof, n_lev)).copy()
+    S = np.broadcast_to(36.0 + 0.002 * depth, (n_prof, n_lev)).copy()
+    z_n2 = max_n2_depth(T, S, depth, lat, lon)
+    assert z_n2.shape == (n_prof,)
+    assert np.all(np.isfinite(z_n2))
+    d26, _ = isotherm_depth(T, depth, 26.0)
+    T_heave = np.empty_like(T)
+    for i in range(n_prof):
+        T_heave[i] = np.interp(depth + 15.0, depth, T[i], left=T[i, 0], right=T[i, -1])
+    d26_h, _ = isotherm_depth(T_heave, depth, 26.0)
+    split = heave_vs_shape_split(T_heave, T, depth, d26_h, d26)
+    assert split["heave_fraction"] > 0.5
+    assert split["rmse_50_200_heave_aligned"] < split["rmse_50_200"]
+
+
+def test_steric_vs_adt_lc_gate():
+    from evalphys.metrics import steric_vs_adt
+
+    n_prof, n_lev = 6, 40
+    depth = np.linspace(0, 400, n_lev)
+    lat = np.array([25.0, 26.0, 27.0, 20.0, 25.5, 26.5])
+    lon = np.array([-86.0, -87.0, -85.0, -90.0, -86.5, -85.5])
+    T = np.broadcast_to(28.0 - 0.04 * depth, (n_prof, n_lev)).copy()
+    S = np.broadcast_to(36.0 + 0.002 * depth, (n_prof, n_lev)).copy()
+    sla = np.zeros(n_prof)
+    out = steric_vs_adt(T, S, depth, lat, lon, sla, alpha=0.0, beta=0.0)
+    assert out["n_lc"] >= 4
+    assert out["lc_pass"] is True
+    assert out["gate_cm"] == 2.0

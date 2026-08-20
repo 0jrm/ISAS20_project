@@ -1,5 +1,6 @@
 import argparse
 import collections
+import os
 import pickle
 from types import SimpleNamespace
 
@@ -59,7 +60,9 @@ def ensure_cache(config):
     io_cfg = config.config.get("io", {})
     l3_cfg = io_cfg.get("l3") or {}
 
-    if l3_cfg.get("enabled"):
+    if pinned and os.path.isfile(pinned):
+        cache_path = pinned
+    elif l3_cfg.get("enabled"):
         from preproc.export_l3_cache import build_argo_l3_train_cache
 
         cache_path = build_argo_l3_train_cache(config.config)
@@ -111,37 +114,61 @@ def ensure_cache(config):
             raise ValueError("argo_field cache must contain fields with ndim==4")
     else:
         cache_dim = cache["inputs"].shape[1]
+        from preproc.enso import enso_keys_wanted
+
+        ip = config.config.get("input_params") or {}
+        inj = len(enso_keys_wanted(ip))
+        if cache_dim != expected_dim and cache_dim + inj == expected_dim:
+            cache_dim = expected_dim  # dataloader splices ONI/RONI
         if cache_dim != expected_dim:
             raise ValueError(
-                f"cache input dim {cache_dim} != expected {expected_dim} "
+                f"cache input dim {cache['inputs'].shape[1]} != expected {expected_dim} "
                 f"(l3={l3_cfg.get('enabled')}, spatial_pad={io_cfg.get('spatial_pad')}, "
                 f"temporal_pad={io_cfg.get('temporal_pad')})"
             )
 
     steric_cfg = config.config.get("steric") or {}
     if steric_cfg.get("enabled"):
-        for key in ("ssh_obs_sla", "clim_steric", "steric_calibration"):
-            if key not in cache:
-                raise ValueError(f"steric.enabled requires cache key {key!r}")
-        r_train = float((cache["steric_calibration"] or {}).get("r_train", float("nan")))
-        min_r = float(steric_cfg.get("min_calibration_r", 0.5))
-        if not np.isfinite(r_train) or r_train < min_r:
-            raise ValueError(
-                f"steric calibration r_train={r_train:.3f} < {min_r} — loss is mis-specified; "
-                "fix the calibration (or lower steric.min_calibration_r) before enabling steric"
-            )
+        missing = [k for k in ("ssh_obs_sla", "clim_steric", "steric_calibration") if k not in cache]
+        if missing and not io_cfg.get("steric_vs_sla"):
+            raise ValueError(f"steric.enabled requires cache keys {missing}")
+        if not missing:
+            r_train = float((cache["steric_calibration"] or {}).get("r_train", float("nan")))
+            min_r = float(steric_cfg.get("min_calibration_r", 0.5))
+            if not np.isfinite(r_train) or r_train < min_r:
+                raise ValueError(
+                    f"steric calibration r_train={r_train:.3f} < {min_r} — loss is mis-specified; "
+                    "fix the calibration (or lower steric.min_calibration_r) before enabling steric"
+                )
 
     split_seed = config.config.get("seed", 42)
     config.config["data_loader"]["args"]["split_seed"] = split_seed
+    if config.config.get("input_params"):
+        config.config["data_loader"]["args"]["input_params"] = config.config["input_params"]
     if io_cfg.get("v2_src") and not config.config["data_loader"]["args"].get("v2_src"):
         config.config["data_loader"]["args"]["v2_src"] = io_cfg["v2_src"]
     return cache_path
 
 
-def _load_cache_tensors(cache_path: str, target_key: str = "targets"):
+def _load_cache_tensors(cache_path: str, target_key: str = "targets", input_params=None):
     with open(cache_path, "rb") as f:
         cache = pickle.load(f)
-    inputs = torch.tensor(cache["inputs"], dtype=torch.float32)
+    from preproc.enso import inject_enso_columns
+    from preproc.preproc_isas_sat import compute_input_dim, count_encoding_dims
+
+    ip = input_params or cache.get("input_params") or {}
+    expected = compute_input_dim(
+        ip, int(cache.get("spatial_pad", 0) or 0), int(cache.get("temporal_pad", 0) or 0)
+    )
+    arr = inject_enso_columns(
+        cache["inputs"],
+        cache.get("JULD", np.zeros(len(cache["inputs"]))),
+        dataset_tag=cache.get("dataset_tag", "argo_v2"),
+        input_params=ip,
+        n_enc_base=count_encoding_dims(ip) or 6,
+        expected_dim=expected,
+    )
+    inputs = torch.tensor(arr, dtype=torch.float32)
     if target_key not in cache:
         raise KeyError(f"cache missing {target_key!r}")
     targets = torch.tensor(cache[target_key], dtype=torch.float32)
@@ -156,7 +183,9 @@ def resolve_dataloader_batch_size(config, model, criterion, cache_path, device, 
 
     target_key = dl_args.get("target_key", "targets")
 
-    cache, inputs, targets = _load_cache_tensors(cache_path, target_key)
+    cache, inputs, targets = _load_cache_tensors(
+        cache_path, target_key, input_params=config.config.get("input_params")
+    )
     if cache.get("dataset_tag") == "argo_field":
         if configured <= 0:
             configured = 4
@@ -276,6 +305,16 @@ def main(config):
         clim_steric=cache.get("clim_steric"),
         steric_calibration=cache.get("steric_calibration"),
     )
+    from base.split_utils import build_split_indices as _build_split_indices
+
+    train_idx = _build_split_indices(
+        cache["inputs"].shape[0],
+        cache.get("JULD"),
+        dl_args,
+        dataset_tag=cache.get("dataset_tag", "unknown"),
+        v2_src=dl_args.get("v2_src"),
+    )["train"]
+    heave_profiles = cache.get("profiles") or true_profiles
     criterion = make_loss(
         pca_models=cache["pca_models"],
         outputs=loss_outputs,
@@ -289,7 +328,7 @@ def main(config):
         loss_scales=config.config.get("loss_scales"),
         loss_config=loss_cfg,
         targets=cache["targets"],
-        true_profiles=true_profiles,
+        true_profiles=true_profiles if loss_cfg.get("mode") != "heave_residual" else heave_profiles,
         ae_targets=ae_targets,
         ae_weights=ae_weights,
         surface_residual_layout=surface_residual_layout_from_cache(cache),
@@ -297,6 +336,10 @@ def main(config):
         pres_levels=cache.get("PRES"),
         density_spice_meta=cache.get("density_spice_meta"),
         joint_eof_meta=cache.get("joint_eof_meta"),
+        train_idx=train_idx,
+        lat=cache["LAT"],
+        lon=cache["LON"],
+        profiles=heave_profiles,
     )
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)
