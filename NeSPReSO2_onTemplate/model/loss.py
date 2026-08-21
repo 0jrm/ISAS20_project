@@ -21,7 +21,17 @@ DEFAULT_COMBINED_MSE_SCALE = 0.0255
 
 OUTPUT_H5_VARS = {"temperature": "TEMP", "salinity": "PSAL"}
 
-VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice", "heave_residual", "profile_direct")
+VALID_LOSS_MODES = (
+    "combined",
+    "pred_profile_cached",
+    "pc_mse_only",
+    "decoder",
+    "density_spice",
+    "heave_residual",
+    "heave_residual_fast",
+    "profile_direct",
+)
+HEAVE_LOSS_MODES = ("heave_residual", "heave_residual_fast")
 VALID_PROB_MODES = ("mse", "crps", "nll", "quantile")
 
 
@@ -1168,6 +1178,26 @@ class HeaveResidualLoss(nn.Module):
         return loss
 
 
+class HeaveResidualFastLoss(HeaveResidualLoss):
+    """Same targets and terms as HeaveResidualLoss; warp is batched (model/heave_fast.py)."""
+
+    def physical_ts(self, mu: torch.Tensor, indices) -> tuple[torch.Tensor, torch.Tensor]:
+        from model.heave_fast import canon_to_phys, lerp_along_z, phys_to_canon
+        from model.warp import torch_ordered_knots
+
+        idx = torch.as_tensor(indices, dtype=torch.long, device=mu.device)
+        mld, d26, T_res, S_res = self.decode_ts(mu)
+        z = self.z.reshape(-1)
+        phys, canon = torch_ordered_knots(mld, d26, self.z_bot)
+        z_p = canon_to_phys(z, phys, canon)
+        T_prior = lerp_along_z(z_p, z, self.T_clim[idx])
+        S_prior = lerp_along_z(z_p, z, self.S_clim[idx])
+        z_c = phys_to_canon(z, phys, canon)
+        T = lerp_along_z(z_c, z, T_prior + T_res)
+        S = lerp_along_z(z_c, z, S_prior + S_res)
+        return T, S
+
+
 class ProfileDirectLoss(nn.Module):
     """Native-z T/S MSE; ignores PCA cache targets. Optional 2nd-diff smoother."""
 
@@ -1249,17 +1279,18 @@ def make_loss(
             loss_scales=scales,
         )
 
-    if mode == "heave_residual":
+    if mode in HEAVE_LOSS_MODES:
         profiles = true_profiles or kwargs.get("profiles")
         if profiles is None:
-            raise ValueError("heave_residual requires true_profiles (or profiles) in cache")
+            raise ValueError(f"{mode} requires true_profiles (or profiles) in cache")
         lat = kwargs.get("lat")
         lon = kwargs.get("lon")
         if lat is None or lon is None:
-            raise ValueError("heave_residual requires lat/lon")
+            raise ValueError(f"{mode} requires lat/lon")
         if pres_levels is None:
-            raise ValueError("heave_residual requires pres_levels")
-        return HeaveResidualLoss(
+            raise ValueError(f"{mode} requires pres_levels")
+        loss_cls = HeaveResidualFastLoss if mode == "heave_residual_fast" else HeaveResidualLoss
+        return loss_cls(
             outputs=outputs,
             device=device,
             true_profiles=profiles,

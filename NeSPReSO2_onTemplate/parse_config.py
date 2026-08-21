@@ -55,13 +55,17 @@ def validate_config(config):
             assert int(arch_args.get("n_quantiles") or 0) == 9, "quantile mode requires n_quantiles=9"
         if loss_cfg.get("prob_mode") == "mse" and loss_cfg.get("freeze_sigma"):
             assert arch_args.get("probabilistic"), "freeze_sigma stage-1 needs probabilistic arch"
-    if mode == "heave_residual":
+    if mode in ("heave_residual", "heave_residual_fast"):
         assert set(outputs) >= {"warp", "temperature", "salinity"}, (
-            "heave_residual requires outputs warp+temperature+salinity"
+            f"{mode} requires outputs warp+temperature+salinity"
         )
+        if mode == "heave_residual_fast":
+            assert arch_type in ("HeaveResidual", "HeaveResidualFast"), (
+                "heave_residual_fast requires arch.type HeaveResidualFast (or HeaveResidual)"
+            )
         if loss_cfg.get("prob_mode") in ("crps", "nll"):
-            assert arch_args.get("probabilistic"), "heave_residual crps/nll require arch.args.probabilistic=true"
-            assert not arch_args.get("n_quantiles"), "heave_residual crps/nll require n_quantiles=0"
+            assert arch_args.get("probabilistic"), f"{mode} crps/nll require arch.args.probabilistic=true"
+            assert not arch_args.get("n_quantiles"), f"{mode} crps/nll require n_quantiles=0"
     if mode == "profile_direct":
         assert set(outputs) == {"temperature", "salinity"}, (
             "profile_direct requires outputs {temperature, salinity}"
@@ -97,8 +101,18 @@ def validate_config(config):
             "joint_eof loss_config.mode must be combined|pc_mse_only|pred_profile_cached"
         )
     dl = config.get("data_loader", {}).get("args", {})
+    tag = str((config.get("io") or {}).get("dataset_tag") or "")
+    if tag.startswith("argo") and "split_mode" not in dl:
+        raise AssertionError(
+            "argo configs must set data_loader.args.split_mode "
+            "(chronological; random only with allow_random_split=true)"
+        )
     split_mode = dl.get("split_mode", "random")
     assert split_mode in ("random", "chronological"), f"split_mode must be random|chronological, got {split_mode!r}"
+    if tag.startswith("argo") and split_mode == "random" and dl.get("allow_random_split") is not True:
+        raise AssertionError(
+            "argo random split is legacy/ablation only; set data_loader.args.allow_random_split=true"
+        )
     if split_mode == "chronological" and dl.get("split_config"):
         for split in ("train", "val", "test"):
             sc = dl["split_config"].get(split, {})
@@ -134,12 +148,12 @@ def validate_config(config):
         from preproc.l4_augment import VALID_L4_MODES
 
         assert float(l4.get("noise_scale", 1.0)) >= 0, "io.l4.noise_scale must be >= 0"
-    io = config.get("io", {})
-    if io.get("dataset_tag") == "argo_cube" and io.get("refit_pca"):
-        raise ValueError("argo_cube configs must set io.refit_pca=false (reuse point PCA basis)")
         mode = str(l4.get("mode", "mask_augment"))
         assert mode in VALID_L4_MODES, f"io.l4.mode must be one of {VALID_L4_MODES}, got {mode!r}"
         assert l3 and l3.get("enabled"), "io.l4.enabled requires io.l3.enabled"
+    io = config.get("io", {})
+    if io.get("dataset_tag") == "argo_cube" and io.get("refit_pca"):
+        raise ValueError("argo_cube configs must set io.refit_pca=false (reuse point PCA basis)")
     if "gsw_backend" in io:
         assert io["gsw_backend"] in ("gsw", "gsw_torch"), (
             f"io.gsw_backend must be 'gsw' or 'gsw_torch', got {io['gsw_backend']!r}"

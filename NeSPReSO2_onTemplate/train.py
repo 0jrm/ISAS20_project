@@ -10,8 +10,9 @@ import torch
 import data_loader.data_loaders as module_data
 import model.metric as module_metric
 import model.model as module_arch
-from model.loss import make_loss, true_profiles_numpy
+from model.loss import HEAVE_LOSS_MODES, make_loss, true_profiles_numpy
 from parse_config import ConfigParser, validate_config
+from base.pairing import assert_dataset_tags
 from base.util import prepare_device
 from base.batch_size import resolve_batch_size
 from base.performance import apply_backend_settings, build_optimizer, get_performance_config, maybe_compile_model, maybe_compile_module
@@ -106,6 +107,7 @@ def ensure_cache(config):
 
     with open(cache_path, "rb") as f:
         cache = _pickle.load(f)
+    assert_dataset_tags(io_cfg.get("dataset_tag"), cache.get("dataset_tag"))
     if l3_cfg.get("enabled"):
         verify_l3_cache_layout(cache, l3_cfg)
     elif cache.get("dataset_tag") == "argo_field":
@@ -330,7 +332,7 @@ def main(config):
         targets=cache["targets"],
         true_profiles=(
             true_profiles
-            if loss_cfg.get("mode") not in ("heave_residual", "profile_direct")
+            if loss_cfg.get("mode") not in (*HEAVE_LOSS_MODES, "profile_direct")
             else heave_profiles
         ),
         ae_targets=ae_targets,

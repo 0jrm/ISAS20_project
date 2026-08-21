@@ -88,16 +88,6 @@ def time_indices_of_jd(dates_jd: np.ndarray) -> np.ndarray:
     return time_indices_of_days(days)
 
 
-def time_index_of_matlab_datenum(datenum: float) -> int:
-    """Convert v2 MATLAB datenum to cube time index via astropy."""
-    v2_src = Path("/unity/g2/jmiranda/v2-nespreso/src")
-    if str(v2_src) not in sys.path:
-        sys.path.insert(0, str(v2_src))
-    from nespreso.utils.time import datenum_to_datetime
-
-    return time_index_of(datenum_to_datetime(float(datenum)))
-
-
 def _lon_in_range(lon_grid: np.ndarray, min_lon: float, max_lon: float) -> np.ndarray:
     inside = (lon_grid >= min_lon) & (lon_grid <= max_lon)
     if min_lon < 0:

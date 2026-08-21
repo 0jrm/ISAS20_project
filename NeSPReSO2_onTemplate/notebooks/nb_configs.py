@@ -157,6 +157,7 @@ def _smoke_dataloader() -> dict[str, Any]:
         "val_frac": 0.15,
         "test_frac": 0.15,
         "split_mode": "random",
+        "allow_random_split": True,
         "split_seed": 42,
         "split": "train",
         "num_workers": 0,

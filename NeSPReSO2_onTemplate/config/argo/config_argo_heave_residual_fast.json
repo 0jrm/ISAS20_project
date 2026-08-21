@@ -1,18 +1,21 @@
 {
-    "name": "compare_argo_pca15",
+    "name": "NeSPReSO2_ARGO_GoM_heave_residual_fast",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
-        "type": "PatchConvMLP",
+        "type": "HeaveResidualFast",
         "args": {
-            "input_dim": 9,
-            "output_dim": 30,
+            "input_dim": 11,
+            "output_dim": 35,
+            "n_warp": 3,
             "dropout_prob": 0.2,
             "d_model": 128,
             "head_layers": [1024, 1024],
             "patch_shape": null,
-            "n_enc": 6,
-            "n_sat": 3
+            "n_enc": 8,
+            "n_sat": 3,
+            "probabilistic": true,
+            "sigma_min": 0.001
         }
     },
     "input_params": {
@@ -22,6 +25,8 @@
         "latsin": true,
         "loncos": true,
         "lonsin": true,
+        "oni": true,
+        "roni": true,
         "sss": true,
         "sst": true,
         "ssh": true,
@@ -35,19 +40,24 @@
         "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
         "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
         "v2_reload": false,
-        "refit_pca": true
+        "refit_pca": true,
+        "steric_vs_sla": true
     },
     "outputs": {
-        "temperature": 15,
-        "salinity": 15
+        "warp": 3,
+        "temperature": 16,
+        "salinity": 16
     },
     "loss_scales": {
-        "profile_scales": {
-            "temperature": 2.0029,
-            "salinity": 0.0313
-        },
-        "combined_pca_scale": 2.0,
-        "combined_mse_scale": 0.2174
+        "heave_geom_scale": 10.0,
+        "heave_pc_scale": 1.0,
+        "heave_dtdz_scale": 0.1
+    },
+    "steric": {
+        "enabled": false,
+        "scale": 0.01,
+        "subsample_dz": 5,
+        "min_calibration_r": 0.0
     },
     "density": {
         "enabled": false,
@@ -59,15 +69,13 @@
     "data_loader": {
         "type": "NeSPReSODataLoader",
         "args": {
-            "cache_path": "",
+            "cache_path": "../data/cache/train_ready_3adcff404b0b.pkl",
             "batch_size": 512,
             "shuffle": true,
+            "split_mode": "chronological",
             "train_frac": 0.7,
             "val_frac": 0.15,
             "test_frac": 0.15,
-            "split_mode": "random",
-            "allow_random_split": true,
-            "split_seed": 42,
             "split": "train",
             "num_workers": 0,
             "pin_memory": false
@@ -81,11 +89,13 @@
             "amsgrad": false
         }
     },
-    "loss": "combined_pca_loss",
+    "loss": "heave_residual_fast_loss",
     "loss_config": {
-        "mode": "combined"
+        "mode": "heave_residual_fast",
+        "prob_mode": "crps",
+        "sigma_min": 0.001
     },
-    "metrics": ["profile_rmse"],
+    "metrics": [],
     "lr_scheduler": {
         "type": "StepLR",
         "args": {
@@ -94,13 +104,13 @@
         }
     },
     "trainer": {
-        "epochs": 2000,
-        "save_dir": "saved/compare_runs/argo_pca15/",
-        "save_period": 10,
+        "epochs": 8000,
+        "save_dir": "saved/",
+        "save_period": 1,
         "log_interval": 10,
         "verbosity": 2,
         "monitor": "min val_loss",
-        "early_stop": 200,
-        "tensorboard": false
+        "early_stop": 500,
+        "tensorboard": true
     }
 }

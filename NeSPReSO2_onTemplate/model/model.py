@@ -859,6 +859,8 @@ class FieldUNet(BaseModel):
         return out
 
 
+# After FieldUNet: residual.py imports PatchConvMLP from this module.
 from model.residual import PointAnchoredResidual  # noqa: E402,F401
 from model.heave import HeaveResidual  # noqa: E402,F401
+from model.heave_fast import HeaveResidualFast  # noqa: E402,F401
 from model.profile_direct import LatentProfileDecoder, ProfileDirect  # noqa: E402,F401

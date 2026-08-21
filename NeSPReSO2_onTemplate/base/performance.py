@@ -22,6 +22,8 @@ DEFAULT_PERFORMANCE: dict[str, Any] = {
 
 VALID_MATMUL_PRECISION = {None, "highest", "high", "medium"}
 VALID_AUTOCAST_DTYPES = {"bfloat16", "float16"}
+# GoM: compile/bf16/combo stacks are slower unless a benchmark says otherwise.
+UNPROVEN_PERF_KEYS = ("compile", "compile_loss", "autocast")
 
 
 @dataclass
@@ -94,6 +96,13 @@ def validate_performance_config(perf: dict[str, Any]) -> None:
         raise ValueError(f"performance.matmul_precision must be one of {VALID_MATMUL_PRECISION}")
     if perf.get("autocast_dtype") not in VALID_AUTOCAST_DTYPES:
         raise ValueError(f"performance.autocast_dtype must be one of {VALID_AUTOCAST_DTYPES}")
+    if any(perf.get(k) for k in UNPROVEN_PERF_KEYS):
+        reason = str(perf.get("allow_unproven_opts") or "").strip()
+        if not reason:
+            raise ValueError(
+                "performance.compile/compile_loss/autocast require performance.allow_unproven_opts "
+                "(non-empty string: benchmark evidence of >=10% full-step gain)"
+            )
 
 
 def variant_to_performance(spec: VariantSpec) -> dict[str, Any]:

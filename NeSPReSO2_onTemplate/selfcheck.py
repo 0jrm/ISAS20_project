@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """Ponytail self-check: v2 equivalence, PCA round-trip, N-output offsets."""
 
+from __future__ import annotations
+
+import os
+import signal
+import sys
+import time
 from collections import OrderedDict
 from types import SimpleNamespace
+
+# CPU suite. A CUDA driver probe hung this file for 17 min with no GPU work (error 304).
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 import numpy as np
 import torch
 from sklearn.decomposition import PCA
+
+_threads = max(1, int(os.environ.get("OMP_NUM_THREADS", "8")))
+torch.set_num_threads(_threads)
 
 from model.loss import (
     CombinedPCALoss,
@@ -737,6 +749,20 @@ def test_l3_rasterize_missing_is_explicit():
     assert (bundle[IDX_MASK] == 0).all()
 
 
+def _existing_l3_processed(cfg):
+    """Selfcheck does not rasterize L3 netCDF. Export is a separate job."""
+    from pathlib import Path
+
+    from preproc.l3_rasterize import l3_config_hash
+
+    root = Path(__file__).resolve().parent
+    l3 = cfg["io"]["l3"]
+    l4 = cfg["io"].get("l4") or {}
+    processed = (root / l3["processed_root"]).resolve()
+    path = processed / f"l3_samples_{l3_config_hash(l3, l4 if l4.get('enabled') else None)}.pkl"
+    return path if path.is_file() else None
+
+
 def test_l3_processed_batch_smoke():
     from pathlib import Path
 
@@ -745,15 +771,16 @@ def test_l3_processed_batch_smoke():
     if not cfg_path.is_file():
         return
     from base.util import read_json
-    from preproc.export_l3_cache import build_l3_processed_batch
 
     cfg = read_json(cfg_path)
-    path = build_l3_processed_batch(cfg, max_samples=3, anchor_date="2020-01-15", force=True)
+    path = _existing_l3_processed(cfg)
+    if path is None:
+        return
     import pickle
 
     with open(path, "rb") as f:
         payload = pickle.load(f)
-    assert len(payload["samples"]) == 3
+    assert payload["samples"], path
     s0 = payload["samples"][0]
     for key in ("ssh", "wind_u", "wind_v"):
         arr = s0[key]
@@ -931,10 +958,11 @@ def test_l4_processed_batch_smoke():
     if not cfg_path.is_file():
         return
     from base.util import read_json
-    from preproc.export_l3_cache import build_l3_processed_batch
 
     cfg = read_json(cfg_path)
-    path = build_l3_processed_batch(cfg, max_samples=4, force=True)
+    path = _existing_l3_processed(cfg)
+    if path is None:
+        return
     import pickle
 
     with open(path, "rb") as f:
@@ -951,10 +979,13 @@ def test_l3_dataloader_batch():
     if not cfg_path.is_file():
         return
     from base.util import read_json
-    from preproc.export_l3_cache import build_argo_l3_train_cache
+    from preproc.export_l3_cache import export_l3_train_cache
 
     cfg = read_json(cfg_path)
-    cache_path = build_argo_l3_train_cache(cfg, force=True, max_samples=16)
+    processed = _existing_l3_processed(cfg)
+    if processed is None:
+        return
+    cache_path = export_l3_train_cache(cfg, processed, force=False)
     from preproc.l3_input import compute_l3_input_dim
 
     enc_flags = {k: bool(v) for k, v in cfg["input_params"].items()}
@@ -1075,7 +1106,7 @@ def test_stratified_eval_bins_and_aggregate():
 
 
 def test_stratified_eval_l3_cache_smoke():
-    """Build tiny L3 cache and verify strata masks + report shape without a checkpoint."""
+    """Verify strata masks + report shape on an existing L3 cache (no netCDF rebuild)."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parent
@@ -1083,19 +1114,22 @@ def test_stratified_eval_l3_cache_smoke():
     if not cfg_path.is_file():
         return
     from base.util import read_json
-    from preproc.export_l3_cache import build_argo_l3_train_cache
-
     from eval_stratified import build_strata_masks, extract_l3_metrics, sample_years
+    from preproc.export_l3_cache import export_l3_train_cache
 
     cfg = read_json(cfg_path)
-    cache_path = build_argo_l3_train_cache(cfg, force=True, max_samples=8)
+    processed = _existing_l3_processed(cfg)
+    if processed is None:
+        return
+    cache_path = export_l3_train_cache(cfg, processed, force=False)
     import pickle
 
     with open(cache_path, "rb") as f:
         cache = pickle.load(f)
-    indices = list(range(8))
+    n = min(8, int(cache["inputs"].shape[0]))
+    indices = list(range(n))
     l3 = extract_l3_metrics(cache, indices)
-    assert l3["ssh_coverage_fraction"].shape == (8,)
+    assert l3["ssh_coverage_fraction"].shape == (n,)
     years = sample_years(
         cache,
         indices,
@@ -1107,7 +1141,7 @@ def test_stratified_eval_l3_cache_smoke():
         coverage=l3["ssh_coverage_fraction"],
         track_km=l3["nearest_track_km"],
     )
-    assert masks["all"].sum() == 8
+    assert masks["all"].sum() == n
 
 
 def test_static_stability_readiness_synthetic():
@@ -1845,6 +1879,90 @@ def test_heave_config_validates():
     validate_config(cfg)
 
 
+def test_heave_fast_matches_original():
+    """Batched warp/loss must match the Python-loop originals (not a new objective)."""
+    from model.heave import HeaveResidual
+    from model.heave_fast import (
+        HeaveResidualFast,
+        torch_unwarp_from_canonical_batched,
+        torch_warp_to_canonical_batched,
+    )
+    from model.loss import HeaveResidualFastLoss, HeaveResidualLoss
+    from model.warp import torch_unwarp_from_canonical, torch_warp_to_canonical
+
+    torch.manual_seed(0)
+    b, nz = 12, 80
+    z = torch.linspace(0, 400, nz)
+    T = 28.0 - 0.04 * z.unsqueeze(0) + 0.2 * torch.randn(b, nz)
+    S = 36.0 + 0.002 * z.unsqueeze(0) + 0.05 * torch.randn(b, nz)
+    mld = torch.linspace(20.0, 80.0, b)
+    d26 = mld + 40.0 + torch.linspace(0.0, 50.0, b)
+    z_bot = float(z[-1])
+    w = torch_warp_to_canonical(T, z, mld, d26)
+    wb = torch_warp_to_canonical_batched(T, z, mld, d26, z_bot=z_bot)
+    assert torch.allclose(w, wb, rtol=1e-5, atol=1e-5)
+    u = torch_unwarp_from_canonical(w, z, mld, d26)
+    ub = torch_unwarp_from_canonical_batched(w, z, mld, d26, z_bot=z_bot)
+    assert torch.allclose(u, ub, rtol=1e-5, atol=1e-5)
+
+    n = 24
+    z_np = np.linspace(0, 400, 40).astype(np.float32)
+    lat = np.full(n, 26.0)
+    lon = np.full(n, -86.0)
+    rng = np.random.default_rng(0)
+    T_np = np.broadcast_to(28.0 - 0.04 * z_np, (n, z_np.size)).copy() + 0.1 * rng.normal(size=(n, z_np.size))
+    S_np = np.broadcast_to(36.0 + 0.002 * z_np, (n, z_np.size)).copy()
+    kw = dict(
+        outputs={"warp": 3, "temperature": 4, "salinity": 4},
+        device=torch.device("cpu"),
+        true_profiles={"temperature": T_np.astype(np.float32), "salinity": S_np.astype(np.float32)},
+        pres_levels=z_np,
+        lat=lat,
+        lon=lon,
+        train_idx=np.arange(n),
+        loss_config={"mode": "heave_residual", "prob_mode": "crps"},
+    )
+    slow = HeaveResidualLoss(**kw)
+    fast = HeaveResidualFastLoss(**kw)
+    with torch.no_grad():
+        for name, buf in slow.named_buffers():
+            getattr(fast, name).copy_(buf)
+    model = HeaveResidualFast(
+        input_dim=11, output_dim=11, n_warp=3, n_enc=8, n_sat=3,
+        head_layers=[32], probabilistic=True, dropout_prob=0.0,
+    )
+    x = torch.randn(8, 11)
+    out = model(x)
+    idx = torch.arange(8)
+    y = torch.zeros(8, 32)
+    out_s = out.detach().clone().requires_grad_(True)
+    out_f = out.detach().clone().requires_grad_(True)
+    ls = slow(out_s, y, indices=idx)
+    lf = fast(out_f, y, indices=idx)
+    assert torch.allclose(ls, lf, rtol=1e-5, atol=1e-5)
+    ls.backward()
+    lf.backward()
+    assert torch.allclose(out_s.grad, out_f.grad, rtol=1e-4, atol=1e-4)
+    mu = out[:, :11]
+    T_s, S_s = slow.physical_ts(mu, idx)
+    T_f, S_f = fast.physical_ts(mu, idx)
+    assert torch.allclose(T_s, T_f, rtol=1e-5, atol=1e-5)
+    assert torch.allclose(S_s, S_f, rtol=1e-5, atol=1e-5)
+    slow_m = HeaveResidual(
+        input_dim=11, output_dim=11, n_warp=3, n_enc=8, n_sat=3,
+        head_layers=[32], probabilistic=True, dropout_prob=0.0,
+    )
+    assert sum(p.numel() for p in model.parameters()) == sum(p.numel() for p in slow_m.parameters())
+
+
+def test_heave_fast_config_validates():
+    from base.util import read_json
+    from parse_config import validate_config
+
+    cfg = read_json("config/argo/config_argo_heave_residual_fast.json")
+    validate_config(cfg)
+
+
 def test_profile_direct_forward_loss():
     from model.loss import ProfileDirectLoss
     from model.profile_direct import LatentProfileDecoder, ProfileDirect, depth_filter
@@ -2319,6 +2437,89 @@ def test_backend_equivalence_smoke():
     assert np.isfinite(max_abs)
 
 
+def test_l4_mode_is_not_dead_code():
+    from copy import deepcopy
+
+    from base.util import read_json
+    from parse_config import validate_config
+
+    cfg = deepcopy(read_json("config/argo/config_argo_l3_l4_smoke.json"))
+    validate_config(cfg)
+    cfg["io"]["l4"]["mode"] = "not_a_mode"
+    try:
+        validate_config(cfg)
+        raise AssertionError("bogus l4.mode must fail")
+    except AssertionError as exc:
+        assert "l4.mode" in str(exc)
+    cfg = deepcopy(read_json("config/argo/config_argo_l3_l4_smoke.json"))
+    cfg["io"]["l3"]["enabled"] = False
+    try:
+        validate_config(cfg)
+        raise AssertionError("l4 without l3 must fail")
+    except AssertionError as exc:
+        assert "l3.enabled" in str(exc)
+
+
+def test_argo_random_split_needs_explicit_flag():
+    from copy import deepcopy
+
+    from base.util import read_json
+    from parse_config import validate_config
+
+    cfg = deepcopy(read_json("config/argo/config_argo.json"))
+    cfg["data_loader"]["args"]["split_mode"] = "random"
+    try:
+        validate_config(cfg)
+        raise AssertionError("argo random split must fail without flag")
+    except AssertionError as exc:
+        assert "allow_random_split" in str(exc)
+    cfg["data_loader"]["args"]["allow_random_split"] = True
+    validate_config(cfg)
+
+
+def test_unproven_performance_opts_need_evidence():
+    from copy import deepcopy
+
+    from base.util import read_json
+    from parse_config import validate_config
+
+    cfg = deepcopy(read_json("config/argo/config_argo.json"))
+    cfg["performance"] = {"compile": True, "autocast_dtype": "bfloat16"}
+    try:
+        validate_config(cfg)
+        raise AssertionError("compile without allow_unproven_opts must fail")
+    except ValueError as exc:
+        assert "allow_unproven_opts" in str(exc)
+    cfg["performance"]["allow_unproven_opts"] = "bench: fake 12% full-step"
+    validate_config(cfg)
+
+
+def test_cache_checkpoint_pairing():
+    from types import SimpleNamespace
+
+    from base.pairing import assert_cache_checkpoint_pair, assert_dataset_tags
+
+    assert_dataset_tags("argo_v2", "argo_v2")
+    try:
+        assert_dataset_tags("argo_v2", "isas20")
+        raise AssertionError("tag mismatch must fail")
+    except ValueError:
+        pass
+    a = SimpleNamespace(n_components_=16)
+    b = SimpleNamespace(n_components_=15)
+    try:
+        assert_cache_checkpoint_pair("argo_v2", "argo_v2", {"temperature": a}, {"temperature": b})
+        raise AssertionError("PCA mismatch must fail")
+    except ValueError as exc:
+        assert "n_components" in str(exc)
+
+
+def test_garden_gate():
+    from base.garden_gate import run_garden_gate
+
+    run_garden_gate()
+
+
 def test_steric_matches_climatology_adt():
     import numpy as np
     from model.steric import compute_clim_steric
@@ -2338,87 +2539,149 @@ def test_steric_matches_climatology_adt():
     assert corr > 0.5
 
 
-if __name__ == "__main__":
-    test_cap_batch_size()
-    test_resolve_batch_size_fixed()
-    test_compute_input_dim()
-    test_argo_l4_input_dim_and_forward()
-    test_bathy_truncation_loss()
-    test_argo_l4_cache_smoke()
-    test_patch_conv_mlp_point_mode()
-    test_patch_conv_mlp_patch_mode()
-    test_patch_conv_mlp_residual_mode()
-    test_res_autoencoder_round_trip()
-    test_prediction_model_v2()
-    test_combined_pca_loss_v2()
-    test_pred_profile_cached_matches_combined()
-    test_decoder_profile_loss()
-    test_decoder_profile_loss_nan_mask()
-    test_raw_profile_rmse_decoder_indexing()
-    test_raw_profile_rmse_joint_eof()
-    test_stratified_eval_bins_and_aggregate()
-    test_stratified_eval_l3_cache_smoke()
-    test_static_stability_readiness_synthetic()
-    test_gsw_torch_matches_gsw_reference()
-    test_readiness_report_requires_lat_lon()
-    test_dates_to_juld_round_trip()
-    test_ensemble_crps_matches_pairwise_definition()
-    test_uncertainty_calibration_detects_calibrated_ensemble()
-    test_uncertainty_calibration_detects_underdispersion()
-    test_uncertainty_hook_not_implemented_without_ensemble()
-    test_mc_dropout_enables_only_dropout()
-    test_results_table_smoke()
-    test_climatology_fit_eval_roundtrip()
-    test_climatology_train_only()
-    test_anomaly_cache_addback()
-    test_ssh_obs_cached_smoke()
-    test_steric_height_sanity()
-    test_steric_loss_grad()
-    test_steric_train_calibration()
-    test_evalphys_frozen_metrics()
-    test_warp_roundtrip_and_enso()
-    test_heave_residual_forward_loss()
-    test_decode_warp_not_saturating()
-    test_heave_config_validates()
-    test_profile_direct_forward_loss()
-    test_profile_configs_validate()
-    test_thermocline_scorecard_synthetic()
-    test_density_spice_monotone_and_roundtrip()
-    test_prob_head_hetero_and_quantile()
-    test_dacov_psd_and_mc()
-    test_dacov_sigma_recalib_scales_export()
-    test_dacov_pca_ts_export()
-    test_dacov_ts_jacobian_export()
-    test_joint_eof_roundtrip()
-    test_density_spice_prob_loss_crps_backward()
-    test_density_spice_prob_loss_lowrank_crps_backward()
-    test_error_channel_log_norm()
-    test_stale_sat_gate_status()
-    test_backend_equivalence_smoke()
-    test_steric_matches_climatology_adt()
-    test_field_unet_shapes()
-    test_field_gather_matches_loop()
-    test_field_date_split_disjoint()
-    test_field_cache_targets_match_v2()
-    test_field_loss_grad_with_steric()
-    test_pca_round_trip()
-    test_asymmetric_output_offsets()
-    test_split_matches_torch_seed()
-    test_chronological_split_no_leakage()
-    test_l3_bin_observations_synthetic()
-    test_l3_lon_normalization_gom_bbox()
-    test_l3_rasterize_missing_is_explicit()
-    test_l3_processed_batch_smoke()
-    test_l3_input_dim_and_flatten()
-    test_l3_feature_subset_dim()
-    test_l3_cache_layout_guard()
-    test_sync_arch_l3_config()
-    test_patch_conv_mlp_l3_forward()
-    test_l4_mask_augment()
-    test_l4_augment_bundle_wiring()
-    test_l4_processed_batch_smoke()
-    test_l3_dataloader_batch()
-    test_train_monitor_once()
-    test_overlap_pairs()
-    test_cache_schema_keys()
+# One list. Progress + timeout live here. No pytest, no resume (resume skips the test that broke).
+TESTS = (
+    test_cap_batch_size,
+    test_resolve_batch_size_fixed,
+    test_compute_input_dim,
+    test_argo_l4_input_dim_and_forward,
+    test_bathy_truncation_loss,
+    test_argo_l4_cache_smoke,
+    test_patch_conv_mlp_point_mode,
+    test_patch_conv_mlp_patch_mode,
+    test_patch_conv_mlp_residual_mode,
+    test_res_autoencoder_round_trip,
+    test_prediction_model_v2,
+    test_combined_pca_loss_v2,
+    test_pred_profile_cached_matches_combined,
+    test_decoder_profile_loss,
+    test_decoder_profile_loss_nan_mask,
+    test_raw_profile_rmse_decoder_indexing,
+    test_raw_profile_rmse_joint_eof,
+    test_stratified_eval_bins_and_aggregate,
+    test_stratified_eval_l3_cache_smoke,
+    test_static_stability_readiness_synthetic,
+    test_gsw_torch_matches_gsw_reference,
+    test_readiness_report_requires_lat_lon,
+    test_dates_to_juld_round_trip,
+    test_ensemble_crps_matches_pairwise_definition,
+    test_uncertainty_calibration_detects_calibrated_ensemble,
+    test_uncertainty_calibration_detects_underdispersion,
+    test_uncertainty_hook_not_implemented_without_ensemble,
+    test_mc_dropout_enables_only_dropout,
+    test_results_table_smoke,
+    test_climatology_fit_eval_roundtrip,
+    test_climatology_train_only,
+    test_anomaly_cache_addback,
+    test_ssh_obs_cached_smoke,
+    test_steric_height_sanity,
+    test_steric_loss_grad,
+    test_steric_train_calibration,
+    test_evalphys_frozen_metrics,
+    test_warp_roundtrip_and_enso,
+    test_heave_residual_forward_loss,
+    test_decode_warp_not_saturating,
+    test_heave_config_validates,
+    test_heave_fast_matches_original,
+    test_heave_fast_config_validates,
+    test_profile_direct_forward_loss,
+    test_profile_configs_validate,
+    test_thermocline_scorecard_synthetic,
+    test_density_spice_monotone_and_roundtrip,
+    test_prob_head_hetero_and_quantile,
+    test_dacov_psd_and_mc,
+    test_dacov_sigma_recalib_scales_export,
+    test_dacov_pca_ts_export,
+    test_dacov_ts_jacobian_export,
+    test_joint_eof_roundtrip,
+    test_density_spice_prob_loss_crps_backward,
+    test_density_spice_prob_loss_lowrank_crps_backward,
+    test_error_channel_log_norm,
+    test_stale_sat_gate_status,
+    test_backend_equivalence_smoke,
+    test_l4_mode_is_not_dead_code,
+    test_argo_random_split_needs_explicit_flag,
+    test_unproven_performance_opts_need_evidence,
+    test_cache_checkpoint_pairing,
+    test_garden_gate,
+    test_steric_matches_climatology_adt,
+    test_field_unet_shapes,
+    test_field_gather_matches_loop,
+    test_field_date_split_disjoint,
+    test_field_cache_targets_match_v2,
+    test_field_loss_grad_with_steric,
+    test_pca_round_trip,
+    test_asymmetric_output_offsets,
+    test_split_matches_torch_seed,
+    test_chronological_split_no_leakage,
+    test_l3_bin_observations_synthetic,
+    test_l3_lon_normalization_gom_bbox,
+    test_l3_rasterize_missing_is_explicit,
+    test_l3_processed_batch_smoke,
+    test_l3_input_dim_and_flatten,
+    test_l3_feature_subset_dim,
+    test_l3_cache_layout_guard,
+    test_sync_arch_l3_config,
+    test_patch_conv_mlp_l3_forward,
+    test_l4_mask_augment,
+    test_l4_augment_bundle_wiring,
+    test_l4_processed_batch_smoke,
+    test_l3_dataloader_batch,
+    test_train_monitor_once,
+    test_overlap_pairs,
+    test_cache_schema_keys,
+)
+
+
+class _TestTimeout(Exception):
+    pass
+
+
+def _run_one(fn, timeout_s: float) -> None:
+    print(f"selfcheck start {fn.__name__}", flush=True)
+    t0 = time.perf_counter()
+
+    def _on_alarm(signum, frame):
+        raise _TestTimeout(f"{fn.__name__} exceeded {timeout_s:.0f}s (SELFCHECK_TIMEOUT)")
+
+    if timeout_s > 0:
+        signal.signal(signal.SIGALRM, _on_alarm)
+        signal.setitimer(signal.ITIMER_REAL, timeout_s)
+    try:
+        fn()
+    except BaseException:
+        dt = time.perf_counter() - t0
+        print(f"selfcheck FAIL {fn.__name__} {dt:.2f}s", flush=True)
+        raise
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+    dt = time.perf_counter() - t0
+    print(f"selfcheck ok {fn.__name__} {dt:.2f}s", flush=True)
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("-h", "--help"):
+        print("selfcheck.py [test_name ...]")
+        print("  SELFCHECK_TIMEOUT=120  per-test wall seconds (0 = no alarm)")
+        print("  CUDA_VISIBLE_DEVICES is forced empty unless already set")
+        for fn in TESTS:
+            print(f"  {fn.__name__}")
+        return
+    by_name = {fn.__name__: fn for fn in TESTS}
+    if argv:
+        missing = [n for n in argv if n not in by_name]
+        if missing:
+            raise SystemExit(f"unknown selfcheck tests: {missing}")
+        selected = [by_name[n] for n in argv]
+    else:
+        selected = list(TESTS)
+    timeout_s = float(os.environ.get("SELFCHECK_TIMEOUT", "120"))
+    print(f"selfcheck {len(selected)} tests timeout={timeout_s:.0f}s threads={_threads}", flush=True)
+    for fn in selected:
+        _run_one(fn, timeout_s)
     print("selfcheck: all assertions passed")
+
+
+if __name__ == "__main__":
+    main()

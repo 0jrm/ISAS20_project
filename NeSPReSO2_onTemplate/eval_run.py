@@ -13,10 +13,11 @@ import torch
 
 import data_loader.data_loaders as module_data
 import model.model as module_arch
-from model.loss import decode_latent_profiles, load_decoders_from_dir, make_loss, reconstruct_physical_profiles, sklearn_inverse_transform_pcs
+from model.loss import HEAVE_LOSS_MODES, decode_latent_profiles, load_decoders_from_dir, make_loss, reconstruct_physical_profiles, sklearn_inverse_transform_pcs
 from train import surface_residual_layout_from_cache
 from model.metric import per_variable_rmse
 from parse_config import ConfigParser, validate_config
+from base.pairing import assert_cache_checkpoint_pair
 from base.util import prepare_device, read_json
 from train import ensure_cache, set_seed
 
@@ -163,6 +164,12 @@ def main(config, checkpoint_path: str, split: str = "test"):
     model.eval()
 
     pca_models = ckpt.get("pca_models", data_loader.pca_models)
+    assert_cache_checkpoint_pair(
+        config.config.get("io", {}).get("dataset_tag"),
+        data_loader.dataset_tag,
+        ckpt.get("pca_models"),
+        data_loader.pca_models,
+    )
     outputs = OrderedDict(ckpt.get("outputs", dict(loss_outputs)))
 
     from types import SimpleNamespace
@@ -179,7 +186,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
         # joint_eof scores T/S profiles, not a 'joint' profile array
         profile_names = (
             ("temperature", "salinity")
-            if joint_eof_meta is not None or loss_cfg.get("mode") in ("heave_residual", "profile_direct")
+            if joint_eof_meta is not None or loss_cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct")
             else tuple(k for k in outputs if k != "warp")
         )
         true_profiles = {}
@@ -216,7 +223,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
         targets=data_loader.cache["targets"],
         true_profiles=(
             true_profiles
-            if loss_cfg.get("mode") not in ("heave_residual", "profile_direct")
+            if loss_cfg.get("mode") not in (*HEAVE_LOSS_MODES, "profile_direct")
             else data_loader.profiles
         ),
         ae_targets=data_loader.cache.get(target_key),
@@ -262,7 +269,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
     if pca_tgt is not None:
         pca_tgt = pca_tgt[indices].astype(np.float64)
 
-    if loss_cfg.get("mode") in ("heave_residual", "profile_direct"):
+    if loss_cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct"):
         mu_t = torch.tensor(mu_pcs, dtype=torch.float32, device=device)
         idx_t = torch.tensor(indices, dtype=torch.long, device=device)
         n_all = data_loader.cache["inputs"].shape[0]
@@ -273,11 +280,11 @@ def main(config, checkpoint_path: str, split: str = "test"):
 
         T_true = _sm(data_loader.profiles["temperature"])[indices]
         S_true = _sm(data_loader.profiles["salinity"])[indices]
-        if loss_cfg.get("mode") == "heave_residual":
+        if loss_cfg.get("mode") in HEAVE_LOSS_MODES:
             T_hat, S_hat = loss_fn.physical_ts(mu_t, idx_t)
             T_hat = T_hat.detach().cpu().numpy()
             S_hat = S_hat.detach().cpu().numpy()
-            decode = "heave_residual"
+            decode = loss_cfg.get("mode")
             latent_rmse = {"note": "z-PCA targets unused; residual PCs live on the warped grid"}
         else:
             n_z = mu_pcs.shape[1] // 2
@@ -329,7 +336,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
                 joint_eof_meta=joint_eof_meta,
             ),
         }
-    if loss_cfg.get("mode") in ("heave_residual", "profile_direct"):
+    if loss_cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct"):
         report["pca_target_rmse"] = None
     elif loss_cfg.get("mode") != "decoder" and pca_tgt is not None:
         pca_outputs = OrderedDict(data_loader.cache["outputs"])
