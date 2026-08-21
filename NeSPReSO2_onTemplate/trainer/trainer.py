@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -54,6 +55,8 @@ class Trainer(BaseTrainer):
         self.valid_metrics = MetricTracker("loss", *[m.__name__ for m in self.metric_ftns], writer=self.writer)
         self._last_log = {}
         self._last_epoch = 0
+        self._train_t0 = None
+        self._started_at = None
 
     def _dataset_tag(self):
         return self.config.config.get("io", {}).get("dataset_tag", "unknown")
@@ -75,6 +78,11 @@ class Trainer(BaseTrainer):
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "save_dir": str(self.checkpoint_dir),
         }
+        if self._train_t0 is not None:
+            elapsed = time.perf_counter() - self._train_t0
+            payload["started_at"] = self._started_at
+            payload["elapsed_sec"] = round(elapsed, 3)
+            payload["sec_per_epoch"] = round(elapsed / max(int(self._last_epoch), 1), 4)
         if self.mnt_mode != "off" and payload["mnt_best"] is not None:
             payload["mnt_best"] = float(payload["mnt_best"])
         return payload
@@ -101,16 +109,33 @@ class Trainer(BaseTrainer):
         payload = self._status_payload("running")
         self._atomic_write_status(payload)
         if self._should_log_epoch(epoch):
-            slim = {"tag": payload["tag"], "epoch": epoch, "val_loss": log.get("val_loss")}
+            slim = {
+                "tag": payload["tag"],
+                "epoch": epoch,
+                "val_loss": log.get("val_loss"),
+                "elapsed_sec": payload.get("elapsed_sec"),
+                "sec_per_epoch": payload.get("sec_per_epoch"),
+            }
             self._emit_sentinel("EPOCH", slim)
 
     def _train_finished(self, reason):
         state = "done"
         payload = self._status_payload(state, reason=reason)
         self._atomic_write_status(payload)
-        self._emit_sentinel("DONE", {"tag": payload["tag"], "epoch": payload["epoch"], "reason": reason})
+        self._emit_sentinel(
+            "DONE",
+            {
+                "tag": payload["tag"],
+                "epoch": payload["epoch"],
+                "reason": reason,
+                "elapsed_sec": payload.get("elapsed_sec"),
+                "sec_per_epoch": payload.get("sec_per_epoch"),
+            },
+        )
 
     def train(self):
+        self._train_t0 = time.perf_counter()
+        self._started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             super().train()
         except Exception as exc:

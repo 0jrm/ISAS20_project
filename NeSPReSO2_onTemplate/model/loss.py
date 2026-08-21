@@ -21,7 +21,7 @@ DEFAULT_COMBINED_MSE_SCALE = 0.0255
 
 OUTPUT_H5_VARS = {"temperature": "TEMP", "salinity": "PSAL"}
 
-VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice", "heave_residual")
+VALID_LOSS_MODES = ("combined", "pred_profile_cached", "pc_mse_only", "decoder", "density_spice", "heave_residual", "profile_direct")
 VALID_PROB_MODES = ("mse", "crps", "nll", "quantile")
 
 
@@ -996,7 +996,7 @@ class HeaveResidualLoss(nn.Module):
         from sklearn.decomposition import PCA
 
         from evalphys.metrics import isotherm_depth, mixed_layer_depth
-        from model.heave import decode_warp
+        from model.heave import decode_warp, warp_sigma_meters
         from model.warp import torch_unwarp_from_canonical, torch_warp_to_canonical, warp_to_canonical
 
         cfg = loss_config or {}
@@ -1010,7 +1010,7 @@ class HeaveResidualLoss(nn.Module):
         self.sigma_min = float(cfg.get("sigma_min", 1e-3))
         self.nll_beta = float(cfg.get("nll_beta", 0.5))
         self.freeze_sigma = bool(cfg.get("freeze_sigma", False))
-        self.geom_scale = float(scales.get("heave_geom_scale", 1.0))
+        self.geom_scale = float(scales.get("heave_geom_scale", 10.0))
         self.pc_scale = float(scales.get("heave_pc_scale", 1.0))
         self.dtdz_scale = float(scales.get("heave_dtdz_scale", 0.1))
         self.needs_inputs = False
@@ -1067,6 +1067,7 @@ class HeaveResidualLoss(nn.Module):
             "s_mean", torch.tensor(pca_s.mean_, dtype=torch.float32, device=device)
         )
         self._decode_warp = decode_warp
+        self._warp_sigma = warp_sigma_meters
         self._warp = torch_warp_to_canonical
         self._unwarp = torch_unwarp_from_canonical
         self.z_bot = float(z[-1])
@@ -1119,7 +1120,7 @@ class HeaveResidualLoss(nn.Module):
             raise ValueError("heave_residual loss requires batch indices")
         idx = torch.as_tensor(indices, dtype=torch.long, device=output.device)
         mu, sigma = self._mu_sigma(output)
-        mld, d26, stretch = self._decode_warp(mu[:, : self.n_warp], self.z_bot)
+        mld, d26, _stretch = self._decode_warp(mu[:, : self.n_warp], self.z_bot)
         geom_loss = (
             ((mld - self.mld_true[idx]) / 50.0) ** 2 + ((d26 - self.d26_true[idx]) / 120.0) ** 2
         ).mean()
@@ -1128,24 +1129,28 @@ class HeaveResidualLoss(nn.Module):
         s_pc = mu[:, self.n_warp + self.n_t :]
         t_tgt = self.t_pcs_true[idx]
         s_tgt = self.s_pcs_true[idx]
-        # ponytail: CRPS diagonal R on (mld_m, d26_m, stretch, residual PCs); σ_warp is logit-scale
-        state = torch.cat([mld.unsqueeze(1), d26.unsqueeze(1), stretch.unsqueeze(1), t_pc, s_pc], dim=1)
-        y = torch.cat(
-            [
-                self.mld_true[idx].unsqueeze(1),
-                self.d26_true[idx].unsqueeze(1),
-                torch.ones(idx.shape[0], 1, device=mu.device, dtype=mu.dtype),
-                t_tgt,
-                s_tgt,
-            ],
-            dim=1,
-        )
+        pcs = torch.cat([t_pc, s_pc], dim=1)
+        pcs_tgt = torch.cat([t_tgt, s_tgt], dim=1)
         if sigma is None or self.prob_mode in (None, "mse"):
-            pc_loss = torch.mean((torch.cat([t_pc, s_pc], dim=1) - torch.cat([t_tgt, s_tgt], dim=1)) ** 2)
+            pc_loss = torch.mean((pcs - pcs_tgt) ** 2)
         elif self.prob_mode == "crps":
-            pc_loss = torch.mean(gaussian_crps_torch(state, sigma, y, sigma_min=self.sigma_min))
+            sig_mld, sig_d26 = self._warp_sigma(mu[:, : self.n_warp], sigma[:, : self.n_warp])
+            state = torch.cat([mld.unsqueeze(1), d26.unsqueeze(1), pcs], dim=1)
+            sig = torch.cat([sig_mld.unsqueeze(1), sig_d26.unsqueeze(1), sigma[:, self.n_warp :]], dim=1)
+            y = torch.cat(
+                [self.mld_true[idx].unsqueeze(1), self.d26_true[idx].unsqueeze(1), pcs_tgt],
+                dim=1,
+            )
+            pc_loss = torch.mean(gaussian_crps_torch(state, sig, y, sigma_min=self.sigma_min))
         elif self.prob_mode == "nll":
-            pc_loss = beta_nll(state, sigma, y, beta=self.nll_beta, sigma_min=self.sigma_min)
+            sig_mld, sig_d26 = self._warp_sigma(mu[:, : self.n_warp], sigma[:, : self.n_warp])
+            state = torch.cat([mld.unsqueeze(1), d26.unsqueeze(1), pcs], dim=1)
+            sig = torch.cat([sig_mld.unsqueeze(1), sig_d26.unsqueeze(1), sigma[:, self.n_warp :]], dim=1)
+            y = torch.cat(
+                [self.mld_true[idx].unsqueeze(1), self.d26_true[idx].unsqueeze(1), pcs_tgt],
+                dim=1,
+            )
+            pc_loss = beta_nll(state, sig, y, beta=self.nll_beta, sigma_min=self.sigma_min)
         else:
             raise ValueError(f"heave_residual unsupported prob_mode={self.prob_mode!r}")
 
@@ -1161,6 +1166,46 @@ class HeaveResidualLoss(nn.Module):
         if self.steric_helper is not None:
             loss = loss + self.steric_helper(T_hat, S_hat, idx)
         return loss
+
+
+class ProfileDirectLoss(nn.Module):
+    """Native-z T/S MSE; ignores PCA cache targets. Optional 2nd-diff smoother."""
+
+    def __init__(self, outputs, device, true_profiles, *, loss_scales=None):
+        super().__init__()
+        n_t = int(outputs["temperature"])
+        n_s = int(outputs["salinity"])
+        if n_t != n_s:
+            raise ValueError("profile_direct expects equal T/S depth counts")
+        T = np.asarray(true_profiles["temperature"], dtype=np.float32)
+        S = np.asarray(true_profiles["salinity"], dtype=np.float32)
+        n = T.shape[0] if T.shape[-1] == n_t else T.shape[1]
+        T = _station_major(T, n)
+        S = _station_major(S, n)
+        if T.shape[1] != n_t:
+            raise ValueError(f"profile T width {T.shape[1]} != outputs.temperature {n_t}")
+        scales = loss_scales or {}
+        self.mse_scale = float(scales.get("profile_mse_scale", 1.0))
+        self.smooth_scale = float(scales.get("profile_smooth_scale", 0.01))
+        self.n_z = n_t
+        self.needs_inputs = False
+        self.register_buffer("T_true", torch.tensor(T, dtype=torch.float32, device=device))
+        self.register_buffer("S_true", torch.tensor(S, dtype=torch.float32, device=device))
+
+    def split(self, pred):
+        if pred.shape[1] != 2 * self.n_z:
+            raise ValueError(f"pred dim {pred.shape[1]} != 2*n_z {2 * self.n_z}")
+        return pred[:, : self.n_z], pred[:, self.n_z :]
+
+    def forward(self, pred, target, indices, inputs=None):
+        idx = indices.long()
+        t_hat, s_hat = self.split(pred)
+        t, s = self.T_true[idx], self.S_true[idx]
+        mse = torch.nanmean((t_hat - t) ** 2) + torch.nanmean((s_hat - s) ** 2)
+        d2t = t_hat[:, 2:] - 2 * t_hat[:, 1:-1] + t_hat[:, :-2]
+        d2s = s_hat[:, 2:] - 2 * s_hat[:, 1:-1] + s_hat[:, :-2]
+        smooth = d2t.pow(2).mean() + d2s.pow(2).mean()
+        return self.mse_scale * mse + self.smooth_scale * smooth
 
 
 def make_loss(
@@ -1192,6 +1237,17 @@ def make_loss(
     mode = cfg.get("mode", "combined")
     if mode not in VALID_LOSS_MODES:
         raise ValueError(f"unknown loss_config.mode {mode!r}; expected one of {VALID_LOSS_MODES}")
+
+    if mode == "profile_direct":
+        profiles = true_profiles or kwargs.get("profiles")
+        if profiles is None:
+            raise ValueError("profile_direct requires true_profiles (or profiles) in cache")
+        return ProfileDirectLoss(
+            outputs=outputs,
+            device=device,
+            true_profiles=profiles,
+            loss_scales=scales,
+        )
 
     if mode == "heave_residual":
         profiles = true_profiles or kwargs.get("profiles")

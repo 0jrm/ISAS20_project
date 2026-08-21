@@ -1657,8 +1657,10 @@ def test_field_loss_grad_with_steric():
         "clim_steric": cache["clim_steric"],
         "steric_calibration": cache["steric_calibration"],
     })()
+    # cache["weights"] is per-sample; CombinedPCALoss wants per-PC
+    pc_w = np.ones(sum(outputs.values()), dtype=np.float32)
     loss_fn = CombinedPCALoss(
-        cache["pca_models"], outputs, cache["weights"], torch.device("cpu"),
+        cache["pca_models"], outputs, pc_w, torch.device("cpu"),
         steric_config={"enabled": True, "scale": 0.01, "subsample_dz": 2},
         steric_meta=steric_meta,
         clim_profiles=cache["clim_profiles"],
@@ -1816,12 +1818,70 @@ def test_heave_residual_forward_loss():
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters() if p.requires_grad)
 
 
+def test_decode_warp_not_saturating():
+    from model.heave import decode_warp, warp_sigma_meters
+
+    raw0 = torch.zeros(4, 3)
+    mld, d26, _ = decode_warp(raw0, 1800.0)
+    assert torch.allclose(mld, torch.full((4,), 50.0), atol=0.5)
+    assert torch.allclose(d26, torch.full((4,), 120.0), atol=1.0)
+    raw = torch.tensor([[-1.6, 0.0, 0.0]], requires_grad=True)
+    mld2, _, _ = decode_warp(raw, 1800.0)
+    mld2.sum().backward()
+    assert raw.grad[0, 0].abs() > 1e-4
+    assert 8.0 < mld2.item() < 15.0
+    raw_hi = torch.tensor([[1.0, 0.0, 0.0]])
+    mld_hi, _, _ = decode_warp(raw_hi, 1800.0)
+    assert mld_hi.item() > 90.0  # old tanh cap
+    sig_m, sig_d = warp_sigma_meters(torch.zeros(2, 3), torch.ones(2, 3))
+    assert torch.all(sig_m > 0) and torch.all(sig_d > 0)
+
+
 def test_heave_config_validates():
     from base.util import read_json
     from parse_config import validate_config
 
     cfg = read_json("config/argo/config_argo_heave_residual.json")
     validate_config(cfg)
+
+
+def test_profile_direct_forward_loss():
+    from model.loss import ProfileDirectLoss
+    from model.profile_direct import LatentProfileDecoder, ProfileDirect, depth_filter
+
+    n, nz, d_in = 8, 21, 11
+    x = torch.randn(n, d_in)
+    m1 = LatentProfileDecoder(
+        input_dim=d_in, output_dim=2 * nz, n_z=nz, n_latent=8, n_t=4, n_s=4,
+        n_enc=8, n_sat=3, head_layers=[32, 32], d_model=16,
+    )
+    m2 = ProfileDirect(
+        input_dim=d_in, output_dim=2 * nz, n_z=nz, n_enc=8, n_sat=3,
+        head_layers=[32, 32], d_model=16, filter_k=5,
+    )
+    y1, y2 = m1(x), m2(x)
+    assert y1.shape == (n, 2 * nz) and y2.shape == (n, 2 * nz)
+    sm = depth_filter(torch.randn(4, 2, nz), 5)
+    assert sm.shape == (4, 2, nz)
+    T = np.linspace(24, 10, nz, dtype=np.float32)[None].repeat(n, axis=0)
+    S = np.full((n, nz), 36.0, dtype=np.float32)
+    loss = ProfileDirectLoss(
+        {"temperature": nz, "salinity": nz},
+        torch.device("cpu"),
+        {"temperature": T, "salinity": S},
+    )
+    L = loss(y1, torch.zeros(n, 32), torch.arange(n))
+    assert torch.isfinite(L)
+    L.backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in m1.parameters())
+
+
+def test_profile_configs_validate():
+    from base.util import read_json
+    from parse_config import validate_config
+
+    for name in ("config_argo_latent_profile.json", "config_argo_profile_direct.json"):
+        validate_config(read_json(f"config/argo/{name}"))
 
 
 def test_thermocline_scorecard_synthetic():
@@ -2318,7 +2378,10 @@ if __name__ == "__main__":
     test_evalphys_frozen_metrics()
     test_warp_roundtrip_and_enso()
     test_heave_residual_forward_loss()
+    test_decode_warp_not_saturating()
     test_heave_config_validates()
+    test_profile_direct_forward_loss()
+    test_profile_configs_validate()
     test_thermocline_scorecard_synthetic()
     test_density_spice_monotone_and_roundtrip()
     test_prob_head_hetero_and_quantile()

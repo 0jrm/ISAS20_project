@@ -1,21 +1,20 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM_heave_residual",
+    "name": "NeSPReSO2_ARGO_GoM_profile_direct",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
-        "type": "HeaveResidual",
+        "type": "ProfileDirect",
         "args": {
             "input_dim": 11,
-            "output_dim": 35,
-            "n_warp": 3,
+            "output_dim": 3602,
+            "n_z": 1801,
+            "filter_k": 5,
             "dropout_prob": 0.2,
             "d_model": 128,
             "head_layers": [1024, 1024],
             "patch_shape": null,
             "n_enc": 8,
-            "n_sat": 3,
-            "probabilistic": true,
-            "sigma_min": 0.001
+            "n_sat": 3
         }
     },
     "input_params": {
@@ -44,14 +43,12 @@
         "steric_vs_sla": true
     },
     "outputs": {
-        "warp": 3,
-        "temperature": 16,
-        "salinity": 16
+        "temperature": 1801,
+        "salinity": 1801
     },
     "loss_scales": {
-        "heave_geom_scale": 10.0,
-        "heave_pc_scale": 1.0,
-        "heave_dtdz_scale": 0.1
+        "profile_mse_scale": 1.0,
+        "profile_smooth_scale": 0.01
     },
     "steric": {
         "enabled": false,
@@ -89,11 +86,9 @@
             "amsgrad": false
         }
     },
-    "loss": "heave_residual_loss",
+    "loss": "profile_direct_loss",
     "loss_config": {
-        "mode": "heave_residual",
-        "prob_mode": "crps",
-        "sigma_min": 0.001
+        "mode": "profile_direct"
     },
     "metrics": [],
     "lr_scheduler": {

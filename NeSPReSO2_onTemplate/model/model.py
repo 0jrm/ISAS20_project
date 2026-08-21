@@ -861,3 +861,4 @@ class FieldUNet(BaseModel):
 
 from model.residual import PointAnchoredResidual  # noqa: E402,F401
 from model.heave import HeaveResidual  # noqa: E402,F401
+from model.profile_direct import LatentProfileDecoder, ProfileDirect  # noqa: E402,F401

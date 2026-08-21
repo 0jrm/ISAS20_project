@@ -142,6 +142,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
     ensure_cache(config)
 
     dl_args = dict(config["data_loader"]["args"])
+    dl_args["input_params"] = config.config.get("input_params") or dl_args.get("input_params")
     target_key = dl_args.get("target_key", "targets")
     weight_key = dl_args.get("weight_key", "weights")
     loss_outputs = OrderedDict(config["outputs"])
@@ -176,7 +177,11 @@ def main(config, checkpoint_path: str, split: str = "test"):
     if true_profiles is None and data_loader.profiles:
         n = data_loader.cache["inputs"].shape[0]
         # joint_eof scores T/S profiles, not a 'joint' profile array
-        profile_names = ("temperature", "salinity") if joint_eof_meta is not None else tuple(outputs)
+        profile_names = (
+            ("temperature", "salinity")
+            if joint_eof_meta is not None or loss_cfg.get("mode") in ("heave_residual", "profile_direct")
+            else tuple(k for k in outputs if k != "warp")
+        )
         true_profiles = {}
         for name in profile_names:
             arr = np.asarray(data_loader.profiles[name], dtype=np.float32)
@@ -184,6 +189,15 @@ def main(config, checkpoint_path: str, split: str = "test"):
                 arr = arr.T
             true_profiles[name] = arr
 
+    from base.split_utils import build_split_indices as _eval_split
+
+    _train_idx = _eval_split(
+        data_loader.cache["inputs"].shape[0],
+        data_loader.cache.get("JULD"),
+        dl_args,
+        dataset_tag=data_loader.dataset_tag,
+        v2_src=dl_args.get("v2_src"),
+    )["train"]
     loss_fn = make_loss(
         pca_models=pca_models,
         outputs=outputs,
@@ -200,7 +214,11 @@ def main(config, checkpoint_path: str, split: str = "test"):
         loss_scales=config.config.get("loss_scales"),
         loss_config=loss_cfg,
         targets=data_loader.cache["targets"],
-        true_profiles=true_profiles,
+        true_profiles=(
+            true_profiles
+            if loss_cfg.get("mode") not in ("heave_residual", "profile_direct")
+            else data_loader.profiles
+        ),
         ae_targets=data_loader.cache.get(target_key),
         ae_weights=data_loader.cache.get(weight_key),
         surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
@@ -215,6 +233,11 @@ def main(config, checkpoint_path: str, split: str = "test"):
         ),
         clim_profiles=data_loader.cache.get("clim_profiles"),
         joint_eof_meta=joint_eof_meta,
+        train_idx=_train_idx,
+        lat=data_loader.LAT,
+        lon=data_loader.LON,
+        profiles=data_loader.profiles,
+        pres_levels=data_loader.PRES,
     )
 
     total_loss = 0.0
@@ -232,43 +255,85 @@ def main(config, checkpoint_path: str, split: str = "test"):
     n = len(data_loader.dataset)
     pcs = np.vstack(pcs_list)
     indices = np.concatenate(idx_list)
+    d_out = int(sum(outputs.values()))
+    mu_pcs = pcs[:, :d_out] if pcs.shape[-1] == 2 * d_out else pcs
     tgt_pcs = data_loader.cache[target_key][indices].astype(np.float64)
     pca_tgt = data_loader.cache.get("pca_targets")
     if pca_tgt is not None:
         pca_tgt = pca_tgt[indices].astype(np.float64)
 
-    if loss_cfg.get("mode") == "decoder":
-        latent_rmse = _latent_block_rmse(pcs, tgt_pcs, outputs)
-    else:
-        latent_rmse = per_variable_rmse(pcs, tgt_pcs, pca_models, outputs)
+    if loss_cfg.get("mode") in ("heave_residual", "profile_direct"):
+        mu_t = torch.tensor(mu_pcs, dtype=torch.float32, device=device)
+        idx_t = torch.tensor(indices, dtype=torch.long, device=device)
+        n_all = data_loader.cache["inputs"].shape[0]
 
-    report = {
-        "checkpoint": str(checkpoint_path),
-        "cache": str(data_loader.cache_path),
-        "dataset_tag": data_loader.dataset_tag,
-        "split": split,
-        "n_samples": int(n),
-        "loss": total_loss / n,
-        "latent_target_rmse": latent_rmse,
-        "raw_profile_rmse": raw_profile_rmse(
-            pcs,
-            data_loader.profiles,
-            pca_models,
-            outputs,
-            indices,
-            decoders=decoders,
-            device=device,
-            inputs=data_loader.cache["inputs"][indices],
-            surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
-            bottom_depth=data_loader.cache.get("bottom_depth"),
-            pres_levels=data_loader.cache.get("PRES"),
-            clim_profiles=data_loader.cache.get("clim_profiles"),
-            joint_eof_meta=joint_eof_meta,
-        ),
-    }
-    if loss_cfg.get("mode") != "decoder" and pca_tgt is not None:
+        def _sm(arr):
+            a = np.asarray(arr, dtype=np.float64)
+            return a if a.shape[0] == n_all else a.T
+
+        T_true = _sm(data_loader.profiles["temperature"])[indices]
+        S_true = _sm(data_loader.profiles["salinity"])[indices]
+        if loss_cfg.get("mode") == "heave_residual":
+            T_hat, S_hat = loss_fn.physical_ts(mu_t, idx_t)
+            T_hat = T_hat.detach().cpu().numpy()
+            S_hat = S_hat.detach().cpu().numpy()
+            decode = "heave_residual"
+            latent_rmse = {"note": "z-PCA targets unused; residual PCs live on the warped grid"}
+        else:
+            n_z = mu_pcs.shape[1] // 2
+            T_hat, S_hat = mu_pcs[:, :n_z], mu_pcs[:, n_z:]
+            decode = "profile_direct"
+            latent_rmse = {"note": "native-z T/S; PCA cache targets unused"}
+        raw = {
+            "temperature": float(np.sqrt(np.nanmean((T_hat - T_true) ** 2))),
+            "salinity": float(np.sqrt(np.nanmean((S_hat - S_true) ** 2))),
+        }
+        report = {
+            "checkpoint": str(checkpoint_path),
+            "cache": str(data_loader.cache_path),
+            "dataset_tag": data_loader.dataset_tag,
+            "split": split,
+            "n_samples": int(n),
+            "loss": total_loss / n,
+            "latent_target_rmse": latent_rmse,
+            "raw_profile_rmse": raw,
+            "decode": decode,
+        }
+    else:
+        if loss_cfg.get("mode") == "decoder":
+            latent_rmse = _latent_block_rmse(mu_pcs, tgt_pcs, outputs)
+        else:
+            latent_rmse = per_variable_rmse(mu_pcs, tgt_pcs, pca_models, outputs)
+
+        report = {
+            "checkpoint": str(checkpoint_path),
+            "cache": str(data_loader.cache_path),
+            "dataset_tag": data_loader.dataset_tag,
+            "split": split,
+            "n_samples": int(n),
+            "loss": total_loss / n,
+            "latent_target_rmse": latent_rmse,
+            "raw_profile_rmse": raw_profile_rmse(
+                mu_pcs,
+                data_loader.profiles,
+                pca_models,
+                outputs,
+                indices,
+                decoders=decoders,
+                device=device,
+                inputs=data_loader.cache["inputs"][indices],
+                surface_residual_layout=surface_residual_layout_from_cache(data_loader.cache),
+                bottom_depth=data_loader.cache.get("bottom_depth"),
+                pres_levels=data_loader.cache.get("PRES"),
+                clim_profiles=data_loader.cache.get("clim_profiles"),
+                joint_eof_meta=joint_eof_meta,
+            ),
+        }
+    if loss_cfg.get("mode") in ("heave_residual", "profile_direct"):
+        report["pca_target_rmse"] = None
+    elif loss_cfg.get("mode") != "decoder" and pca_tgt is not None:
         pca_outputs = OrderedDict(data_loader.cache["outputs"])
-        report["pca_target_rmse"] = per_variable_rmse(pcs, pca_tgt, pca_models, pca_outputs)
+        report["pca_target_rmse"] = per_variable_rmse(mu_pcs, pca_tgt, pca_models, pca_outputs)
     elif loss_cfg.get("mode") != "decoder":
         report["pca_target_rmse"] = report["latent_target_rmse"]
     text = json.dumps(report, indent=2)
@@ -294,7 +359,7 @@ if __name__ == "__main__":
         os.environ["CUDA_VISIBLE_DEVICES"] = args.device
     cfg = read_json(args.config)
     validate_config(cfg)
-    config = ConfigParser(cfg)
+    config = ConfigParser(cfg, run_id="")
     report = main(config, args.resume, split=args.split)
     if args.out:
         write_report(report, args.out)

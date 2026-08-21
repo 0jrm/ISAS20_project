@@ -158,7 +158,13 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         arch_args["n_enc"] = int(arch_args.get("n_enc", 6))
         arch_args["n_sat"] = int(arch_args.get("n_sat", 3))
         arch_args["patch_shape"] = None
-    elif arch.get("type") in ("PatchConvMLP", "PatchMaskConvMLP", "HeaveResidual"):
+    elif arch.get("type") in (
+        "PatchConvMLP",
+        "PatchMaskConvMLP",
+        "HeaveResidual",
+        "LatentProfileDecoder",
+        "ProfileDirect",
+    ):
         from preproc.preproc_isas_sat import (
             compute_input_dim,
             count_patch_channels,
@@ -191,7 +197,6 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         from preproc.preproc_isas_sat import (
             compute_argo_residual_input_dim,
             count_base_dims,
-            count_encoding_dims,
             residual_sat_patch_shape,
             resolve_use_mask_channels,
         )

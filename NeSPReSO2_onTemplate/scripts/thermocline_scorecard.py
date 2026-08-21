@@ -27,6 +27,7 @@ from evalphys.metrics import (
     max_n2_depth,
     mixed_layer_depth,
     steric_vs_adt,
+    summarize_physical,
     ts_rmse_by_band,
 )
 from model.warp import unwarp_from_canonical, warp_to_canonical
@@ -99,6 +100,7 @@ def _score_pair(T_pred, S_pred, T_true, S_true, z, lat, lon, sla=None, label="")
         "coverage_D26": {"pred": cov26_p, "true": cov26_t},
         "heave_vs_shape": heave,
         "ts_rmse": ts,
+        "evalphys": summarize_physical(T_pred, S_pred, T_true, S_true, z, lat, lon),
     }
     if sla is not None:
         out["steric_vs_adt"] = steric_vs_adt(
@@ -205,6 +207,55 @@ def _ckpt_cfg(state, fallback: dict) -> dict:
     return inner if isinstance(inner, dict) else fallback
 
 
+def _model_inputs(bundle, ckcfg):
+    from preproc.enso import inject_enso_columns
+    from preproc.preproc_isas_sat import compute_input_dim, count_encoding_dims
+
+    cache = bundle["cache"]
+    idx = bundle["idx"]
+    ip = ckcfg.get("input_params") or cache.get("input_params") or {}
+    expected = compute_input_dim(
+        ip, int(cache.get("spatial_pad", 0)), int(cache.get("temporal_pad", 0))
+    )
+    x = inject_enso_columns(
+        cache["inputs"][idx],
+        cache["JULD"][idx],
+        dataset_tag=cache.get("dataset_tag", "argo_v2"),
+        input_params=ip,
+        n_enc_base=count_encoding_dims(ip) or 6,
+        expected_dim=expected,
+    )
+    return x
+
+
+def _decode_heave_ts(mu, ckcfg, bundle):
+    from base.split_utils import build_split_indices
+    from model.loss import HeaveResidualLoss
+
+    cache = bundle["cache"]
+    n = cache["LAT"].shape[0]
+    dl = ckcfg.get("data_loader", {}).get("args") or bundle["cfg"]["data_loader"]["args"]
+    train_idx = build_split_indices(
+        n, cache["JULD"], dl, dataset_tag=cache.get("dataset_tag", "argo_v2"),
+        v2_src=ckcfg.get("io", {}).get("v2_src"),
+    )["train"]
+    import torch
+
+    loss = HeaveResidualLoss(
+        outputs=ckcfg["outputs"],
+        device=torch.device("cpu"),
+        true_profiles=cache["profiles"],
+        pres_levels=cache["PRES"],
+        lat=cache["LAT"],
+        lon=cache["LON"],
+        train_idx=train_idx,
+        clim_profiles=cache.get("clim_profiles"),
+        loss_config=ckcfg.get("loss_config") or {"mode": "heave_residual"},
+    )
+    T, S = loss.physical_ts(torch.tensor(mu, dtype=torch.float32), torch.tensor(bundle["idx"]))
+    return T.detach().numpy(), S.detach().numpy()
+
+
 def _load_ckpt_pred(ckpt: Path, bundle):
     import torch
     import model.model as module_arch
@@ -223,12 +274,21 @@ def _load_ckpt_pred(ckpt: Path, bundle):
         model = cls(**arch["args"])
         model.load_state_dict(state["state_dict"])
         model.eval()
-        inputs = torch.tensor(bundle["cache"]["inputs"][bundle["idx"]], dtype=torch.float32)
+        x = _model_inputs(bundle, ckcfg)
+        if x.shape[1] != int(arch["args"]["input_dim"]):
+            raise ValueError(f"input dim {x.shape[1]} != arch {arch['args']['input_dim']}")
+        inputs = torch.tensor(x, dtype=torch.float32)
         with torch.no_grad():
             out = model(inputs).cpu().numpy()
         outs = ckcfg.get("outputs") or bundle["cache"]["outputs"]
-        if out.shape[-1] == 2 * int(sum(outs.values())):
-            out = out[:, : out.shape[-1] // 2]
+        d = int(sum(outs.values()))
+        if out.shape[-1] == 2 * d:
+            out = out[:, :d]
+        n_z = int(np.asarray(bundle["T_true"]).shape[1])
+        if out.shape[-1] == 2 * n_z:
+            return out[:, :n_z], out[:, n_z:]
+        if arch.get("type") == "HeaveResidual" or "warp" in outs:
+            return _decode_heave_ts(out, ckcfg, bundle)
         T, S = _decode_pcs_to_ts(out, {"outputs": outs}, bundle["cache"])
         return T, S
     except Exception as exc:
@@ -245,6 +305,8 @@ def _hycom_note(path: str | None):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-c", "--config", default=str(_ROOT / "config/argo/config_argo.json"))
+    parser.add_argument("--heave-ckpt", action="append", default=[], help="HeaveResidual checkpoint (repeatable)")
+    parser.add_argument("--ckpt", action="append", default=[], help="label=path extra checkpoints")
     parser.add_argument("--out-md", default=str(REPORT_MD))
     parser.add_argument("--out-json", default=str(REPORT_JSON))
     args = parser.parse_args(argv)
@@ -267,6 +329,19 @@ def main(argv=None) -> int:
         a_pred = _load_ckpt_pred(A_CRPS, bundle)
         if a_pred is not None:
             models["A_CRPS"] = _score_pair(a_pred[0], a_pred[1], T, S, z, lat, lon, sla, "A_CRPS")
+        for i, hp in enumerate(args.heave_ckpt):
+            h_pred = _load_ckpt_pred(Path(hp), bundle)
+            key = "Heave_best" if i == 0 else f"Heave_{i}"
+            if h_pred is not None:
+                models[key] = _score_pair(h_pred[0], h_pred[1], T, S, z, lat, lon, sla, key)
+        for item in args.ckpt:
+            if "=" in item:
+                key, hp = item.split("=", 1)
+            else:
+                key, hp = Path(item).parent.name, item
+            pred = _load_ckpt_pred(Path(hp), bundle)
+            if pred is not None:
+                models[key] = _score_pair(pred[0], pred[1], T, S, z, lat, lon, sla, key)
         b_ckpt = next(B_DET.rglob("model_best.pth"), None) if B_DET.is_dir() else None
         if b_ckpt:
             b_pred = _load_ckpt_pred(b_ckpt, bundle)
@@ -327,9 +402,14 @@ def main(argv=None) -> int:
             continue
         h = row["heave_vs_shape"]
         st = row.get("steric_vs_adt") or {}
+        ep = row.get("evalphys") or {}
+        t_bands = ((ep.get("ts_rmse") or {}).get("T")) or {}
+        n2 = (ep.get("static_stability_pred") or {}).get("1e-08") or {}
         lines.append(
             f"- **{name}**: D26 RMSE {row['D26_rmse']:.2f} m; 50–200 T RMSE {h['rmse_50_200']:.3f} "
             f"(heave-aligned {h['rmse_50_200_heave_aligned']:.3f}, heave fraction {h['heave_fraction']:.2f}); "
+            f"T RMSE 0–50/50–200/200–800 {t_bands.get('0-50')}/{t_bands.get('50-200')}/{t_bands.get('200-800')}; "
+            f"N² profile viol@1e-8 {n2.get('violation_rate_profile')}; "
             f"LC steric RMS {st.get('rms_cm_lc')} cm pass={st.get('lc_pass')}"
         )
     lines += ["", "## T1 reconstruction ceilings (truth through the representation)", ""]

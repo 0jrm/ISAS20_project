@@ -1,0 +1,20 @@
+{
+  "checkpoint": "saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s42_s2/p5_A_CRPS_v2_s42_s2/model_best.pth",
+  "cache": "../data/cache/train_ready_3adcff404b0b.pkl",
+  "dataset_tag": "argo_v2",
+  "split": "test",
+  "n_samples": 623,
+  "loss": 1.2567645359192385,
+  "latent_target_rmse": {
+    "temperature": 0.5584473666505457,
+    "salinity": 0.0903341802847391
+  },
+  "raw_profile_rmse": {
+    "temperature": 0.5620075048690764,
+    "salinity": 0.09148611757753779
+  },
+  "pca_target_rmse": {
+    "temperature": 0.5584473666505457,
+    "salinity": 0.0903341802847391
+  }
+}

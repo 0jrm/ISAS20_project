@@ -17,7 +17,7 @@ if str(_ROOT) not in sys.path:
 
 from evalphys.constants import STERIC_LC_RMS_CM
 from evalphys.metrics import steric_vs_adt
-from model.heave import HeaveResidual, decode_warp
+from model.heave import HeaveResidual, decode_warp, warp_sigma_meters
 from model.prob_head import split_mu_sigma, softplus_sigma
 
 
@@ -75,7 +75,9 @@ def main(argv=None) -> int:
     }
     if sigma is not None:
         payload["sigma"] = sigma.numpy()
-        payload["sigma_d26"] = sigma[:, 1].numpy()
+        _sig_mld, sig_d26 = warp_sigma_meters(mu[:, :3], sigma[:, :3])
+        payload["sigma_d26"] = sig_d26.numpy()
+        payload["sigma_mld"] = _sig_mld.numpy()
         payload["sigma_eta"] = sigma[:, :3].numpy()
         from evalphys.calibration import ence, season_from_juld
         from evalphys.metrics import isotherm_depth
@@ -87,15 +89,15 @@ def main(argv=None) -> int:
             T = T.T
         z = np.asarray(cache["PRES"]).ravel()
         d26_true, _ = isotherm_depth(T[local], z, 26.0)
-        payload["ence_d26"] = np.array([json.dumps(ence(d26.numpy(), sigma[:, 1].numpy(), d26_true))])
+        payload["ence_d26"] = np.array([json.dumps(ence(d26.numpy(), sig_d26.numpy(), d26_true))])
         juld = np.asarray(cache["JULD"])[local]
         season = season_from_juld(juld, dataset_tag=cache.get("dataset_tag", "argo_v2"))
         jja = season == "JJA"
         if jja.any():
             payload["ence_d26_jja"] = np.array(
-                [json.dumps(ence(d26.numpy()[jja], sigma[:, 1].numpy()[jja], d26_true[jja]))]
+                [json.dumps(ence(d26.numpy()[jja], sig_d26.numpy()[jja], d26_true[jja]))]
             )
-            rho, _p = spearmanr(sigma[:, 1].numpy()[jja], np.abs(d26.numpy()[jja] - d26_true[jja]))
+            rho, _p = spearmanr(sig_d26.numpy()[jja], np.abs(d26.numpy()[jja] - d26_true[jja]))
             payload["spearman_sigma_d26_jja"] = np.array(
                 [float(rho) if np.isfinite(rho) else np.nan]
             )

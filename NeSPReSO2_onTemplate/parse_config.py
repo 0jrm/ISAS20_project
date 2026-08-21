@@ -62,6 +62,19 @@ def validate_config(config):
         if loss_cfg.get("prob_mode") in ("crps", "nll"):
             assert arch_args.get("probabilistic"), "heave_residual crps/nll require arch.args.probabilistic=true"
             assert not arch_args.get("n_quantiles"), "heave_residual crps/nll require n_quantiles=0"
+    if mode == "profile_direct":
+        assert set(outputs) == {"temperature", "salinity"}, (
+            "profile_direct requires outputs {temperature, salinity}"
+        )
+        n_z = int(arch_args.get("n_z", 0))
+        assert n_z > 1, "profile_direct requires arch.args.n_z"
+        assert int(outputs["temperature"]) == n_z and int(outputs["salinity"]) == n_z, (
+            "profile_direct outputs must equal n_z"
+        )
+        assert arch_type in ("LatentProfileDecoder", "ProfileDirect"), (
+            "profile_direct requires LatentProfileDecoder or ProfileDirect"
+        )
+        assert not arch_args.get("probabilistic"), "profile_direct is deterministic (filter is the smoother)"
     if mode == "decoder":
         assert loss_cfg.get("decoder_dir"), "decoder mode requires loss_config.decoder_dir"
     if mode == "density_spice" or config.get("io", {}).get("representation") == "density_spice":

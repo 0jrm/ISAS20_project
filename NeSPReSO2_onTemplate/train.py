@@ -328,7 +328,11 @@ def main(config):
         loss_scales=config.config.get("loss_scales"),
         loss_config=loss_cfg,
         targets=cache["targets"],
-        true_profiles=true_profiles if loss_cfg.get("mode") != "heave_residual" else heave_profiles,
+        true_profiles=(
+            true_profiles
+            if loss_cfg.get("mode") not in ("heave_residual", "profile_direct")
+            else heave_profiles
+        ),
         ae_targets=ae_targets,
         ae_weights=ae_weights,
         surface_residual_layout=surface_residual_layout_from_cache(cache),

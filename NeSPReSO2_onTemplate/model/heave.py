@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from base.base_model import BaseModel
 from model.warp import CANON_D26_M, CANON_MLD_M, MIN_LAYER_M
+
+
+_GAP0 = CANON_D26_M - CANON_MLD_M - MIN_LAYER_M
 
 
 class HeaveResidual(BaseModel):
@@ -53,6 +54,17 @@ class HeaveResidual(BaseModel):
             sigma_min=sigma_min,
             n_quantiles=n_quantiles,
         )
+        self._zero_warp_mu()
+
+    def _zero_warp_mu(self):
+        """Start at canonical MLD/D26 (raw=0). ponytail: tanh floor had vanishing grad."""
+        lin = getattr(self.backbone, "mu_out", None)
+        if lin is None:
+            return
+        with torch.no_grad():
+            lin.weight[: self.n_warp].zero_()
+            if lin.bias is not None:
+                lin.bias[: self.n_warp].zero_()
 
     def forward(self, x):
         return self.backbone(x)
@@ -62,10 +74,23 @@ class HeaveResidual(BaseModel):
 
 
 def decode_warp(raw: torch.Tensor, z_bot: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Map unbounded warp logits to (mld, d26, stretch). ``raw`` (B, ≥3) or (B, 3)."""
-    mld = CANON_MLD_M + 40.0 * torch.tanh(raw[..., 0])
+    """Map unbounded warp logits to (mld, d26, stretch). raw=0 → (50 m, 120 m).
+
+    Exp, not tanh: ``50+40*tanh`` floored at 10 m with vanishing gradient.
+    """
+    mld = CANON_MLD_M * torch.exp(raw[..., 0])
     mld = mld.clamp(MIN_LAYER_M, z_bot - 2.0 * MIN_LAYER_M)
-    d26 = mld + MIN_LAYER_M + F.softplus(raw[..., 1] + 1.5)
+    d26 = mld + MIN_LAYER_M + _GAP0 * torch.exp(raw[..., 1])
     d26 = d26.clamp_max(z_bot - MIN_LAYER_M)
-    stretch = 1.0 + 0.3 * torch.tanh(raw[..., 2] if raw.shape[-1] > 2 else raw[..., 1] * 0.0)
+    stretch_raw = raw[..., 2] if raw.shape[-1] > 2 else raw.new_zeros(raw.shape[:-1])
+    stretch = 1.0 + 0.3 * torch.tanh(stretch_raw)
     return mld, d26, stretch
+
+
+def warp_sigma_meters(raw: torch.Tensor, sigma: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """σ in metres: d(a e^x)/dx = a e^x. Clamp ignored in jac."""
+    mld = CANON_MLD_M * torch.exp(raw[..., 0])
+    gap = _GAP0 * torch.exp(raw[..., 1])
+    sig_mld = sigma[..., 0] * mld
+    sig_d26 = torch.sqrt(sig_mld ** 2 + (sigma[..., 1] * gap) ** 2)
+    return sig_mld, sig_d26
