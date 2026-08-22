@@ -1,0 +1,211 @@
+{
+  "eval": {
+    "HeaveFast": {
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_residual_fast/heave_fast_s42/model_best.pth",
+      "cache": "../data/cache/train_ready_3adcff404b0b.pkl",
+      "dataset_tag": "argo_v2",
+      "split": "test",
+      "n_samples": 623,
+      "loss": 6.606210534109541,
+      "latent_target_rmse": {
+        "note": "z-PCA targets unused; residual PCs live on the warped grid"
+      },
+      "raw_profile_rmse": {
+        "temperature": 0.5502828199016294,
+        "salinity": 0.09203438416940976
+      },
+      "decode": "heave_residual_fast",
+      "pca_target_rmse": null
+    },
+    "conv3": {
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_fast_conv3/heave_conv3_s42/model_best.pth",
+      "cache": "../data/cache/train_ready_heave_conv_3x3.pkl",
+      "dataset_tag": "argo_v2",
+      "split": "test",
+      "n_samples": 623,
+      "loss": 6.555376988926822,
+      "latent_target_rmse": {
+        "note": "z-PCA targets unused; residual PCs live on the warped grid"
+      },
+      "raw_profile_rmse": {
+        "temperature": 0.5709625479915055,
+        "salinity": 0.09312031409509337
+      },
+      "decode": "heave_residual_fast",
+      "pca_target_rmse": null
+    },
+    "ops": {
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_fast_ops/heave_ops_s42/model_best.pth",
+      "cache": "../data/cache/train_ready_heave_ops.pkl",
+      "dataset_tag": "argo_v2",
+      "split": "test",
+      "n_samples": 623,
+      "loss": 6.609328464367225,
+      "latent_target_rmse": {
+        "note": "z-PCA targets unused; residual PCs live on the warped grid"
+      },
+      "raw_profile_rmse": {
+        "temperature": 0.5493447616236679,
+        "salinity": 0.09243010229566877
+      },
+      "decode": "heave_residual_fast",
+      "pca_target_rmse": null
+    },
+    "bathy": {
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_fast_bathy/heave_bathy_s42/model_best.pth",
+      "cache": "../data/cache/train_ready_heave_bathy.pkl",
+      "dataset_tag": "argo_v2",
+      "split": "test",
+      "n_samples": 623,
+      "loss": 6.776928067398684,
+      "latent_target_rmse": {
+        "note": "z-PCA targets unused; residual PCs live on the warped grid"
+      },
+      "raw_profile_rmse": {
+        "temperature": 0.5842122823888065,
+        "salinity": 0.09578748272045312
+      },
+      "decode": "heave_residual_fast",
+      "pca_target_rmse": null
+    },
+    "bathy_wind": {
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_fast_bathy_wind/heave_bathy_wind_s42/model_best.pth",
+      "cache": "../data/cache/train_ready_heave_bathy_wind.pkl",
+      "dataset_tag": "argo_v2",
+      "split": "test",
+      "n_samples": 623,
+      "loss": 6.532628099187419,
+      "latent_target_rmse": {
+        "note": "z-PCA targets unused; residual PCs live on the warped grid"
+      },
+      "raw_profile_rmse": {
+        "temperature": 0.5608049770563097,
+        "salinity": 0.09285968580195353
+      },
+      "decode": "heave_residual_fast",
+      "pca_target_rmse": null
+    }
+  },
+  "physical": {
+    "HeaveFast": {
+      "D26_rmse": 18.4581734733566,
+      "mld_rmse": 33.25071953536452,
+      "ts_rmse": {
+        "T": {
+          "0-50": 1.1216622059066792,
+          "50-200": 1.174108215522339,
+          "200-800": 0.653404461287522,
+          ">800": 0.13962515720416319
+        },
+        "S": {
+          "0-50": 0.3189225937845829,
+          "50-200": 0.17560011124203773,
+          "200-800": 0.09533990169019188,
+          ">800": 0.00950060729263561
+        }
+      },
+      "evalphys": {
+        "static_stability_pred": {
+          "violation_rate_profile": 0.9919743178170144,
+          "violation_rate_level": 0.00822008204030676
+        }
+      }
+    },
+    "conv3": {
+      "D26_rmse": 18.637348456091267,
+      "mld_rmse": 33.18838106701345,
+      "ts_rmse": {
+        "T": {
+          "0-50": 1.1445041577659802,
+          "50-200": 1.2136151479848076,
+          "200-800": 0.6851095692536256,
+          ">800": 0.13806825307648363
+        },
+        "S": {
+          "0-50": 0.3106907763602277,
+          "50-200": 0.17779744298817815,
+          "200-800": 0.09971728211956042,
+          ">800": 0.009104868859604416
+        }
+      },
+      "evalphys": {
+        "static_stability_pred": {
+          "violation_rate_profile": 0.9743178170144462,
+          "violation_rate_level": 0.010817727840199751
+        }
+      }
+    },
+    "ops": {
+      "D26_rmse": 18.27237860766967,
+      "mld_rmse": 33.39961541003269,
+      "ts_rmse": {
+        "T": {
+          "0-50": 1.1231422457967835,
+          "50-200": 1.184220633786946,
+          "200-800": 0.6485738899809748,
+          ">800": 0.13292651211670042
+        },
+        "S": {
+          "0-50": 0.3304294197375005,
+          "50-200": 0.177008046936805,
+          "200-800": 0.09255557430006685,
+          ">800": 0.009357383882544045
+        }
+      },
+      "evalphys": {
+        "static_stability_pred": {
+          "violation_rate_profile": 0.971107544141252,
+          "violation_rate_level": 0.00985999643303014
+        }
+      }
+    },
+    "bathy": {
+      "D26_rmse": 20.8002965831533,
+      "mld_rmse": 33.28902875693992,
+      "ts_rmse": {
+        "T": {
+          "0-50": 1.1182654564146144,
+          "50-200": 1.250949623543004,
+          "200-800": 0.7034722089974181,
+          ">800": 0.14313270787775353
+        },
+        "S": {
+          "0-50": 0.31471538452476827,
+          "50-200": 0.18869319966149747,
+          "200-800": 0.10117650664761857,
+          ">800": 0.009457950556272497
+        }
+      },
+      "evalphys": {
+        "static_stability_pred": {
+          "violation_rate_profile": 0.9887640449438202,
+          "violation_rate_level": 0.009720884608525058
+        }
+      }
+    },
+    "bathy_wind": {
+      "D26_rmse": 19.839100546253288,
+      "mld_rmse": 32.691138030145304,
+      "ts_rmse": {
+        "T": {
+          "0-50": 1.1539555203428402,
+          "50-200": 1.203035579474523,
+          "200-800": 0.6631434953452439,
+          ">800": 0.13736518150433383
+        },
+        "S": {
+          "0-50": 0.32460511494066674,
+          "50-200": 0.17749579724363757,
+          "200-800": 0.09525922881443984,
+          ">800": 0.009542537821052355
+        }
+      },
+      "evalphys": {
+        "static_stability_pred": {
+          "violation_rate_profile": 0.985553772070626,
+          "violation_rate_level": 0.009279472088460852
+        }
+      }
+    }
+  }
+}

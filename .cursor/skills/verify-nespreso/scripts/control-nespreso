@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Drive NeSPReSO CLI the way a user does. Never kill by process name.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+SKILL_DIR=$(cd "$HERE/.." && pwd)
+REPO=$(cd "$SKILL_DIR/../../.." && pwd)
+APP="$REPO/NeSPReSO2_onTemplate"
+ARTIFACTS="$SKILL_DIR/artifacts"
+CPUS="${NESPRO_VERIFY_CPUS:-8}"
+RUN_ID="${NESPRO_VERIFY_ID:-}"
+
+usage() {
+  cat <<'EOF'
+control-nespreso doctor
+control-nespreso cli [--gpu] [--cpus N] -- <command...>
+control-nespreso cleanup
+
+Env: NESPRO_VERIFY_ID (artifact folder), NESPRO_VERIFY_CPUS (default 8),
+     NESPRO_VERIFY_SRUN=0 to skip srun, NESPRESO_PY to pin the interpreter.
+EOF
+}
+
+find_python() {
+  if [[ -n "${NESPRESO_PY:-}" && -x "${NESPRESO_PY}" ]]; then
+    printf '%s\n' "$NESPRESO_PY"
+    return
+  fi
+  local p
+  for p in \
+    /conda/jmiranda/miniconda/envs/nespreso/bin/python3 \
+    "$HOME/miniconda3/envs/nespreso/bin/python3" \
+    "$HOME/miniconda/envs/nespreso/bin/python3"; do
+    if [[ -x "$p" ]]; then
+      printf '%s\n' "$p"
+      return
+    fi
+  done
+  if command -v conda >/dev/null 2>&1; then
+    conda run -n nespreso which python3
+    return
+  fi
+  return 1
+}
+
+ensure_run_id() {
+  if [[ -z "$RUN_ID" ]]; then
+    RUN_ID=$(date +%Y%m%d_%H%M%S)
+  fi
+  mkdir -p "$ARTIFACTS/$RUN_ID"
+}
+
+should_srun() {
+  [[ "${NESPRO_VERIFY_SRUN:-1}" != "0" ]] || return 1
+  [[ -z "${SLURM_JOB_ID:-}" ]] || return 1
+  command -v srun >/dev/null 2>&1
+}
+
+build_runner() {
+  local gpu="${1:-0}"
+  local py="$2"
+  RUNNER=()
+  if should_srun; then
+    RUNNER+=(srun --ntasks=1 --cpus-per-task="$CPUS")
+    if [[ "$gpu" == "1" ]]; then
+      RUNNER+=(--gres=gpu:1)
+    fi
+  fi
+  RUNNER+=("$py")
+}
+
+cmd_doctor() {
+  local py fail=0
+  echo "repo=$REPO"
+  echo "app=$APP"
+  if [[ ! -d "$APP" ]]; then
+    echo "fail app directory missing"
+    fail=1
+  else
+    echo "ok app"
+  fi
+  if [[ ! -f "$APP/selfcheck.py" ]]; then
+    echo "fail selfcheck.py missing"
+    fail=1
+  else
+    echo "ok selfcheck=$APP/selfcheck.py"
+  fi
+  if [[ ! -f "$APP/train.py" || ! -f "$APP/eval_run.py" ]]; then
+    echo "fail train.py or eval_run.py missing"
+    fail=1
+  else
+    echo "ok train+eval"
+  fi
+  py=$(find_python) || py=""
+  if [[ -z "$py" ]]; then
+    echo "fail nespreso python not found (conda env nespreso)"
+    fail=1
+  else
+    echo "ok python=$py"
+    if ! "$py" -c "import torch, numpy, sklearn; print('ok torch='+torch.__version__); print('ok cuda_build='+str(torch.cuda.is_available()))"; then
+      echo "fail torch/numpy/sklearn import"
+      fail=1
+    fi
+  fi
+  if command -v srun >/dev/null 2>&1; then
+    echo "ok srun=$(command -v srun)"
+  else
+    echo "warn srun missing; CLI will run without Slurm (OMP_NUM_THREADS=$CPUS)"
+  fi
+  if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    echo "ok slurm_job=$SLURM_JOB_ID (cli will not nest srun)"
+  fi
+  if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then
+    echo "ok git=$(git -C "$REPO" rev-parse --short HEAD) branch=$(git -C "$REPO" branch --show-current)"
+  else
+    echo "warn git unavailable"
+  fi
+  echo "ok cpus=$CPUS"
+  return "$fail"
+}
+
+cmd_cli() {
+  local gpu=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --gpu) gpu=1; shift ;;
+      --cpus) CPUS="$2"; shift 2 ;;
+      --) shift; break ;;
+      -h|--help) usage; return 0 ;;
+      *) echo "unknown flag: $1" >&2; usage >&2; return 2 ;;
+    esac
+  done
+  if [[ $# -eq 0 ]]; then
+    echo "control-nespreso cli: missing command after --" >&2
+    return 2
+  fi
+  local py
+  py=$(find_python)
+  ensure_run_id
+  local dir="$ARTIFACTS/$RUN_ID"
+  build_runner "$gpu" "$py"
+  {
+    echo "run_id=$RUN_ID"
+    echo "cwd=$APP"
+    echo "python=$py"
+    echo "runner=${RUNNER[*]}"
+    echo "gpu=$gpu"
+    echo "cpus=$CPUS"
+    echo "cmd=$*"
+    echo "git=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
+    date -u +'started=%Y-%m-%dT%H:%M:%SZ'
+  } >"$dir/meta.txt"
+  printf '%s\n' "$*" >"$dir/command.txt"
+
+  export OMP_NUM_THREADS="$CPUS"
+  set +e
+  (
+    cd "$APP"
+    "${RUNNER[@]}" "$@"
+  ) >"$dir/stdout.log" 2>"$dir/stderr.log" &
+  local pid=$!
+  echo "$pid" >"$dir/pid"
+  wait "$pid"
+  local rc=$?
+  set -e
+  echo "$rc" >"$dir/exit_code"
+  date -u +'finished=%Y-%m-%dT%H:%M:%SZ' >>"$dir/meta.txt"
+  echo "exit=$rc" | tee -a "$dir/meta.txt"
+  echo "evidence=$dir"
+  return "$rc"
+}
+
+cmd_cleanup() {
+  ensure_run_id
+  local dir="$ARTIFACTS/$RUN_ID"
+  local pidfile="$dir/pid"
+  if [[ ! -f "$pidfile" ]]; then
+    echo "no pid file at $pidfile (nothing started by this run_id)"
+    echo "evidence kept at $ARTIFACTS"
+    return 0
+  fi
+  local pid
+  pid=$(cat "$pidfile")
+  if [[ -z "$pid" ]]; then
+    echo "empty pid file"
+    return 0
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    local i=0
+    while kill -0 "$pid" 2>/dev/null && [[ $i -lt 20 ]]; do
+      sleep 1
+      i=$((i + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    echo "stopped pid=$pid"
+  else
+    echo "pid $pid already exited"
+  fi
+  echo "evidence kept at $dir"
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 2
+  fi
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    doctor) cmd_doctor "$@" ;;
+    cli) cmd_cli "$@" ;;
+    cleanup) cmd_cleanup "$@" ;;
+    -h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

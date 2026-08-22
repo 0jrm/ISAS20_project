@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from pathlib import Path
 from functools import reduce, partial
@@ -161,6 +162,33 @@ def validate_config(config):
         from evalphys.gsw_backend import set_config_backend
 
         set_config_backend(io["gsw_backend"])
+    hycom = io.get("hycom_interfaces")
+    if hycom:
+        assert os.path.isfile(hycom), f"missing io.hycom_interfaces: {hycom}"
+        try:
+            with open(hycom) as f:
+                packet = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                "io.hycom_interfaces must be the HYCOM interfaces JSON, not blkdat.input "
+                f"(blkdat has target densities, not z). failed to parse {hycom!r} as JSON: {exc}"
+            ) from exc
+        if not isinstance(packet, dict):
+            raise AssertionError(
+                "io.hycom_interfaces must be the HYCOM interfaces JSON, not blkdat.input"
+            )
+        if ("sigma" in packet or "nsigma" in packet) and "scorecard_reference_p_ifc" not in packet:
+            raise AssertionError(
+                "io.hycom_interfaces looks like blkdat (sigma targets without "
+                "scorecard_reference_p_ifc). Use the interfaces JSON, not blkdat.input."
+            )
+        assert packet.get("kdm") == 41, (
+            f"io.hycom_interfaces kdm must be 41, got {packet.get('kdm')!r}"
+        )
+        assert "scorecard_reference_p_ifc" in packet, (
+            "io.hycom_interfaces JSON must include scorecard_reference_p_ifc "
+            "(blkdat.input is target densities, not interfaces)"
+        )
 
 
 class ConfigParser:

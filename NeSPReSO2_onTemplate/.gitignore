@@ -101,7 +101,10 @@ ENV/
 .mypy_cache/
 
 # input data, saved log, checkpoints
-data/
+# Ignore data/* not data/ so !data/hycom can re-include the TSIS H packet.
+data/*
+!data/hycom/
+!data/hycom/**
 input/
 saved/
 !saved/README.md

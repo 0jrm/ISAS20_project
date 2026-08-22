@@ -139,6 +139,11 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
     arch = config["arch"]
     arch_args = arch.setdefault("args", {})
 
+    if io_cfg.get("pin_arch_dims"):
+        expected_dim = int(arch_args["input_dim"])
+        arch_args["output_dim"] = sum(config["outputs"].values())
+        return expected_dim
+
     if l3_cfg.get("enabled"):
         expected_dim = compute_l3_input_dim(input_params, l3_cfg)
         arch_args["n_enc"] = count_encoding_dims(input_params)
@@ -162,6 +167,7 @@ def sync_arch_with_io(config: Mapping[str, Any]) -> int:
         "PatchConvMLP",
         "PatchMaskConvMLP",
         "HeaveResidual",
+        "HeaveResidualFast",
         "LatentProfileDecoder",
         "ProfileDirect",
     ):

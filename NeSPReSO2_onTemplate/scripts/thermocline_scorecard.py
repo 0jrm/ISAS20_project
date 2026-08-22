@@ -31,11 +31,17 @@ from evalphys.metrics import (
     ts_rmse_by_band,
 )
 from model.warp import unwarp_from_canonical, warp_to_canonical
+from preproc.h_operator import apply_H, load_interfaces, p_ifc_for_cast
 
 A_CRPS = (
     _ROOT
     / "saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s42_s2/p5_A_CRPS_v2_s42_s2/model_best.pth"
 )
+HEAVE_FAST = (
+    _ROOT / "saved/models/NeSPReSO2_ARGO_GoM_heave_residual_fast/heave_fast_s42/model_best.pth"
+)
+HEAVE_FAST_CFG = _ROOT / "config/argo/config_argo_heave_residual_fast.json"
+DEFAULT_INTERFACES = _ROOT / "data/hycom/interfaces_20240105_18Z.json"
 B_DET = _ROOT / "saved/phase5_matrix/B_det_v2"
 REPORT_MD = _REPO / "reports" / "thermocline_scorecard.md"
 REPORT_JSON = _REPO / "reports" / "thermocline_scorecard.json"
@@ -214,9 +220,12 @@ def _model_inputs(bundle, ckcfg):
     cache = bundle["cache"]
     idx = bundle["idx"]
     ip = ckcfg.get("input_params") or cache.get("input_params") or {}
-    expected = compute_input_dim(
-        ip, int(cache.get("spatial_pad", 0)), int(cache.get("temporal_pad", 0))
-    )
+    if (ckcfg.get("io") or {}).get("pin_arch_dims"):
+        expected = int(ckcfg["arch"]["args"]["input_dim"])
+    else:
+        expected = compute_input_dim(
+            ip, int(cache.get("spatial_pad", 0)), int(cache.get("temporal_pad", 0))
+        )
     x = inject_enso_columns(
         cache["inputs"][idx],
         cache["JULD"][idx],
@@ -230,7 +239,7 @@ def _model_inputs(bundle, ckcfg):
 
 def _decode_heave_ts(mu, ckcfg, bundle):
     from base.split_utils import build_split_indices
-    from model.loss import HeaveResidualLoss
+    from model.loss import HeaveResidualFastLoss, HeaveResidualLoss
 
     cache = bundle["cache"]
     n = cache["LAT"].shape[0]
@@ -241,7 +250,9 @@ def _decode_heave_ts(mu, ckcfg, bundle):
     )["train"]
     import torch
 
-    loss = HeaveResidualLoss(
+    loss_cfg = ckcfg.get("loss_config") or {"mode": "heave_residual"}
+    loss_cls = HeaveResidualFastLoss if loss_cfg.get("mode") == "heave_residual_fast" else HeaveResidualLoss
+    loss = loss_cls(
         outputs=ckcfg["outputs"],
         device=torch.device("cpu"),
         true_profiles=cache["profiles"],
@@ -250,7 +261,7 @@ def _decode_heave_ts(mu, ckcfg, bundle):
         lon=cache["LON"],
         train_idx=train_idx,
         clim_profiles=cache.get("clim_profiles"),
-        loss_config=ckcfg.get("loss_config") or {"mode": "heave_residual"},
+        loss_config=loss_cfg,
     )
     T, S = loss.physical_ts(torch.tensor(mu, dtype=torch.float32), torch.tensor(bundle["idx"]))
     return T.detach().numpy(), S.detach().numpy()
@@ -287,7 +298,7 @@ def _load_ckpt_pred(ckpt: Path, bundle):
         n_z = int(np.asarray(bundle["T_true"]).shape[1])
         if out.shape[-1] == 2 * n_z:
             return out[:, :n_z], out[:, n_z:]
-        if arch.get("type") == "HeaveResidual" or "warp" in outs:
+        if arch.get("type") in ("HeaveResidual", "HeaveResidualFast") or "warp" in outs:
             return _decode_heave_ts(out, ckcfg, bundle)
         T, S = _decode_pcs_to_ts(out, {"outputs": outs}, bundle["cache"])
         return T, S
@@ -296,10 +307,50 @@ def _load_ckpt_pred(ckpt: Path, bundle):
         return None
 
 
-def _hycom_note(path: str | None):
-    if path and Path(path).is_file():
-        return {"status": "present", "path": path}
-    return {"status": "skipped", "reason": "no HYCOM 41-layer interface file (io.hycom_interfaces)"}
+def _remap_ts(packet, z, T, S, lat, lon):
+    n = int(np.asarray(T).shape[0])
+    kdm = int(packet["kdm"])
+    Ht = np.full((n, kdm), np.nan, dtype=np.float64)
+    Hs = np.full((n, kdm), np.nan, dtype=np.float64)
+    for i in range(n):
+        p_ifc, _, _ = p_ifc_for_cast(packet, float(lat[i]), float(lon[i]))
+        Ht[i], Hs[i] = apply_H(z, T[i], S[i], p_ifc)
+    zmid = np.asarray(packet.get("scorecard_reference_zmid"), dtype=np.float64)
+    if zmid.size != kdm:
+        pref = np.asarray(packet["scorecard_reference_p_ifc"], dtype=np.float64)
+        zmid = 0.5 * (pref[:-1] + pref[1:])
+    return Ht, Hs, zmid
+
+
+def _layer_rmse(pred, true):
+    err = np.asarray(pred, dtype=np.float64) - np.asarray(true, dtype=np.float64)
+    n = np.isfinite(err).sum(axis=0).astype(int)
+    rmse = np.full(err.shape[1], np.nan, dtype=np.float64)
+    ok = n > 0
+    sse = np.nansum(err ** 2, axis=0)
+    rmse[ok] = np.sqrt(sse[ok] / n[ok])
+    return rmse, n
+
+
+def _hycom_note(path: str | None, decoded=None):
+    p = Path(path) if path else DEFAULT_INTERFACES
+    if not p.is_file():
+        return {"status": "skipped", "reason": f"no HYCOM 41-layer interface file ({p})"}
+    packet = load_interfaces(p)
+    out = {"status": "ok", "path": str(p), "h_kind": "reference", "models": {}}
+    for name, (Tp, Sp, Tt, St, z, lat, lon) in (decoded or {}).items():
+        Ht_p, Hs_p, zmid = _remap_ts(packet, z, Tp, Sp, lat, lon)
+        Ht_t, Hs_t, _ = _remap_ts(packet, z, Tt, St, lat, lon)
+        rmse_t, n_t = _layer_rmse(Ht_p, Ht_t)
+        rmse_s, n_s = _layer_rmse(Hs_p, Hs_t)
+        out["models"][name] = {
+            "rmse_T": rmse_t.tolist(),
+            "rmse_S": rmse_s.tolist(),
+            "zmid_m": zmid.tolist(),
+            "n": [int(x) for x in n_t],
+            "n_S": [int(x) for x in n_s],
+        }
+    return out
 
 
 def main(argv=None) -> int:
@@ -312,12 +363,17 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     models = {}
+    decoded = {}
     bundle, err = _try_real_bundle(Path(args.config))
     if bundle is None:
         syn = _synthetic()
         models["heave_shift_proxy"] = _score_pair(
             syn["T_pred"], syn["S_pred"], syn["T_true"], syn["S_true"],
             syn["z"], syn["lat"], syn["lon"], syn["sla"], label="synthetic_heave",
+        )
+        decoded["heave_shift_proxy"] = (
+            syn["T_pred"], syn["S_pred"], syn["T_true"], syn["S_true"],
+            syn["z"], syn["lat"], syn["lon"],
         )
         T, S, z, lat, lon, sla = syn["T_true"], syn["S_true"], syn["z"], syn["lat"], syn["lon"], syn["sla"]
         source = f"synthetic ({err})"
@@ -329,11 +385,28 @@ def main(argv=None) -> int:
         a_pred = _load_ckpt_pred(A_CRPS, bundle)
         if a_pred is not None:
             models["A_CRPS"] = _score_pair(a_pred[0], a_pred[1], T, S, z, lat, lon, sla, "A_CRPS")
+            decoded["A_CRPS"] = (a_pred[0], a_pred[1], T, S, z, lat, lon)
+        heave_skip = set()
+        if HEAVE_FAST.is_file():
+            h_bundle, _h_err = _try_real_bundle(HEAVE_FAST_CFG)
+            if h_bundle is not None:
+                h_pred = _load_ckpt_pred(HEAVE_FAST, h_bundle)
+                if h_pred is not None:
+                    ht, hs = h_bundle["T_true"], h_bundle["S_true"]
+                    hz, hlat, hlon, hsla = h_bundle["z"], h_bundle["lat"], h_bundle["lon"], h_bundle["sla"]
+                    models["HeaveFast"] = _score_pair(
+                        h_pred[0], h_pred[1], ht, hs, hz, hlat, hlon, hsla, "HeaveFast"
+                    )
+                    decoded["HeaveFast"] = (h_pred[0], h_pred[1], ht, hs, hz, hlat, hlon)
+                    heave_skip.add(str(HEAVE_FAST.resolve()))
         for i, hp in enumerate(args.heave_ckpt):
+            if str(Path(hp).resolve()) in heave_skip:
+                continue
             h_pred = _load_ckpt_pred(Path(hp), bundle)
             key = "Heave_best" if i == 0 else f"Heave_{i}"
             if h_pred is not None:
                 models[key] = _score_pair(h_pred[0], h_pred[1], T, S, z, lat, lon, sla, key)
+                decoded[key] = (h_pred[0], h_pred[1], T, S, z, lat, lon)
         for item in args.ckpt:
             if "=" in item:
                 key, hp = item.split("=", 1)
@@ -342,11 +415,13 @@ def main(argv=None) -> int:
             pred = _load_ckpt_pred(Path(hp), bundle)
             if pred is not None:
                 models[key] = _score_pair(pred[0], pred[1], T, S, z, lat, lon, sla, key)
+                decoded[key] = (pred[0], pred[1], T, S, z, lat, lon)
         b_ckpt = next(B_DET.rglob("model_best.pth"), None) if B_DET.is_dir() else None
         if b_ckpt:
             b_pred = _load_ckpt_pred(b_ckpt, bundle)
             if b_pred is not None:
                 models["B_det"] = _score_pair(b_pred[0], b_pred[1], T, S, z, lat, lon, sla, "B_det")
+                decoded["B_det"] = (b_pred[0], b_pred[1], T, S, z, lat, lon)
         try:
             from scripts.isop_modas_baseline import design_matrix, fit_ridge, predict
             from model.joint_eof import reconstruct_joint_eof
@@ -373,6 +448,13 @@ def main(argv=None) -> int:
         "gem_sla": _score_pair(t_gem, s_gem, T, S, z, lat, lon, sla, "gem"),
     }
 
+    iface = None
+    try:
+        from base.util import read_json
+        iface = (read_json(args.config).get("io") or {}).get("hycom_interfaces")
+    except Exception:
+        iface = None
+    hycom = _hycom_note(iface, decoded)
     payload = {
         "evalphys_version": VERSION,
         "source": source,
@@ -380,18 +462,29 @@ def main(argv=None) -> int:
         "lc_box": {"lat": LC_LAT_RANGE, "lon": LC_LON_RANGE, "steric_gate_cm": STERIC_LC_RMS_CM},
         "models": models,
         "t1_ceilings": ceilings,
-        "hycom_layer_mean": _hycom_note(None),
+        "hycom_layer_mean": hycom,
         "oni_roni": "CPC ONI/RONI under data/indices/; spliced when input_params.oni/roni",
     }
     Path(args.out_json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out_json).write_text(json.dumps(payload, indent=2, default=str) + "\n")
 
+    if hycom.get("status") == "ok":
+        hycom_line = (
+            "LC steric gate: 2 cm RMS in 24–28°N, 88–84°W. "
+            "HYCOM 41-layer means use reference-H from the 2024-01-05 18Z drifted GOMb0.04 "
+            f"interfaces (`{hycom.get('path')}`), not live thknss."
+        )
+    else:
+        hycom_line = (
+            "LC steric gate: 2 cm RMS in 24–28°N, 88–84°W. "
+            f"HYCOM 41-layer means: skipped ({hycom.get('reason')})."
+        )
     lines = [
         "# Thermocline scorecard",
         "",
         f"evalphys **{VERSION}**. Source: `{source}`. {idx_note}.",
         "",
-        "LC steric gate: 2 cm RMS in 24–28°N, 88–84°W. HYCOM 41-layer means: skipped (no interface file).",
+        hycom_line,
         "",
         "## Models",
         "",
@@ -412,6 +505,22 @@ def main(argv=None) -> int:
             f"N² profile viol@1e-8 {n2.get('violation_rate_profile')}; "
             f"LC steric RMS {st.get('rms_cm_lc')} cm pass={st.get('lc_pass')}"
         )
+    hycom_models = hycom.get("models") or {}
+    if hycom_models:
+        lines += ["", "## HYCOM 41-layer RMSE after H (vs Argo)", ""]
+        for name, row in hycom_models.items():
+            zmid = np.asarray(row["zmid_m"], dtype=np.float64)
+            rt = np.asarray(row["rmse_T"], dtype=np.float64)
+            rs = np.asarray(row["rmse_S"], dtype=np.float64)
+            tc = (zmid >= 50.0) & (zmid <= 200.0)
+            deep = zmid > 800.0
+            t_tc = float(np.nanmean(rt[tc])) if tc.any() else float("nan")
+            s_tc = float(np.nanmean(rs[tc])) if tc.any() else float("nan")
+            t_deep = float(np.nanmean(rt[deep])) if deep.any() else float("nan")
+            lines.append(
+                f"- **{name}**: 50–200 m zmid mean RMSE T {t_tc:.3f} °C, S {s_tc:.3f} psu; "
+                f"zmid>800 T {t_deep:.3f} °C. Full 41-layer vectors are in the JSON."
+            )
     lines += ["", "## T1 reconstruction ceilings (truth through the representation)", ""]
     for name, row in ceilings.items():
         h = row["heave_vs_shape"]

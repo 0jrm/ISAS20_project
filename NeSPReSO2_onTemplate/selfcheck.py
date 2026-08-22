@@ -1963,6 +1963,62 @@ def test_heave_fast_config_validates():
     validate_config(cfg)
 
 
+def test_heave_ablation_pin_arch_dims():
+    from copy import deepcopy
+
+    from base.util import read_json
+    from parse_config import validate_config
+    from preproc.l3_input import sync_arch_with_io
+
+    for name, dim, n_sat, patch in (
+        ("config_argo_heave_fast_conv3.json", 92, 3, [3, 3, 3, 3]),
+        ("config_argo_heave_fast_ops.json", 30, 19, None),
+        ("config_argo_heave_fast_bathy.json", 12, 1, None),
+        ("config_argo_heave_fast_bathy_wind.json", 15, 4, None),
+    ):
+        cfg = read_json(f"config/argo/{name}")
+        validate_config(cfg)
+        before = deepcopy(cfg["arch"]["args"])
+        cfg["io"]["spatial_pad"] = 99
+        cfg["io"]["temporal_pad"] = 99
+        got = sync_arch_with_io(cfg)
+        assert got == dim
+        aa = cfg["arch"]["args"]
+        assert aa["n_enc"] == before["n_enc"] == 11
+        assert aa["n_sat"] == before["n_sat"] == n_sat
+        assert aa["patch_shape"] == before["patch_shape"] == patch
+        assert aa["input_dim"] == before["input_dim"] == dim
+
+
+def test_heave_conv_patch_layout():
+    from preproc.export_heave_ablation_cache import (
+        CHANNELS,
+        DLAT,
+        DLON,
+        T_OFF,
+        fill_nan_from_center,
+        flatten_cthw,
+    )
+
+    assert CHANNELS == ("sss", "sst", "ssh")
+    assert list(DLAT) == [-1.0, 0.0, 1.0]
+    assert list(DLON) == [-1.0, 0.0, 1.0]
+    assert list(T_OFF) == [-2, -1, 0]
+    vol = np.arange(81, dtype=np.float32).reshape(1, 3, 3, 3, 3)
+    vol[0, 0, 0, 0, 0] = np.nan
+    center = float(vol[0, 0, 0, 1, 1])
+    filled = fill_nan_from_center(vol)
+    assert filled[0, 0, 0, 0, 0] == center
+    vol2 = vol.copy()
+    vol2[0, 1, 1, 1, 1] = np.nan
+    vol2[0, 1, 1, 0, 2] = np.nan
+    filled2 = fill_nan_from_center(vol2)
+    assert filled2[0, 1, 1, 0, 2] == 0.0
+    flat = flatten_cthw(filled)
+    assert flat.shape == (1, 81)
+    assert flat[0, 1 * 27 + 2 * 9 + 1 * 3 + 2] == filled[0, 1, 2, 1, 2]
+
+
 def test_profile_direct_forward_loss():
     from model.loss import ProfileDirectLoss
     from model.profile_direct import LatentProfileDecoder, ProfileDirect, depth_filter
@@ -2015,6 +2071,75 @@ def test_thermocline_scorecard_synthetic():
     assert t_pca.shape == syn["T_true"].shape
     t_w, s_w = _warp_clim_ceiling(syn["T_true"], syn["S_true"], syn["z"], syn["lat"], syn["lon"])
     assert t_w.shape == syn["T_true"].shape
+
+
+def test_h_operator_layer_sample():
+    from preproc.h_operator import apply_H, layer_sample
+
+    z = np.arange(0.0, 20.0, 1.0)
+    t = np.full_like(z, 20.0)
+    s = np.full_like(z, 36.0)
+    p_ifc = np.array([0.0, 5.0, 15.0, 20.0])
+    th, sh = apply_H(z, t, s, p_ifc)
+    assert np.allclose(th, 20.0)
+    assert np.allclose(sh, 36.0)
+
+    t_jump = t.copy()
+    t_jump[10] = 23.0
+    th_jump = layer_sample(z, t_jump, p_ifc)
+    assert abs(t_jump[10] - 20.0) == 3.0
+    assert abs(th_jump[1] - 20.0) < abs(t_jump[10] - 20.0)
+
+    z_empty = np.array([0.0, 5.0, 10.0])
+    t_empty = np.array([0.0, 5.0, 10.0])
+    p_empty = np.array([0.0, 2.0, 4.0, 10.0])
+    out = layer_sample(z_empty, t_empty, p_empty)
+    assert abs(out[1] - 3.0) < 1e-9
+
+
+def test_h_operator_rejects_blkdat():
+    import tempfile
+    from copy import deepcopy
+    from pathlib import Path
+
+    from base.util import read_json
+    from parse_config import validate_config
+
+    cfg = deepcopy(read_json("config/argo/config_argo_heave_residual_fast.json"))
+    with tempfile.TemporaryDirectory() as td:
+        blk = Path(td) / "blkdat.GOMb0.04.input"
+        blk.write_text("kdm = 41\nnsigma = 14\nsigma\n27.00\n")
+        cfg["io"]["hycom_interfaces"] = str(blk)
+        try:
+            validate_config(cfg)
+        except AssertionError as exc:
+            msg = str(exc).lower()
+            assert "blkdat" in msg
+            assert "interfaces" in msg
+        else:
+            raise AssertionError("blkdat must fail")
+    cfg["io"]["hycom_interfaces"] = str(
+        Path(__file__).resolve().parent / "data/hycom/interfaces_20240105_18Z.json"
+    )
+    validate_config(cfg)
+
+
+def test_sigma_o_floor():
+    from scripts.export_sigma_o import CANDIDATES, FLOOR_S, FLOOR_T, floor_sigma
+
+    rmse_t = np.array([0.20, 0.10, 0.01])
+    rmse_s = np.array([0.03, 0.01, 0.01])
+    sig_t, sig_s, hit_t, hit_s = floor_sigma(rmse_t, rmse_s)
+    assert abs(sig_t[0] - 0.20) < 1e-12
+    assert abs(sig_t[2] - FLOOR_T) < 1e-12
+    assert abs(sig_s[1] - FLOOR_S) < 1e-12
+    assert abs(sig_t[2] - 0.013) > 1e-6
+    assert hit_t[2]
+    assert hit_s[1] and hit_s[2]
+    assert not hit_t[0]
+    names = [c["name"] for c in CANDIDATES]
+    assert names[:2] == ["A_CRPS", "HeaveFast"]
+    assert names[2:] == ["conv3", "ops", "bathy", "bathy_wind"]
 
 
 def test_density_spice_monotone_and_roundtrip():
@@ -2584,9 +2709,14 @@ TESTS = (
     test_heave_config_validates,
     test_heave_fast_matches_original,
     test_heave_fast_config_validates,
+    test_heave_ablation_pin_arch_dims,
+    test_heave_conv_patch_layout,
     test_profile_direct_forward_loss,
     test_profile_configs_validate,
     test_thermocline_scorecard_synthetic,
+    test_h_operator_layer_sample,
+    test_h_operator_rejects_blkdat,
+    test_sigma_o_floor,
     test_density_spice_monotone_and_roundtrip,
     test_prob_head_hetero_and_quantile,
     test_dacov_psd_and_mc,

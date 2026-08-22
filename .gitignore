@@ -43,3 +43,6 @@ data/*
 *_log.txt
 # but keep the shipped NeSPReSO base model
 !NeSPReSO2_onTemplate/base/model.pth
+
+# Verification transcripts (skill keeps these after cleanup)
+.cursor/skills/verify-nespreso/artifacts/

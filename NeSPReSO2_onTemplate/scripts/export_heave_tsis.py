@@ -17,7 +17,7 @@ if str(_ROOT) not in sys.path:
 
 from evalphys.constants import STERIC_LC_RMS_CM
 from evalphys.metrics import steric_vs_adt
-from model.heave import HeaveResidual, decode_warp, warp_sigma_meters
+from model.heave import decode_warp, warp_sigma_meters
 from model.prob_head import split_mu_sigma, softplus_sigma
 
 
@@ -43,9 +43,11 @@ def main(argv=None) -> int:
     dl = NeSPReSODataLoader(**cfg["data_loader"]["args"])
     cache = dl.cache
 
+    import model.model as module_arch
+
     ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
-    arch = (ckpt.get("config") or cfg)["arch"]["args"]
-    model = HeaveResidual(**arch)
+    arch_cfg = (ckpt.get("config") or cfg)["arch"]
+    model = getattr(module_arch, arch_cfg["type"])(**arch_cfg["args"])
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
 
