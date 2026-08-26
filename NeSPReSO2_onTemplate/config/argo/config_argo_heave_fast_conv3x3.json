@@ -1,17 +1,17 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM_heave_fast_conv3",
+    "name": "NeSPReSO2_ARGO_GoM_heave_fast_conv3x3",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
         "type": "HeaveResidualFast",
         "args": {
-            "input_dim": 740,
+            "input_dim": 92,
             "output_dim": 35,
             "n_warp": 3,
             "dropout_prob": 0.2,
             "d_model": 128,
             "head_layers": [1024, 1024],
-            "patch_shape": [3, 3, 9, 9],
+            "patch_shape": [3, 3, 3, 3],
             "n_enc": 11,
             "n_sat": 3,
             "spatial_pool": false,
@@ -36,10 +36,10 @@
     "io": {
         "dataset_tag": "argo_v2",
         "cache_dir": "../data/cache",
-        "spatial_pad": 4,
+        "spatial_pad": 1,
         "temporal_pad": 2,
         "pin_arch_dims": true,
-        "cache_kind": "heave_conv",
+        "cache_kind": "heave_conv3",
         "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
         "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
         "v2_reload": false,
@@ -72,7 +72,7 @@
     "data_loader": {
         "type": "NeSPReSODataLoader",
         "args": {
-            "cache_path": "../data/cache/train_ready_heave_conv_1deg.pkl",
+            "cache_path": "../data/cache/train_ready_heave_conv_3x3_fix.pkl",
             "batch_size": 512,
             "shuffle": true,
             "split_mode": "chronological",

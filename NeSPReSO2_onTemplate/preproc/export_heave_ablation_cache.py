@@ -16,8 +16,11 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 CHANNELS = ("sss", "sst", "ssh")
-DLAT = np.array([-1.0, 0.0, 1.0])
-DLON = np.array([-1.0, 0.0, 1.0])
+# SSH-native 0.25° steps covering ±1° (9×9). SST/SSS bilinear on the same lattice.
+DLAT = np.array([-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0])
+DLON = np.array([-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0])
+DLAT_3 = np.array([-1.0, 0.0, 1.0])
+DLON_3 = np.array([-1.0, 0.0, 1.0])
 T_OFF = np.array([-2, -1, 0], dtype=np.int64)
 OP_NAMES = (
     "sst.grad_x@local",
@@ -47,25 +50,66 @@ CUBE_PATH = _ROOT / "data/cube/gom_cube.zarr"
 V2_SRC = "/unity/g2/jmiranda/v2-nespreso/src"
 DEFAULT_BASE = _REPO / "data/cache/train_ready_3adcff404b0b.pkl"
 KIND_OUT = {
-    "conv": "train_ready_heave_conv_3x3.pkl",
+    "conv": "train_ready_heave_conv_1deg.pkl",
+    "conv3": "train_ready_heave_conv_3x3_fix.pkl",
     "ops": "train_ready_heave_ops.pkl",
     "bathy": "train_ready_heave_bathy.pkl",
     "bathy_wind": "train_ready_heave_bathy_wind.pkl",
 }
 KIND_META = {
-    "conv": {"pad": (1, 2), "shape": [3, 3, 3, 3], "cache_kind": "heave_conv"},
+    "conv": {"pad": (4, 2), "shape": [3, 3, 9, 9], "cache_kind": "heave_conv"},
+    "conv3": {"pad": (1, 2), "shape": [3, 3, 3, 3], "cache_kind": "heave_conv3"},
     "ops": {"pad": (0, 0), "shape": None, "cache_kind": "heave_ops"},
     "bathy": {"pad": (0, 0), "shape": None, "cache_kind": "heave_bathy"},
     "bathy_wind": {"pad": (0, 0), "shape": None, "cache_kind": "heave_bathy_wind"},
+}
+KIND_STENCIL = {
+    "conv": (DLAT, DLON, T_OFF),
+    "conv3": (DLAT_3, DLON_3, T_OFF),
 }
 
 
 def fill_nan_from_center(vol: np.ndarray) -> np.ndarray:
     """NaN at (c,t,h,w) copies the same (c,t) center pixel; remaining NaN → 0."""
     vol = np.asarray(vol, dtype=np.float32)
-    center = vol[:, :, :, 1:2, 1:2]
+    cy, cx = vol.shape[-2] // 2, vol.shape[-1] // 2
+    center = vol[:, :, :, cy : cy + 1, cx : cx + 1]
     filled = np.where(np.isfinite(vol), vol, center)
     return np.nan_to_num(filled, nan=0.0).astype(np.float32)
+
+
+def make_center_relative(vol: np.ndarray) -> np.ndarray:
+    """Subtract the (c,t) center pixel. Center becomes 0; n_enc already has the absolute sat."""
+    vol = np.asarray(vol, dtype=np.float32)
+    cy, cx = vol.shape[-2] // 2, vol.shape[-1] // 2
+    return vol - vol[:, :, :, cy : cy + 1, cx : cx + 1]
+
+
+def channel_train_sigma(vol: np.ndarray, juld: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-channel train μ/σ of the absolute t0 center. Same recipe as the point sat, cube source.
+
+    Broadcast these 3 σ over T×H×W. Do not fit 729 column-wise stats — a 1°C neighbor
+    must stay 1°C after scaling. Point-model 9-d sat is already z-scored and a different
+    product, so those three numbers are not reusable on the cube patch.
+    """
+    from base.split_utils import build_split_indices
+
+    vol = np.asarray(vol, dtype=np.float32)
+    n, c, _, h, w = vol.shape
+    cy, cx = h // 2, w // 2
+    x = vol[:, :, -1, cy, cx]
+    splits = build_split_indices(
+        n,
+        juld,
+        {"split_mode": "chronological", "train_frac": 0.7, "val_frac": 0.15, "test_frac": 0.15},
+        dataset_tag="argo_v2",
+        v2_src=V2_SRC,
+    )
+    tr = np.asarray(splits["train"], dtype=int)
+    mu = np.nanmean(x[tr], axis=0).astype(np.float32)
+    sd = np.nanstd(x[tr], axis=0).astype(np.float32)
+    sd = np.where(sd < 1e-6, 1.0, sd).astype(np.float32)
+    return mu, sd
 
 
 def flatten_cthw(vol: np.ndarray) -> np.ndarray:
@@ -94,23 +138,35 @@ def _t0_indices(dates: np.ndarray) -> np.ndarray:
     return time_indices_of_days(days)
 
 
-def sample_conv_patch(lat: np.ndarray, lon: np.ndarray, dates: np.ndarray, cube_path: Path) -> np.ndarray:
+def sample_conv_patch(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    dates: np.ndarray,
+    cube_path: Path,
+    dlat: np.ndarray | None = None,
+    dlon: np.ndarray | None = None,
+    t_off: np.ndarray | None = None,
+) -> np.ndarray:
     from preproc.features.sampler import CubeProvider, MissingCubePlaneError, sample_plane
 
+    dlat = DLAT if dlat is None else np.asarray(dlat, dtype=np.float64)
+    dlon = DLON if dlon is None else np.asarray(dlon, dtype=np.float64)
+    t_off = T_OFF if t_off is None else np.asarray(t_off, dtype=np.int64)
     n = len(lat)
     provider = CubeProvider(cube_path)
     t0 = _t0_indices(dates)
     n_t = int(np.asarray(provider.root["coords/time"]).shape[0])
-    print(f"[export] conv unique t0={len(np.unique(t0))} n={n}", file=sys.stderr, flush=True)
+    print(f"[export] conv unique t0={len(np.unique(t0))} n={n} stencil={len(dlat)}x{len(dlon)}x{len(t_off)}", file=sys.stderr, flush=True)
+    n_h, n_w = len(dlat), len(dlon)
     offset_w = [
-        {ch: provider.weights_for(ch, lat + dlat, lon + dlon) for ch in CHANNELS}
-        for dlat in DLAT
-        for dlon in DLON
+        {ch: provider.weights_for(ch, lat + dla, lon + dlo) for ch in CHANNELS}
+        for dla in dlat
+        for dlo in dlon
     ]
-    out = np.full((n, 3, 3, 3, 3), np.nan, dtype=np.float32)
+    out = np.full((n, 3, len(t_off), n_h, n_w), np.nan, dtype=np.float32)
     for t0_idx in np.unique(t0):
         rows = np.flatnonzero(t0 == t0_idx)
-        for it, dt in enumerate(T_OFF):
+        for it, dt in enumerate(t_off):
             t_idx = int(np.clip(int(t0_idx) + int(dt), 0, n_t - 1))
             for ic, ch in enumerate(CHANNELS):
                 try:
@@ -118,12 +174,12 @@ def sample_conv_patch(lat: np.ndarray, lon: np.ndarray, dates: np.ndarray, cube_
                 except MissingCubePlaneError:
                     continue
                 k = 0
-                for ih in range(3):
-                    for iw in range(3):
+                for ih in range(n_h):
+                    for iw in range(n_w):
                         v, _m = sample_plane(offset_w[k][ch], plane)
                         out[rows, ic, it, ih, iw] = v[rows]
                         k += 1
-    return flatten_cthw(fill_nan_from_center(out))
+    return out
 
 
 def sample_bathy_center(h5_path: Path, n: int) -> np.ndarray:
@@ -212,8 +268,9 @@ def extras_for(kind: str, cache: dict) -> np.ndarray:
     lat = np.asarray(cache["LAT"], dtype=np.float64).reshape(-1)[:n]
     lon = np.asarray(cache["LON"], dtype=np.float64).reshape(-1)[:n]
     dates = _dates_from_juld(cache["JULD"])
-    if kind == "conv":
-        return sample_conv_patch(lat, lon, dates, CUBE_PATH)
+    if kind in KIND_STENCIL:
+        dlat, dlon, t_off = KIND_STENCIL[kind]
+        return sample_conv_patch(lat, lon, dates, CUBE_PATH, dlat=dlat, dlon=dlon, t_off=t_off)
     if kind == "ops":
         return ops_from_cube_cache(cache["JULD"], OPS_CACHE)
     if kind == "bathy":
@@ -249,7 +306,14 @@ def write_kind(kind: str, base_path: Path, out_path: Path) -> Path:
         cache = pickle.load(f)
     extras = extras_for(kind, cache)
     extra_mu = extra_sd = None
-    if kind in ("bathy", "bathy_wind"):
+    if kind in KIND_STENCIL:
+        extra_mu, extra_sd = channel_train_sigma(extras, cache["JULD"])
+        extras = fill_nan_from_center(extras)
+        extras = make_center_relative(extras)
+        extras = np.nan_to_num(extras, nan=0.0)
+        extras = (extras / extra_sd.reshape(1, -1, 1, 1, 1)).astype(np.float32)
+        extras = flatten_cthw(extras)
+    elif kind in ("bathy", "bathy_wind"):
         extras, extra_mu, extra_sd = _zscore_train(extras, cache["JULD"])
     payload = dict(cache)
     payload["inputs"] = np.concatenate(
@@ -264,6 +328,8 @@ def write_kind(kind: str, base_path: Path, out_path: Path) -> Path:
     payload["sat_patch_shape"] = meta["shape"]
     payload["cache_kind"] = meta["cache_kind"]
     payload["dataset_tag"] = "argo_v2"
+    if kind in KIND_STENCIL:
+        payload["patch_norm"] = "center_rel_channel_train_std"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "wb") as f:
         pickle.dump(payload, f, protocol=4)
@@ -273,7 +339,7 @@ def write_kind(kind: str, base_path: Path, out_path: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="HeaveFast ablation caches from the 9-d v2 pickle")
     p.add_argument("--kind", choices=tuple(KIND_META))
-    p.add_argument("--all", action="store_true", help="write all four pickles next to --base")
+    p.add_argument("--all", action="store_true", help="write all kind pickles next to --base")
     p.add_argument("--base", type=Path, default=DEFAULT_BASE)
     p.add_argument("--out", type=Path, help="output pickle (required with --kind)")
     args = p.parse_args(argv)

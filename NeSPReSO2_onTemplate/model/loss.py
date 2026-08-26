@@ -33,6 +33,7 @@ VALID_LOSS_MODES = (
 )
 HEAVE_LOSS_MODES = ("heave_residual", "heave_residual_fast")
 VALID_PROB_MODES = ("mse", "crps", "nll", "quantile")
+VALID_CRPS_SPACES = ("pca", "physical")
 
 
 def output_slices(outputs: Mapping[str, int]) -> list[tuple[str, int, int]]:
@@ -556,6 +557,208 @@ class PCAHeteroLoss(nn.Module):
         raise ValueError(f"PCAHeteroLoss unsupported prob_mode={self.prob_mode!r}")
 
 
+class PCAHeteroPhysLoss(nn.Module):
+    """Hetero CRPS/NLL after linear PCA inverse (μ, diag σ in physical T/S).
+
+    Head still emits PC μ/σ. Decode uses registered sklearn ``components_``:
+    ``μ_x = μ_z @ V + mean``, ``σ_x = sqrt((σ_z²) @ (V²))``. Targets are
+    reconstructed PCs (v1 PCALoss), not raw Argo profiles.
+    """
+
+    def __init__(
+        self,
+        pca_models,
+        outputs,
+        device,
+        *,
+        profile_scales=None,
+        prob_mode: str = "crps",
+        nll_beta: float = 0.5,
+        sigma_min: float = 1e-3,
+        freeze_sigma: bool = False,
+        equal_var: bool = True,
+        band_equal: bool = True,
+        pc_crps_scale: float = 0.1,
+        pres_levels: np.ndarray | None = None,
+        val_ence: str = "temperature",
+    ):
+        super().__init__()
+        if prob_mode not in VALID_PROB_MODES:
+            raise ValueError(f"prob_mode must be one of {VALID_PROB_MODES}, got {prob_mode!r}")
+        if prob_mode == "quantile":
+            raise ValueError("PCAHeteroPhysLoss does not support quantile")
+        if val_ence not in ("temperature", "salinity", "concat"):
+            raise ValueError(f"val_ence must be temperature|salinity|concat, got {val_ence!r}")
+        self.outputs = OrderedDict(outputs)
+        self.output_order = list(outputs.keys())
+        self.slices = output_slices(outputs)
+        self.d = int(sum(outputs.values()))
+        self.prob_mode = str(prob_mode)
+        self.nll_beta = float(nll_beta)
+        self.sigma_min = float(sigma_min)
+        self.freeze_sigma = bool(freeze_sigma)
+        self.equal_var = bool(equal_var)
+        self.band_equal = bool(band_equal)
+        self.pc_crps_scale = float(pc_crps_scale)
+        self.val_ence = str(val_ence)
+        self.profile_scales = dict(DEFAULT_PROFILE_SCALES)
+        if profile_scales:
+            self.profile_scales.update(profile_scales)
+        dev = device or torch.device("cpu")
+        for name in self.output_order:
+            pca = pca_models[name]
+            self.register_buffer(
+                f"{name}_components",
+                torch.tensor(pca.components_, dtype=torch.float32, device=dev),
+            )
+            self.register_buffer(
+                f"{name}_mean",
+                torch.tensor(pca.mean_, dtype=torch.float32, device=dev).unsqueeze(0),
+            )
+            v2 = np.asarray(pca.components_, dtype=np.float32) ** 2
+            self.register_buffer(f"{name}_components_sq", torch.tensor(v2, dtype=torch.float32, device=dev))
+        if pres_levels is not None:
+            self.register_buffer(
+                "pres_levels",
+                torch.tensor(np.asarray(pres_levels, dtype=np.float32).reshape(-1), device=dev),
+            )
+        else:
+            self.pres_levels = None
+
+    def _components(self, name):
+        return getattr(self, f"{name}_components")
+
+    def _mean(self, name):
+        return getattr(self, f"{name}_mean")
+
+    def _components_sq(self, name):
+        return getattr(self, f"{name}_components_sq")
+
+    def decode_mu(self, pcs: torch.Tensor) -> dict[str, torch.Tensor]:
+        recon = {}
+        for name, start, end in self.slices:
+            recon[name] = torch_reconstruct_profile(
+                pcs[:, start:end], self._components(name), self._mean(name)
+            )
+        return recon
+
+    def decode_sigma(self, sigma_z: torch.Tensor) -> dict[str, torch.Tensor]:
+        out = {}
+        sz = torch.clamp(sigma_z, min=self.sigma_min)
+        for name, start, end in self.slices:
+            var = (sz[:, start:end] ** 2) @ self._components_sq(name)
+            out[name] = torch.sqrt(var.clamp_min(1e-12))
+        return out
+
+    def decode_targets(self, y_z: torch.Tensor) -> torch.Tensor:
+        recon = self.decode_mu(y_z)
+        return torch.cat([recon[name] for name in self.output_order], dim=-1)
+
+    def _mu_from_raw(self, mu_raw: torch.Tensor) -> torch.Tensor:
+        return self.decode_targets(mu_raw)
+
+    def _sigma_target_space(self, sigma_lat: torch.Tensor) -> torch.Tensor:
+        recon = self.decode_sigma(sigma_lat)
+        return torch.cat([recon[name] for name in self.output_order], dim=-1)
+
+    def _sigma_tot(self, sigma: torch.Tensor, indices=None) -> torch.Tensor:
+        return sigma
+
+    def ence_arrays(self, mu_cat: torch.Tensor, sigma_cat: torch.Tensor, y_cat: torch.Tensor):
+        """Slice concatenated physical (μ,σ,y) for val ENCE (temperature by default)."""
+        n_z = int(mu_cat.shape[-1] // max(1, len(self.output_order)))
+        if self.val_ence == "concat" or len(self.output_order) < 2:
+            return mu_cat, sigma_cat, y_cat
+        if self.val_ence not in self.output_order:
+            return mu_cat, sigma_cat, y_cat
+        i = self.output_order.index(self.val_ence)
+        sl = slice(i * n_z, (i + 1) * n_z)
+        return mu_cat[..., sl], sigma_cat[..., sl], y_cat[..., sl]
+
+    def _reduce_levels(self, level_loss: torch.Tensor) -> torch.Tensor:
+        """(B, n_z) → scalar. Band-equal = mean of evalphys band means."""
+        if (not self.band_equal) or self.pres_levels is None:
+            return level_loss.mean()
+        from evalphys.constants import DEPTH_BANDS
+
+        z = self.pres_levels.to(device=level_loss.device, dtype=level_loss.dtype)
+        terms = []
+        for lo, hi in DEPTH_BANDS:
+            if np.isfinite(hi):
+                m = (z >= lo) & (z < hi)
+            else:
+                m = z >= lo
+            if bool(m.any()):
+                terms.append(level_loss[:, m].mean())
+        if not terms:
+            return level_loss.mean()
+        return torch.stack(terms).mean()
+
+    def _mix_vars(self, terms: dict[str, torch.Tensor]) -> torch.Tensor:
+        if self.equal_var:
+            stacked = torch.stack([terms[n] for n in self.output_order])
+            return stacked.mean()
+        total = terms[self.output_order[0]].new_tensor(0.0)
+        for name in self.output_order:
+            total = total + terms[name] / self.profile_scales.get(name, 1.0)
+        return total
+
+    def forward(self, output, target, indices=None, inputs=None):
+        from evalphys.calibration import gaussian_crps_torch
+        from model.prob_head import beta_nll, split_mu_sigma
+
+        mu_z, sigma_lat = split_mu_sigma(output, self.d)
+        mu_x = self.decode_mu(mu_z)
+        y_x = self.decode_mu(target)
+        if self.prob_mode == "mse" or self.freeze_sigma:
+            phys = {}
+            for name in self.output_order:
+                phys[name] = self._reduce_levels((mu_x[name] - y_x[name]) ** 2)
+            total = self._mix_vars(phys)
+            if self.pc_crps_scale:
+                total = total + self.pc_crps_scale * torch.mean((mu_z - target) ** 2)
+            return total
+        sigma_x = self.decode_sigma(sigma_lat)
+        phys = {}
+        for name in self.output_order:
+            if self.prob_mode == "crps":
+                lev = gaussian_crps_torch(
+                    mu_x[name], sigma_x[name], y_x[name], sigma_min=self.sigma_min
+                )
+                phys[name] = self._reduce_levels(lev)
+            elif self.prob_mode == "nll":
+                phys[name] = beta_nll(
+                    mu_x[name],
+                    sigma_x[name],
+                    y_x[name],
+                    beta=self.nll_beta,
+                    sigma_min=self.sigma_min,
+                )
+            else:
+                raise ValueError(f"PCAHeteroPhysLoss unsupported prob_mode={self.prob_mode!r}")
+        total = self._mix_vars(phys)
+        if self.pc_crps_scale:
+            if self.prob_mode == "crps":
+                pc = torch.mean(
+                    gaussian_crps_torch(
+                        mu_z,
+                        torch.clamp(sigma_lat, min=self.sigma_min),
+                        target,
+                        sigma_min=self.sigma_min,
+                    )
+                )
+            else:
+                pc = beta_nll(
+                    mu_z,
+                    torch.clamp(sigma_lat, min=self.sigma_min),
+                    target,
+                    beta=self.nll_beta,
+                    sigma_min=self.sigma_min,
+                )
+            total = total + self.pc_crps_scale * pc
+        return total
+
+
 class CombinedPCALoss(nn.Module):
     def __init__(
         self,
@@ -1020,6 +1223,13 @@ class HeaveResidualLoss(nn.Module):
         self.sigma_min = float(cfg.get("sigma_min", 1e-3))
         self.nll_beta = float(cfg.get("nll_beta", 0.5))
         self.freeze_sigma = bool(cfg.get("freeze_sigma", False))
+        self.crps_space = str(cfg.get("crps_space", "pca"))
+        if self.crps_space not in VALID_CRPS_SPACES:
+            raise ValueError(f"crps_space must be one of {VALID_CRPS_SPACES}, got {self.crps_space!r}")
+        self.equal_var = bool(cfg.get("equal_var", True))
+        self.band_equal = bool(cfg.get("band_equal", True))
+        self.pc_crps_scale = float(cfg.get("pc_crps_scale", 0.1 if self.crps_space == "physical" else 0.0))
+        self.val_ence = str(cfg.get("val_ence", "temperature"))
         self.geom_scale = float(scales.get("heave_geom_scale", 10.0))
         self.pc_scale = float(scales.get("heave_pc_scale", 1.0))
         self.dtdz_scale = float(scales.get("heave_dtdz_scale", 0.1))
@@ -1076,6 +1286,14 @@ class HeaveResidualLoss(nn.Module):
         self.register_buffer(
             "s_mean", torch.tensor(pca_s.mean_, dtype=torch.float32, device=device)
         )
+        self.register_buffer(
+            "t_components_sq",
+            torch.tensor(pca_t.components_.astype(np.float32) ** 2, dtype=torch.float32, device=device),
+        )
+        self.register_buffer(
+            "s_components_sq",
+            torch.tensor(pca_s.components_.astype(np.float32) ** 2, dtype=torch.float32, device=device),
+        )
         self._decode_warp = decode_warp
         self._warp_sigma = warp_sigma_meters
         self._warp = torch_warp_to_canonical
@@ -1121,6 +1339,57 @@ class HeaveResidualLoss(nn.Module):
         S = self._unwarp(S_prior + S_res, self.z, mld, d26)
         return T, S
 
+    def residual_sigma_canon(self, sigma: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        sig_t = torch.clamp(sigma[:, self.n_warp : self.n_warp + self.n_t], min=self.sigma_min)
+        sig_s = torch.clamp(sigma[:, self.n_warp + self.n_t :], min=self.sigma_min)
+        t = torch.sqrt((sig_t ** 2) @ self.t_components_sq).clamp_min(1e-12)
+        s = torch.sqrt((sig_s ** 2) @ self.s_components_sq).clamp_min(1e-12)
+        return t, s
+
+    def physical_sigma(self, mu: torch.Tensor, sigma: torch.Tensor, indices) -> tuple[torch.Tensor, torch.Tensor]:
+        # ponytail: unwarp residual σ as a profile (no Jacobian). Upgrade = linearized unwarp.
+        mld, d26, _, _ = self.decode_ts(mu)
+        t_sig, s_sig = self.residual_sigma_canon(sigma)
+        return self._unwarp(t_sig, self.z, mld, d26), self._unwarp(s_sig, self.z, mld, d26)
+
+    def phys_mu_sigma(self, output, indices):
+        mu, sigma = self._mu_sigma(output)
+        T, S = self.physical_ts(mu, indices)
+        mu_cat = torch.cat([T, S], dim=1)
+        if sigma is None:
+            return None, None
+        sT, sS = self.physical_sigma(mu, sigma, indices)
+        return mu_cat, torch.cat([sT, sS], dim=1)
+
+    def physical_targets(self, indices) -> torch.Tensor:
+        idx = torch.as_tensor(indices, dtype=torch.long, device=self.T_true.device)
+        return torch.cat([self.T_true[idx], self.S_true[idx]], dim=1)
+
+    def ence_arrays(self, mu_cat: torch.Tensor, sigma_cat: torch.Tensor, y_cat: torch.Tensor):
+        n_z = int(mu_cat.shape[-1] // 2)
+        if self.val_ence == "salinity":
+            sl = slice(n_z, None)
+        elif self.val_ence == "concat":
+            return mu_cat, sigma_cat, y_cat
+        else:
+            sl = slice(0, n_z)
+        return mu_cat[..., sl], sigma_cat[..., sl], y_cat[..., sl]
+
+    def _reduce_levels(self, level_loss: torch.Tensor) -> torch.Tensor:
+        if (not self.band_equal) or self.z is None:
+            return level_loss.mean()
+        from evalphys.constants import DEPTH_BANDS
+
+        z = self.z.to(device=level_loss.device, dtype=level_loss.dtype).reshape(-1)
+        terms = []
+        for lo, hi in DEPTH_BANDS:
+            m = (z >= lo) & (z < hi) if np.isfinite(hi) else (z >= lo)
+            if bool(m.any()):
+                terms.append(level_loss[:, m].mean())
+        if not terms:
+            return level_loss.mean()
+        return torch.stack(terms).mean()
+
     def forward(self, output, target, indices=None, inputs=None):
         del target  # z-PCA scores are the wrong residual
         from evalphys.calibration import gaussian_crps_torch
@@ -1134,6 +1403,52 @@ class HeaveResidualLoss(nn.Module):
         geom_loss = (
             ((mld - self.mld_true[idx]) / 50.0) ** 2 + ((d26 - self.d26_true[idx]) / 120.0) ** 2
         ).mean()
+
+        T_hat, S_hat = self.physical_ts(mu, idx)
+        z = self.z
+        band = (z[1:] >= 50.0) & (z[1:] < 200.0)
+        dz = torch.diff(z).clamp_min(1e-3)
+        dtdz_p = torch.diff(T_hat, dim=1) / dz
+        dtdz_t = torch.diff(self.T_true[idx], dim=1) / dz
+        dtdz_loss = torch.mean((dtdz_p[:, band] - dtdz_t[:, band]) ** 2)
+
+        if self.crps_space == "physical":
+            t_pc = mu[:, self.n_warp : self.n_warp + self.n_t]
+            s_pc = mu[:, self.n_warp + self.n_t :]
+            pcs = torch.cat([t_pc, s_pc], dim=1)
+            pcs_tgt = torch.cat([self.t_pcs_true[idx], self.s_pcs_true[idx]], dim=1)
+            if sigma is None or self.prob_mode in (None, "mse") or self.freeze_sigma:
+                phys_t = self._reduce_levels((T_hat - self.T_true[idx]) ** 2)
+                phys_s = self._reduce_levels((S_hat - self.S_true[idx]) ** 2)
+                pc_term = torch.mean((pcs - pcs_tgt) ** 2)
+            elif self.prob_mode == "crps":
+                sT, sS = self.physical_sigma(mu, sigma, idx)
+                phys_t = self._reduce_levels(
+                    gaussian_crps_torch(T_hat, sT, self.T_true[idx], sigma_min=self.sigma_min)
+                )
+                phys_s = self._reduce_levels(
+                    gaussian_crps_torch(S_hat, sS, self.S_true[idx], sigma_min=self.sigma_min)
+                )
+                pc_term = torch.mean(
+                    gaussian_crps_torch(
+                        pcs,
+                        torch.clamp(sigma[:, self.n_warp :], min=self.sigma_min),
+                        pcs_tgt,
+                        sigma_min=self.sigma_min,
+                    )
+                )
+            else:
+                raise ValueError(f"heave physical unsupported prob_mode={self.prob_mode!r}")
+            phys = 0.5 * (phys_t + phys_s) if self.equal_var else phys_t + phys_s
+            loss = (
+                self.geom_scale * geom_loss
+                + phys
+                + self.pc_crps_scale * pc_term
+                + self.dtdz_scale * dtdz_loss
+            )
+            if self.steric_helper is not None:
+                loss = loss + self.steric_helper(T_hat, S_hat, idx)
+            return loss
 
         t_pc = mu[:, self.n_warp : self.n_warp + self.n_t]
         s_pc = mu[:, self.n_warp + self.n_t :]
@@ -1164,14 +1479,6 @@ class HeaveResidualLoss(nn.Module):
         else:
             raise ValueError(f"heave_residual unsupported prob_mode={self.prob_mode!r}")
 
-        T_hat, S_hat = self.physical_ts(mu, idx)
-        z = self.z
-        band = (z[1:] >= 50.0) & (z[1:] < 200.0)
-        dz = torch.diff(z).clamp_min(1e-3)
-        dtdz_p = torch.diff(T_hat, dim=1) / dz
-        dtdz_t = torch.diff(self.T_true[idx], dim=1) / dz
-        dtdz_loss = torch.mean((dtdz_p[:, band] - dtdz_t[:, band]) ** 2)
-
         loss = self.geom_scale * geom_loss + self.pc_scale * pc_loss + self.dtdz_scale * dtdz_loss
         if self.steric_helper is not None:
             loss = loss + self.steric_helper(T_hat, S_hat, idx)
@@ -1196,6 +1503,17 @@ class HeaveResidualFastLoss(HeaveResidualLoss):
         T = lerp_along_z(z_c, z, T_prior + T_res)
         S = lerp_along_z(z_c, z, S_prior + S_res)
         return T, S
+
+    def physical_sigma(self, mu: torch.Tensor, sigma: torch.Tensor, indices) -> tuple[torch.Tensor, torch.Tensor]:
+        from model.heave_fast import lerp_along_z, phys_to_canon
+        from model.warp import torch_ordered_knots
+
+        mld, d26, _, _ = self.decode_ts(mu)
+        t_sig, s_sig = self.residual_sigma_canon(sigma)
+        z = self.z.reshape(-1)
+        phys, canon = torch_ordered_knots(mld, d26, self.z_bot)
+        z_c = phys_to_canon(z, phys, canon)
+        return lerp_along_z(z_c, z, t_sig), lerp_along_z(z_c, z, s_sig)
 
 
 class ProfileDirectLoss(nn.Module):
@@ -1355,8 +1673,30 @@ def make_loss(
             n_ctrl=n_ctrl,
         )
 
-    # A/B matrix cells: PC-space hetero when probabilistic
+    # A/B matrix cells: PC-space hetero when probabilistic; physical CRPS via PCA inverse
     if mode in ("combined", "pc_mse_only") and cfg.get("prob_mode"):
+        crps_space = str(cfg.get("crps_space", "pca"))
+        if crps_space not in VALID_CRPS_SPACES:
+            raise ValueError(f"crps_space must be one of {VALID_CRPS_SPACES}, got {crps_space!r}")
+        if crps_space == "physical":
+            if pca_models is None:
+                raise ValueError("crps_space=physical requires pca_models")
+            scales = loss_scales or {}
+            return PCAHeteroPhysLoss(
+                pca_models,
+                outputs,
+                device,
+                profile_scales=scales.get("profile_scales"),
+                prob_mode=str(cfg["prob_mode"]),
+                nll_beta=float(cfg.get("nll_beta", 0.5)),
+                sigma_min=float(cfg.get("sigma_min", 1e-3)),
+                freeze_sigma=bool(cfg.get("freeze_sigma", False)),
+                equal_var=bool(cfg.get("equal_var", True)),
+                band_equal=bool(cfg.get("band_equal", True)),
+                pc_crps_scale=float(cfg.get("pc_crps_scale", 0.1)),
+                pres_levels=pres_levels,
+                val_ence=str(cfg.get("val_ence", "temperature")),
+            )
         return PCAHeteroLoss(
             prob_mode=str(cfg["prob_mode"]),
             nll_beta=float(cfg.get("nll_beta", 0.5)),

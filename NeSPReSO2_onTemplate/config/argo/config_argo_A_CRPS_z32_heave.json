@@ -1,20 +1,19 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM_heave_fast_conv3",
+    "name": "NeSPReSO2_ARGO_GoM_A_CRPS_z32_heave",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
         "type": "HeaveResidualFast",
         "args": {
-            "input_dim": 740,
+            "input_dim": 11,
             "output_dim": 35,
             "n_warp": 3,
             "dropout_prob": 0.2,
             "d_model": 128,
             "head_layers": [1024, 1024],
-            "patch_shape": [3, 3, 9, 9],
-            "n_enc": 11,
+            "patch_shape": null,
+            "n_enc": 8,
             "n_sat": 3,
-            "spatial_pool": false,
             "probabilistic": true,
             "sigma_min": 0.001
         }
@@ -36,14 +35,12 @@
     "io": {
         "dataset_tag": "argo_v2",
         "cache_dir": "../data/cache",
-        "spatial_pad": 4,
-        "temporal_pad": 2,
-        "pin_arch_dims": true,
-        "cache_kind": "heave_conv",
+        "spatial_pad": 0,
+        "temporal_pad": 0,
         "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
         "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
         "v2_reload": false,
-        "refit_pca": true,
+        "refit_pca": false,
         "steric_vs_sla": true
     },
     "outputs": {
@@ -72,7 +69,7 @@
     "data_loader": {
         "type": "NeSPReSODataLoader",
         "args": {
-            "cache_path": "../data/cache/train_ready_heave_conv_1deg.pkl",
+            "cache_path": "../data/cache/train_ready_3adcff404b0b.pkl",
             "batch_size": 512,
             "shuffle": true,
             "split_mode": "chronological",
@@ -96,6 +93,11 @@
     "loss_config": {
         "mode": "heave_residual_fast",
         "prob_mode": "crps",
+        "crps_space": "physical",
+        "equal_var": true,
+        "band_equal": true,
+        "pc_crps_scale": 0.1,
+        "val_ence": "temperature",
         "sigma_min": 0.001
     },
     "metrics": [],
@@ -108,7 +110,7 @@
     },
     "trainer": {
         "epochs": 8000,
-        "save_dir": "saved/",
+        "save_dir": "saved/acrps_z32_heave/",
         "save_period": 1,
         "log_interval": 10,
         "verbosity": 2,

@@ -28,6 +28,7 @@
 2. ~~Full-Σ R_cal localization~~ **done** (v2, negative: off-diagonals hurt). Ceiling: a *learned* joint covariance head (not marginal CRPS) if cross-level structure is wanted; else keep diag.
 3. Optional `--iso-ensemble` on A×CRPS; quantile / error-channel gated on v3 HDF5.
 4. §6.5 `pseudoobs_error_structure.md`.
+5. **A_CRPS_z32** (physical CRPS, PCA-32) is registered: [`reports/A_CRPS_z32.json`](reports/A_CRPS_z32.json). Next ablation prompt: [`reports/NEXT_A_CRPS_z32_roni_ops_heave.md`](reports/NEXT_A_CRPS_z32_roni_ops_heave.md) (RONI, 19 ops, heave vs that baseline).
 
 ### Building blocks ready
 

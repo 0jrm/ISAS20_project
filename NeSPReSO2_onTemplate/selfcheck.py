@@ -1851,6 +1851,32 @@ def test_heave_residual_forward_loss():
     loss.backward()
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters() if p.requires_grad)
 
+    phys = HeaveResidualLoss(
+        outputs={"warp": 3, "temperature": 4, "salinity": 4},
+        device=torch.device("cpu"),
+        true_profiles={"temperature": T.astype(np.float32), "salinity": S.astype(np.float32)},
+        pres_levels=z,
+        lat=lat,
+        lon=lon,
+        train_idx=np.arange(n),
+        loss_config={
+            "mode": "heave_residual",
+            "prob_mode": "crps",
+            "crps_space": "physical",
+            "equal_var": True,
+            "band_equal": True,
+            "pc_crps_scale": 0.1,
+            "val_ence": "temperature",
+        },
+    )
+    Lp = phys(out, y[:8], indices=idx)
+    assert torch.isfinite(Lp)
+    mu_p, sig_p = phys.phys_mu_sigma(out, idx)
+    assert mu_p.shape[1] == 2 * nz
+    assert sig_p.shape == mu_p.shape
+    mt, st, yt = phys.ence_arrays(mu_p, sig_p, phys.physical_targets(idx))
+    assert mt.shape[-1] == nz
+
 
 def test_decode_warp_not_saturating():
     from model.heave import decode_warp, warp_sigma_meters
@@ -1961,6 +1987,8 @@ def test_heave_fast_config_validates():
 
     cfg = read_json("config/argo/config_argo_heave_residual_fast.json")
     validate_config(cfg)
+    cfg_z = read_json("config/argo/config_argo_A_CRPS_z32_heave.json")
+    validate_config(cfg_z)
 
 
 def test_heave_ablation_pin_arch_dims():
@@ -1971,7 +1999,8 @@ def test_heave_ablation_pin_arch_dims():
     from preproc.l3_input import sync_arch_with_io
 
     for name, dim, n_sat, patch in (
-        ("config_argo_heave_fast_conv3.json", 92, 3, [3, 3, 3, 3]),
+        ("config_argo_heave_fast_conv3.json", 740, 3, [3, 3, 9, 9]),
+        ("config_argo_heave_fast_conv3x3.json", 92, 3, [3, 3, 3, 3]),
         ("config_argo_heave_fast_ops.json", 30, 19, None),
         ("config_argo_heave_fast_bathy.json", 12, 1, None),
         ("config_argo_heave_fast_bathy_wind.json", 15, 4, None),
@@ -1994,29 +2023,83 @@ def test_heave_conv_patch_layout():
     from preproc.export_heave_ablation_cache import (
         CHANNELS,
         DLAT,
+        DLAT_3,
         DLON,
+        DLON_3,
         T_OFF,
         fill_nan_from_center,
         flatten_cthw,
+        make_center_relative,
     )
 
     assert CHANNELS == ("sss", "sst", "ssh")
-    assert list(DLAT) == [-1.0, 0.0, 1.0]
-    assert list(DLON) == [-1.0, 0.0, 1.0]
+    assert list(DLAT) == [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
+    assert list(DLON) == list(DLAT)
+    assert list(DLAT_3) == [-1.0, 0.0, 1.0]
+    assert list(DLON_3) == list(DLAT_3)
     assert list(T_OFF) == [-2, -1, 0]
-    vol = np.arange(81, dtype=np.float32).reshape(1, 3, 3, 3, 3)
+    vol = np.arange(3 * 3 * 9 * 9, dtype=np.float32).reshape(1, 3, 3, 9, 9)
     vol[0, 0, 0, 0, 0] = np.nan
-    center = float(vol[0, 0, 0, 1, 1])
+    center = float(vol[0, 0, 0, 4, 4])
     filled = fill_nan_from_center(vol)
     assert filled[0, 0, 0, 0, 0] == center
     vol2 = vol.copy()
-    vol2[0, 1, 1, 1, 1] = np.nan
-    vol2[0, 1, 1, 0, 2] = np.nan
+    vol2[0, 1, 1, 4, 4] = np.nan
+    vol2[0, 1, 1, 0, 8] = np.nan
     filled2 = fill_nan_from_center(vol2)
-    assert filled2[0, 1, 1, 0, 2] == 0.0
+    assert filled2[0, 1, 1, 0, 8] == 0.0
+    rel = make_center_relative(filled)
+    assert abs(float(rel[0, 0, 0, 4, 4])) < 1e-6
+    assert abs(float(rel[0, 0, 0, 0, 0])) < 1e-6
+    sd = np.array([2.0, 5.0, 0.2], dtype=np.float32).reshape(1, 3, 1, 1, 1)
+    z = rel / sd
+    assert abs(float(z[0, 2, 0, 4, 5]) - float(rel[0, 2, 0, 4, 5]) / 0.2) < 1e-5
     flat = flatten_cthw(filled)
-    assert flat.shape == (1, 81)
-    assert flat[0, 1 * 27 + 2 * 9 + 1 * 3 + 2] == filled[0, 1, 2, 1, 2]
+    assert flat.shape == (1, 729)
+    assert flat[0, 1 * 243 + 2 * 81 + 4 * 9 + 5] == filled[0, 1, 2, 4, 5]
+    vol3 = np.arange(3 * 3 * 3 * 3, dtype=np.float32).reshape(1, 3, 3, 3, 3)
+    rel3 = make_center_relative(vol3)
+    assert abs(float(rel3[0, 0, 0, 1, 1])) < 1e-6
+    assert flatten_cthw(vol3).shape == (1, 81)
+
+
+def test_patch_conv_mlp_no_spatial_pool():
+    m = PatchConvMLP(
+        input_dim=740,
+        output_dim=8,
+        dropout_prob=0.0,
+        d_model=16,
+        head_layers=[8],
+        conv_channels=[8, 16],
+        patch_shape=[3, 3, 9, 9],
+        n_enc=11,
+        n_sat=3,
+        spatial_pool=False,
+    )
+    assert m.sat_proj.in_features == 16 * 5 * 5
+    assert not any(isinstance(x, torch.nn.AdaptiveAvgPool2d) for x in m.conv)
+    conv0 = next(x for x in m.conv if isinstance(x, torch.nn.Conv2d))
+    assert conv0.padding == (0, 0) and conv0.kernel_size == (3, 3)
+    m.eval()
+    with torch.no_grad():
+        y = m(torch.randn(2, 740))
+    assert y.shape == (2, 8)
+    m3 = PatchConvMLP(
+        input_dim=92,
+        output_dim=8,
+        dropout_prob=0.0,
+        d_model=16,
+        head_layers=[8],
+        conv_channels=[8, 16],
+        patch_shape=[3, 3, 3, 3],
+        n_enc=11,
+        n_sat=3,
+        spatial_pool=False,
+    )
+    assert m3.sat_proj.in_features == 16
+    convs = [x for x in m3.conv if isinstance(x, torch.nn.Conv2d)]
+    assert convs[0].kernel_size == (3, 3) and convs[0].padding == (0, 0)
+    assert convs[1].kernel_size == (1, 1)
 
 
 def test_profile_direct_forward_loss():
@@ -2251,6 +2334,89 @@ def test_prob_head_hetero_and_quantile():
     with torch.no_grad():
         q = mq(x).view(3, 80, 9)
     assert torch.all(q[:, :, 1:] >= q[:, :, :-1] - 1e-5)
+
+
+def test_pca_hetero_phys_decode_and_grad():
+    """Physical CRPS: μ/σ match numpy V; freeze_sigma is profile MSE; backward hits μ and σ."""
+    from model.loss import PCAHeteroPhysLoss, make_loss
+    from parse_config import validate_config
+
+    pca_t, pca_s, temp_pcs, sal_pcs, k = _synthetic_pca_pair()
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    pca_models = {"temperature": pca_t, "salinity": pca_s}
+    y_z = np.hstack([temp_pcs, sal_pcs]).astype(np.float32)
+    B, d = y_z.shape
+    mu_z = torch.tensor(y_z, dtype=torch.float32)
+    rng = np.random.default_rng(0)
+    sig_z = np.abs(rng.normal(size=(B, d))).astype(np.float32) + 0.2
+    loss = PCAHeteroPhysLoss(
+        pca_models, outputs, torch.device("cpu"),
+        equal_var=True, band_equal=False, pc_crps_scale=0.0,
+        prob_mode="crps",
+    )
+    mu_x = loss.decode_mu(mu_z)
+    sig_x = loss.decode_sigma(torch.tensor(sig_z))
+    for name, pca, start in (("temperature", pca_t, 0), ("salinity", pca_s, k)):
+        V = pca.components_.astype(np.float64)
+        mean = pca.mean_.astype(np.float64)
+        expect_mu = y_z[:, start : start + k] @ V + mean
+        expect_sig = np.sqrt((sig_z[:, start : start + k] ** 2) @ (V ** 2))
+        assert np.allclose(mu_x[name].detach().numpy(), expect_mu, atol=1e-5)
+        assert np.allclose(sig_x[name].detach().numpy(), expect_sig, atol=1e-5)
+
+    mu_off = y_z + rng.normal(size=y_z.shape).astype(np.float32) * 0.3
+    raw = torch.tensor(np.hstack([mu_off, sig_z]), dtype=torch.float32, requires_grad=True)
+    tgt = torch.tensor(y_z, dtype=torch.float32)
+    L = loss(raw, tgt)
+    assert torch.isfinite(L)
+    L.backward()
+    assert raw.grad is not None
+    assert raw.grad[:, :d].abs().sum() > 0
+    assert raw.grad[:, d:].abs().sum() > 0
+
+    frozen = PCAHeteroPhysLoss(
+        pca_models, outputs, torch.device("cpu"),
+        equal_var=True, band_equal=False, pc_crps_scale=0.0,
+        freeze_sigma=True, prob_mode="mse",
+    )
+    mse = frozen(raw.detach(), tgt)
+    recon = frozen.decode_mu(torch.tensor(mu_off))
+    y_x = frozen.decode_mu(tgt)
+    expect = 0.5 * (
+        torch.mean((recon["temperature"] - y_x["temperature"]) ** 2)
+        + torch.mean((recon["salinity"] - y_x["salinity"]) ** 2)
+    )
+    assert torch.allclose(mse, expect, atol=1e-5)
+
+    depth = np.linspace(0, 500, recon["temperature"].shape[1]).astype(np.float32)
+    banded = PCAHeteroPhysLoss(
+        pca_models, outputs, torch.device("cpu"),
+        equal_var=True, band_equal=True, pc_crps_scale=0.1,
+        pres_levels=depth, val_ence="temperature",
+        prob_mode="crps",
+    )
+    Lb = banded(raw, tgt)
+    assert torch.isfinite(Lb)
+    mu_c = banded._mu_from_raw(raw.detach()[:, :d])
+    sig_c = banded._sigma_target_space(raw.detach()[:, d:])
+    y_c = banded.decode_targets(tgt)
+    mt, st, yt = banded.ence_arrays(mu_c, sig_c, y_c)
+    assert mt.shape[-1] == recon["temperature"].shape[-1]
+
+    wired = make_loss(
+        pca_models=pca_models,
+        outputs=outputs,
+        weights=np.ones(d, dtype=np.float64),
+        device=torch.device("cpu"),
+        loss_config={"mode": "combined", "prob_mode": "crps", "crps_space": "physical"},
+        loss_scales={"profile_scales": {"temperature": 1.0, "salinity": 1.0}},
+    )
+    assert isinstance(wired, PCAHeteroPhysLoss)
+
+    from base.util import read_json
+
+    cfg = read_json("config/argo/config_argo_acrps_phys_pca32_b.json")
+    validate_config(cfg)
 
 
 def test_dacov_psd_and_mc():
@@ -2761,6 +2927,7 @@ TESTS = (
     test_heave_fast_config_validates,
     test_heave_ablation_pin_arch_dims,
     test_heave_conv_patch_layout,
+    test_patch_conv_mlp_no_spatial_pool,
     test_profile_direct_forward_loss,
     test_profile_configs_validate,
     test_thermocline_scorecard_synthetic,
@@ -2772,6 +2939,7 @@ TESTS = (
     test_sigma_o_floor,
     test_density_spice_monotone_and_roundtrip,
     test_prob_head_hetero_and_quantile,
+    test_pca_hetero_phys_decode_and_grad,
     test_dacov_psd_and_mc,
     test_dacov_sigma_recalib_scales_export,
     test_dacov_pca_ts_export,

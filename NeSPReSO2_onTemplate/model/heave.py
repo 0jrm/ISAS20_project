@@ -32,6 +32,7 @@ class HeaveResidual(BaseModel):
         probabilistic=False,
         sigma_min=1e-3,
         n_quantiles=0,
+        spatial_pool=True,
         **kwargs,
     ):
         super().__init__()
@@ -53,6 +54,8 @@ class HeaveResidual(BaseModel):
             probabilistic=probabilistic,
             sigma_min=sigma_min,
             n_quantiles=n_quantiles,
+            spatial_pool=spatial_pool,
+            **kwargs,
         )
         self._zero_warp_mu()
 

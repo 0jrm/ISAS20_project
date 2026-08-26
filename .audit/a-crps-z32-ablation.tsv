@@ -1,0 +1,10 @@
+ts	phase	decision	why	evidence	result
+2026-08-25T17:36:13Z	frame	exit predicate is reports/eval_A_CRPS_z32_ablation.md with seed-42 cells 1-3 scored vs A_CRPS_z32 pins	autonomous-run needs a checkable stop	reports/NEXT_A_CRPS_z32_roni_ops_heave.md	open
+2026-08-25T17:36:13Z	cell1	RONI/ONI only on 4ee013 32-PC cache, no PCA refit	one factor at a time, splice at load	config/argo/config_argo_A_CRPS_z32_roni.json	open
+2026-08-25T17:42:49Z	cell2	paired heave-ops inputs with 4ee013 32-PC PCA, PatchConvMLP not HeaveResidualFast	ops cache was 16-PC; profiles matched so copy not refit	data/cache/train_ready_heave_ops_pca32.pkl	open
+2026-08-25T17:42:49Z	cell3	HeaveResidualFast with physical T/S CRPS after unwarp, 16+16 residual PCs, ONI/RONI, no ops	keep z32 recipe on decoded profiles; warp CRPS-on-mix is the control not this cell	config/argo/config_argo_A_CRPS_z32_heave.json	open
+2026-08-25T17:44:07Z	how	superseded explainer claim that heave physical CRPS and config_argo_A_CRPS_z32.json were missing	those landed in this session before the explainer returned; ops PCA was paired not rebuilt from 16-PC base	parse_config.py:53 model/loss.py:1415 config/argo/config_argo_A_CRPS_z32.json	stale explainer, trains live
+2026-08-25T17:53:20Z	cell2	ops scored T RMSE 0.535 and 50-200 ENCE(T) val-a 0.247 vs pins 0.560 and 0.415	T RMSE and thermocline ENCE gates. pooled ENCE(T) 0.371 fails. not ingest.	reports/eval_A_CRPS_z32_ops_s42.json reports/eval_A_CRPS_z32_ops_cal.json	ops win on two gates, RONI and heave still training
+2026-08-25T18:07:00Z	cell1	RONI scored T RMSE 0.538 and 50-200 ENCE(T) val-a 0.411	T RMSE gate. 50-200 ENCE barely under 0.415. pooled ENCE 0.180 misses 0.135 pin.	reports/eval_A_CRPS_z32_roni_s42.json	roni win on two gates
+2026-08-25T18:07:00Z	cell3	heave s2 crashed at epoch 459 on TensorBoard bins=auto histogram OOM	guard histograms with finite check and bins=50 then resume checkpoint	trainer/trainer.py	resume launched
+2026-08-25T18:21:00Z	cell3	heave protocol ckpt T RMSE 0.570 ENCE(T) a 0.257 50-200 0.381	val ENCE stop beat 50-200 gate only. T RMSE lost.	reports/eval_A_CRPS_z32_heave_s42.json	cells 1-3 scored, predicate met

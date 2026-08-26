@@ -43,9 +43,38 @@ def validate_config(config):
     from model.loss import VALID_LOSS_MODES
 
     assert mode in VALID_LOSS_MODES, f"loss_config.mode must be one of {VALID_LOSS_MODES}, got {mode!r}"
-    if mode == "density_spice" and loss_cfg.get("prob_mode"):
-        from model.loss import VALID_PROB_MODES
+    crps_space = str(loss_cfg.get("crps_space", "pca"))
+    from model.loss import VALID_CRPS_SPACES, VALID_PROB_MODES
 
+    assert crps_space in VALID_CRPS_SPACES, (
+        f"loss_config.crps_space must be one of {VALID_CRPS_SPACES}, got {crps_space!r}"
+    )
+    if crps_space == "physical":
+        assert mode in ("combined", "pc_mse_only", "heave_residual", "heave_residual_fast"), (
+            "crps_space=physical requires combined|pc_mse_only|heave_residual|heave_residual_fast"
+        )
+        assert loss_cfg.get("prob_mode") in VALID_PROB_MODES, (
+            f"crps_space=physical requires loss_config.prob_mode in {VALID_PROB_MODES}"
+        )
+        assert loss_cfg.get("prob_mode") != "quantile", "crps_space=physical does not support quantile"
+        assert arch_args.get("probabilistic"), "crps_space=physical requires arch.args.probabilistic=true"
+        assert not arch_args.get("n_quantiles"), "crps_space=physical requires n_quantiles=0"
+        if mode in ("heave_residual", "heave_residual_fast"):
+            assert set(outputs.keys()) == {"warp", "temperature", "salinity"}, (
+                "heave physical CRPS requires outputs {warp, temperature, salinity}"
+            )
+        else:
+            assert set(outputs.keys()) == {"temperature", "salinity"}, (
+                "crps_space=physical requires outputs {temperature, salinity}"
+            )
+            assert config.get("io", {}).get("representation") not in ("density_spice", "joint_eof"), (
+                "crps_space=physical is separate T/S PCA only"
+            )
+        ve = str(loss_cfg.get("val_ence", "temperature"))
+        assert ve in ("temperature", "salinity", "concat"), (
+            f"loss_config.val_ence must be temperature|salinity|concat, got {ve!r}"
+        )
+    if mode == "density_spice" and loss_cfg.get("prob_mode"):
         assert loss_cfg["prob_mode"] in VALID_PROB_MODES, (
             f"loss_config.prob_mode must be one of {VALID_PROB_MODES}"
         )
@@ -215,7 +244,7 @@ class ConfigParser:
         self._log_dir = save_dir / 'log' / exper_name / run_id
 
         # make directory for saving checkpoints and log.
-        exist_ok = run_id == ''
+        exist_ok = run_id == '' or resume is not None
         self.save_dir.mkdir(parents=True, exist_ok=exist_ok)
         self.log_dir.mkdir(parents=True, exist_ok=exist_ok)
 

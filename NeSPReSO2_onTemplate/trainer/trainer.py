@@ -248,22 +248,35 @@ class Trainer(BaseTrainer):
                 if want_ence:
                     mu, sigma = self._pred_mu_sigma_for_ence(output, target, indices)
                     if mu is not None:
+                        if hasattr(self.criterion, "physical_targets"):
+                            y_ence = self.criterion.physical_targets(indices)
+                        elif hasattr(self.criterion, "decode_targets"):
+                            y_ence = self.criterion.decode_targets(target)
+                        else:
+                            y_ence = target
                         mu_chunks.append(mu.detach().cpu())
                         sig_chunks.append(sigma.detach().cpu())
-                        y_chunks.append(target.detach().cpu())
+                        y_chunks.append(y_ence.detach().cpu())
 
         if want_ence and mu_chunks:
             from evalphys.calibration import ence as ence_fn
 
-            mu = torch.cat(mu_chunks, dim=0).numpy()
-            sigma = torch.cat(sig_chunks, dim=0).numpy()
-            y = torch.cat(y_chunks, dim=0).numpy()
+            mu = torch.cat(mu_chunks, dim=0)
+            sigma = torch.cat(sig_chunks, dim=0)
+            y = torch.cat(y_chunks, dim=0)
+            if hasattr(self.criterion, "ence_arrays"):
+                mu, sigma, y = self.criterion.ence_arrays(mu, sigma, y)
+            mu, sigma, y = mu.numpy(), sigma.numpy(), y.numpy()
             en = ence_fn(mu, sigma, y).get("ence")
             if en is not None and np.isfinite(en):
                 self.valid_metrics.update("ence", float(en))
 
-        for name, p in self.model.named_parameters():
-            self.writer.add_histogram(name, p, bins="auto")
+        if self.writer is not None:
+            for name, p in self.model.named_parameters():
+                v = p.detach()
+                if v.numel() == 0 or not torch.isfinite(v).all():
+                    continue
+                self.writer.add_histogram(name, v, bins=50)
         return self.valid_metrics.result()
 
     def _pred_mu_sigma_for_ence(self, output, target, indices):
@@ -271,6 +284,8 @@ class Trainer(BaseTrainer):
         from model.prob_head import softplus_sigma, split_mu_sigma
 
         crit = self.criterion
+        if hasattr(crit, "phys_mu_sigma"):
+            return crit.phys_mu_sigma(output, indices)
         if hasattr(crit, "_mu_from_raw") and hasattr(crit, "_sigma_target_space"):
             d = int(crit.d)
             if output.shape[-1] < 2 * d:

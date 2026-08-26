@@ -78,12 +78,28 @@ class PredictionModel(BaseModel):
         return self.model(x)
 
 
+def _valid_conv_kernels(h, w, n_layers, k=3):
+    """Kernel per valid (pad=0) layer so spatial size never goes below 1."""
+    oh, ow = int(h), int(w)
+    kernels = []
+    for _ in range(int(n_layers)):
+        kk = k if oh >= k and ow >= k else 1
+        oh = oh - kk + 1
+        ow = ow - kk + 1
+        if oh < 1 or ow < 1:
+            raise ValueError(f"valid conv collapsed spatial size to {oh}x{ow}")
+        kernels.append(kk)
+    return kernels, oh, ow
+
+
 class PatchConvMLP(BaseModel):
     """
     Patch-aware surface encoder + MLP head for PCA latent prediction.
 
     Point mode (``patch_shape=None``): linear embed of 3 satellite scalars.
     Patch mode: reshape flattened sat block to ``(B, C, T, H, W)`` and run a small Conv2d trunk.
+    ``spatial_pool=True`` (default) keeps AdaptiveAvgPool2d(1) for older ISAS/L4 patches.
+    ``spatial_pool=False``: valid convs, flatten remaining H×W — no zero-pad, no global pool.
     """
 
     def __init__(
@@ -101,6 +117,7 @@ class PatchConvMLP(BaseModel):
         probabilistic=False,
         sigma_min=1e-3,
         n_quantiles=0,
+        spatial_pool=True,
         **kwargs,
     ):
         super().__init__()
@@ -115,6 +132,7 @@ class PatchConvMLP(BaseModel):
         self.n_sat = n_sat
         self.d_model = d_model
         self.residual = bool(residual)
+        self.spatial_pool = bool(spatial_pool)
         self.patch_shape = tuple(patch_shape) if patch_shape else None
         self.probabilistic = bool(probabilistic)
         self.sigma_min = float(sigma_min)
@@ -141,9 +159,13 @@ class PatchConvMLP(BaseModel):
                 for out_ch in conv_channels:
                     blocks.append(ResidualConvBlock(in_ch, out_ch))
                     in_ch = out_ch
-                blocks.append(nn.AdaptiveAvgPool2d(1))
+                if self.spatial_pool:
+                    blocks.append(nn.AdaptiveAvgPool2d(1))
+                    sat_in = conv_channels[-1]
+                else:
+                    sat_in = conv_channels[-1] * h * w
                 self.conv = nn.Sequential(*blocks)
-            else:
+            elif self.spatial_pool:
                 layers = []
                 in_ch = c
                 for out_ch in conv_channels:
@@ -156,7 +178,22 @@ class PatchConvMLP(BaseModel):
                     in_ch = out_ch
                 layers.append(nn.AdaptiveAvgPool2d(1))
                 self.conv = nn.Sequential(*layers)
-            self.sat_proj = nn.Linear(conv_channels[-1], d_model)
+                sat_in = conv_channels[-1]
+            else:
+                kernels, oh, ow = _valid_conv_kernels(h, w, len(conv_channels))
+                layers = []
+                in_ch = c
+                for out_ch, kk in zip(conv_channels, kernels):
+                    layers.extend(
+                        [
+                            nn.Conv2d(in_ch, out_ch, kernel_size=kk, padding=0),
+                            nn.ReLU(inplace=True),
+                        ]
+                    )
+                    in_ch = out_ch
+                self.conv = nn.Sequential(*layers)
+                sat_in = conv_channels[-1] * oh * ow
+            self.sat_proj = nn.Linear(sat_in, d_model)
 
         if self.residual:
             head_blocks = []
@@ -213,7 +250,7 @@ class PatchConvMLP(BaseModel):
         per_var = t * h * w
         sat = sat_flat.view(b, c, per_var).view(b, c, t, h, w)
         sat = sat.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
-        sat = self.conv(sat).view(b, t, -1).mean(dim=1)
+        sat = self.conv(sat).reshape(b, t, -1).mean(dim=1)
         return self.sat_proj(sat)
 
     def _trunk(self, x):

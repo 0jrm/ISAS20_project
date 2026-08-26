@@ -1,21 +1,20 @@
 {
-    "name": "NeSPReSO2_ARGO_GoM_heave_fast_conv3",
+    "name": "NeSPReSO2_ARGO_GoM_acrps_phys_pca32_b",
     "n_gpu": 1,
     "seed": 42,
     "arch": {
-        "type": "HeaveResidualFast",
+        "type": "PatchConvMLP",
         "args": {
-            "input_dim": 740,
-            "output_dim": 35,
-            "n_warp": 3,
+            "input_dim": 9,
+            "output_dim": 64,
             "dropout_prob": 0.2,
             "d_model": 128,
             "head_layers": [1024, 1024],
-            "patch_shape": [3, 3, 9, 9],
-            "n_enc": 11,
+            "patch_shape": null,
+            "n_enc": 6,
             "n_sat": 3,
-            "spatial_pool": false,
             "probabilistic": true,
+            "n_quantiles": 0,
             "sigma_min": 0.001
         }
     },
@@ -26,8 +25,6 @@
         "latsin": true,
         "loncos": true,
         "lonsin": true,
-        "oni": true,
-        "roni": true,
         "sss": true,
         "sst": true,
         "ssh": true,
@@ -36,31 +33,24 @@
     "io": {
         "dataset_tag": "argo_v2",
         "cache_dir": "../data/cache",
-        "spatial_pad": 4,
-        "temporal_pad": 2,
-        "pin_arch_dims": true,
-        "cache_kind": "heave_conv",
+        "spatial_pad": 0,
+        "temporal_pad": 0,
         "v2_pickle": "/unity/g2/jmiranda/SubsurfaceFields/GEM_SubsurfaceFields/config_dataset_full.pkl",
         "v2_src": "/unity/g2/jmiranda/v2-nespreso/src",
         "v2_reload": false,
-        "refit_pca": true,
-        "steric_vs_sla": true
+        "refit_pca": true
     },
     "outputs": {
-        "warp": 3,
-        "temperature": 16,
-        "salinity": 16
+        "temperature": 32,
+        "salinity": 32
     },
     "loss_scales": {
-        "heave_geom_scale": 10.0,
-        "heave_pc_scale": 1.0,
-        "heave_dtdz_scale": 0.1
-    },
-    "steric": {
-        "enabled": false,
-        "scale": 0.01,
-        "subsample_dz": 5,
-        "min_calibration_r": 0.0
+        "profile_scales": {
+            "temperature": 2.0053,
+            "salinity": 0.0314
+        },
+        "combined_pca_scale": 2.0,
+        "combined_mse_scale": 0.0545
     },
     "density": {
         "enabled": false,
@@ -72,7 +62,7 @@
     "data_loader": {
         "type": "NeSPReSODataLoader",
         "args": {
-            "cache_path": "../data/cache/train_ready_heave_conv_1deg.pkl",
+            "cache_path": "../data/cache/train_ready_4ee013852d33.pkl",
             "batch_size": 512,
             "shuffle": true,
             "split_mode": "chronological",
@@ -92,13 +82,21 @@
             "amsgrad": false
         }
     },
-    "loss": "heave_residual_fast_loss",
+    "loss": "combined_pca_loss",
     "loss_config": {
-        "mode": "heave_residual_fast",
+        "mode": "combined",
         "prob_mode": "crps",
-        "sigma_min": 0.001
+        "crps_space": "physical",
+        "freeze_sigma": false,
+        "sigma_min": 0.001,
+        "equal_var": true,
+        "band_equal": true,
+        "pc_crps_scale": 0.1,
+        "val_ence": "temperature"
     },
-    "metrics": [],
+    "metrics": [
+        "profile_rmse"
+    ],
     "lr_scheduler": {
         "type": "StepLR",
         "args": {
@@ -108,7 +106,7 @@
     },
     "trainer": {
         "epochs": 8000,
-        "save_dir": "saved/",
+        "save_dir": "saved/acrps_phys_pca32_b/",
         "save_period": 1,
         "log_interval": 10,
         "verbosity": 2,
