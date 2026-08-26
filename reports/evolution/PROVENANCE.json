@@ -1,19 +1,14 @@
 {
   "meta": {
-    "generated": "2026-07-20T09:14:00-04:00",
-    "generated_note": "Built from frozen artifacts only. No model was run, retrained, or re-scored to produce this report.",
-    "git_sha_head": "490de67738321368659180f8b173b42fcb22a9c8",
+    "generated": "2026-07-20T10:05:37-04:00",
+    "generated_note": "Built from frozen artifacts only. No model was run, retrained, or re-scored.",
+    "git_sha_head": "73fa5f6236f54aa206e16c1df7750604df71f63e",
     "git_sha_metrics_manifest": "7f9a043953361931db671903c5bbee2744b7b8fe",
     "evalphys_version": "1.1.0",
     "evalphys_frozen_date": "2026-07-16",
     "branch": "residual_cube",
-    "prereg_commit": "0422a516c71cb89d00063508b993d3908d775f79",
-    "prereg_commit_timestamp": "2026-07-20T09:04:39-04:00",
-    "promotion_commit": "490de67738321368659180f8b173b42fcb22a9c8",
-    "promotion_commit_timestamp": "2026-07-20T09:07:29-04:00",
-    "prereg_precedes_promotion": true,
     "warnings": [
-      "git_sha_metrics_manifest (7f9a043953361931db671903c5bbee2744b7b8fe) != git_sha_head (490de67738321368659180f8b173b42fcb22a9c8). NeSPReSO2_onTemplate/evalphys/METRICS_MANIFEST.json was frozen 2026-07-16 (evalphys v1.1.0); the repository has advanced through the full Phase 5 ablation matrix and the Phase 6 OSSE (including the R_cal v2 promotion) since that freeze. The metric DEFINITIONS in the manifest are unchanged and still govern every number in this report; only the manifest's own recorded sha is stale relative to HEAD."
+      "git_sha_metrics_manifest (7f9a043953361931db671903c5bbee2744b7b8fe) != git_sha_head (73fa5f6236f54aa206e16c1df7750604df71f63e). METRICS_MANIFEST.json was frozen 2026-07-16 (evalphys v1.1.0); HEAD has advanced through Phase 5 and Phase 6. Metric DEFINITIONS are unchanged; only the manifest's recorded sha is stale relative to HEAD."
     ]
   },
   "contradictions": [
@@ -24,52 +19,47 @@
         "NeSPReSO2_onTemplate/evalphys/METRICS_MANIFEST.json",
         "git HEAD"
       ],
-      "handling": "Surfaced as a persistent warning banner in EVOLUTION.md and index.html. Not resolved by picking one value; both shas are shown side by side."
+      "handling": "Surfaced as a persistent warning banner. Both shas shown; neither silently preferred."
     },
     {
       "id": "c2_osse_runlog_vs_committed_results",
-      "description": "saved/runs/phase6_osse/run.log records E4=2.4186 / E5=1.8906 for the cast_column_s42 run. This matches neither the v1 diag result (E4=0.5463, from commit 28f623e's version of osse_results.md) nor the v2 full-localized result (E4=0.6160, current osse_results.md and cast_column_s42.json at HEAD).",
+      "description": "saved/runs/phase6_osse/run.log records E4=2.4186 / E5=1.8906. Committed cast_column_s42.json and reports/osse_results.md at HEAD record E4=0.6160 / E5=1.4008. JSON and MD agree with each other.",
       "sources": [
         "NeSPReSO2_onTemplate/saved/runs/phase6_osse/run.log",
         "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json",
-        "reports/osse_results.md",
-        "git log -p reports/osse_results.md"
+        "reports/osse_results.md"
       ],
-      "handling": "Surfaced as a warning banner rather than silently preferring one artifact. The two committed result files (JSON at HEAD + osse_results.md at HEAD) agree with each other and with the git history of osse_results.md (v1 diag 0.5463 at commit 28f623e -> v2 full-localized 0.6160 at commit 490de67), and HANDOFF.md independently corroborates 0.616/0.546. run.log's timestamp (2026-07-17T16:44) predates the v2 promotion commits (2026-07-20) and its E4/E5 values are consistent with an unstable/intermediate run (HANDOFF.md: raw un-localized full Sigma blew up, cond(B+R)~2e8) that was never cleaned from the log. The committed JSON+MD pair is treated as authoritative for every number shown; run.log is cited only as the source of this contradiction, never as a source of a displayed number."
-    }
-  ],
-  "unsourced": [
-    {
-      "requested_by": "workplan.md Step 2b (R-construction schematic stabilization evidence)",
-      "value": "raw full Sigma synthetic RMSE ~= 13.5; localized cond ~= 1.5e4, RMSE ~= 0.40",
-      "reason": "Not present verbatim in any tracked source file. Grepped HANDOFF.md, osse_preregistration.md, osse_results.md, PLAN-v2-recovery.md, NeSPReSO2_onTemplate/dacov/__init__.py, NeSPReSO2_onTemplate/scripts/run_osse.py. Only 'cond(B+R)~2e8' for the raw/un-localized case (HANDOFF.md) is sourced.",
-      "action": "Omitted from fig_rcal_schematic. Only the sourced cond(B+R)~2e8 raw-blowup figure and the qualitative 'now OI-stable' claim (HANDOFF.md) are shown."
+      "handling": "Surfaced as a warning. Displayed numbers come only from osse_results.md + cast_column_s42.json (which agree). run.log is cited only as the contradiction source, never as a display source."
     },
     {
-      "requested_by": "workplan.md Step 1b(d) (stale-sat const_frac fingerprint, old vs cube)",
-      "value": "pre-cube ('old') const_frac / stale-fraction baseline",
-      "reason": "The two sources named for this figure (reports/stale_by_split.md, reports/stale_by_split.json) and the diagnostic script (NeSPReSO2_onTemplate/diagnostics/stale_sat/h5_stale_check.py) contain only the current cube-era fingerprint (all splits, all channels: 0.0% stale; gate OPEN). No committed artifact records a pre-fix ('old') numeric baseline for this specific const_frac diagnostic.",
-      "action": "fig_cube_stale_fingerprint shows only the current (cube-era) fingerprint, with an explicit on-figure note that the 'old' comparison side is not available from a committed artifact under this name."
+      "id": "c3_stale_gate_md_json",
+      "description": "Checked for MD/JSON disagreement on the T2 stale gate. reports/stale_by_split.md says Gate status OPEN; reports/stale_by_split.json has headline_metrics_embargoed=false. These agree (OPEN <=> not embargoed).",
+      "sources": [
+        "reports/stale_by_split.md",
+        "reports/stale_by_split.json"
+      ],
+      "handling": "No contradiction; recorded so the check is visible. Not shown as a warning banner."
     }
   ],
+  "unsourced": [],
   "artifacts": [
     {
       "artifact_id": "tbl_timeline",
       "kind": "table",
       "rendered_in": ["EVOLUTION.md#2-timeline", "index.html#overview"],
       "source_files": [
-        "PLAN-v2-recovery.md",
+        "reports/data_census.md",
+        "reports/split_design.md",
+        "reports/phase1_decisive_tests.md",
         "reports/gate_floor_provenance.md",
-        "reports/osse_preregistration.md",
-        "reports/ablation_preregistration.md",
+        "reports/ablation_summary.md",
+        "reports/osse_results.md",
         "HANDOFF.md"
       ],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
       "judgment_number": null,
       "gate_verdict": null,
-      "caveats": [
-        "Dates are the commit/report dates recorded in each source file's own changelog, not independently re-derived."
-      ]
+      "caveats": ["Phase labels follow report headers / HANDOFF; dates are those in the source files."]
     },
     {
       "artifact_id": "tbl_matrix_latent",
@@ -87,281 +77,222 @@
         "reports/phase5_C_det.md",
         "reports/gate_floor_provenance.md"
       ],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "A_det=0.541 A_CRPS_CRPS=1.237 A_CRPS_ENCE=0.053 A_NLL_CRPS=1.257 A_NLL_ENCE=0.052 B_det=0.534 B_CRPS_CRPS=2.761 B_CRPS_ENCE=0.069 B_NLL_CRPS=2.754 B_NLL_ENCE=0.082 C_det=0.609 C_CRPS_CRPS=0.742 C_CRPS_ENCE=0.248 C_NLL_CRPS=0.774 C_NLL_ENCE=0.120",
-      "gate_verdict": "det: A PASS(<=0.5903), B PASS, C FAIL(0.609>0.5903). prob ENCE<0.20: A_CRPS PASS, A_NLL PASS, B_CRPS PASS, B_NLL PASS, C_CRPS FAIL(0.248), C_NLL PASS",
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "A_det=0.541 A_CRPS=1.237/ENCE=0.053 A_NLL=1.257/ENCE=0.052 B_det=0.534 B_CRPS=2.761/ENCE=0.069 B_NLL=2.754/ENCE=0.082 C_det=0.609 C_CRPS=0.742/ENCE=0.248 C_NLL=0.774/ENCE=0.120",
+      "gate_verdict": "det floor 0.5903: A PASS, B PASS, C FAIL. ENCE<0.20: A_CRPS PASS, A_NLL PASS, B_CRPS PASS, B_NLL PASS, C_CRPS FAIL, C_NLL PASS",
       "caveats": [
-        "PC-space CRPS/NLL judgment numbers are NOT comparable across representations: A is separate T/S PCA-16, B is joint EOF-32, C is density+spice PCA. Do not rank A vs B vs C on these raw numbers (ablation_summary.md).",
-        "C row shown is protocol v2 (val-ENCE stage-2 early stop). C x CRPS protocol v1 (0.703 CRPS / 0.225 ENCE, also a gate FAIL) is retained as separate labeled evidence in phase5_C_CRPS.md, not used here."
+        "PC-space CRPS is not comparable across representations A/B/C.",
+        "C x CRPS numbers are protocol v2 (0.742/0.248); v1 (0.703/0.225) is separate labeled evidence in phase5_C_CRPS.md."
       ]
     },
     {
       "artifact_id": "tbl_matrix_physical",
       "kind": "table",
       "rendered_in": ["EVOLUTION.md#4-matrix", "index.html#matrix"],
-      "source_files": ["reports/ablation_summary.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "A_CRPS_T=0.559 A_CRPS_CRPS=0.119 A_CRPS_ENCE=0.153 A_NLL_T=0.575 A_det_T=0.541 B_CRPS_T=0.586 B_NLL_T=0.563 B_det_T=0.534 C_CRPS_T=0.618 C_NLL_T=0.694 C_det_T=0.609",
-      "gate_verdict": "winner=A_CRPS (mechanical decision rule: lowest phys ensemble CRPS among ENCE<0.20 survivors); best det-only skill=B_det (T=0.534, not the UQ default)",
+      "source_files": [
+        "reports/ablation_summary.md"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "A_CRPS T=0.559 phys_CRPS=0.119 phys_ENCE=0.153; B_det T=0.534; C_det T=0.609 phys C cells fail ENCE",
+      "gate_verdict": "Section 3 winner A x CRPS; det skill floor survivor B x det; C loses both",
       "caveats": [
-        "This table is decode-to-physical-space (T/S), amending the prereg 2026-07-17 (phase5_physical_space_score.py) specifically so cross-representation ranking is valid, unlike tbl_matrix_latent.",
-        "C x det: Phase-3 single-run admission pass (T=0.562) did NOT replicate at 3-seed matrix scale (T=0.609+/-0.012) -- reports/finding_C_det_gate_overfit.md. Cite 0.609, not 0.562, as the C det headline."
+        "Physical ENCE here is ence_mean_TS (T+S). Strata report ENCE(T)=0.236 — T-only, not the same scalar."
       ]
     },
     {
-      "artifact_id": "tbl_calibration_strata",
+      "artifact_id": "tbl_strata",
       "kind": "table",
-      "rendered_in": ["EVOLUTION.md#5-calibration", "index.html#calibration"],
-      "source_files": ["reports/phase5_A_CRPS_physical_strata.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "CRPS=0.1185 ENCE_T=0.2362 Spearman_T=0.7567 T_RMSE=0.5590",
-      "gate_verdict": "physical ENCE(T) 0.2362 >= 0.20 gate: FAIL (overall); worst bands: 0-50m and 50-200m all seasons, JJA worst season",
-      "caveats": [
-        "The same winner cell clears the ENCE gate in PC/latent space (0.053, tbl_matrix_latent) but fails it in physical T space (0.236) -- different rulers; do not conflate."
-      ]
+      "rendered_in": ["EVOLUTION.md#5-calibration", "index.html#strata"],
+      "source_files": [
+        "reports/phase5_A_CRPS_physical_strata.md"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "overall ENCE(T)=0.2362+/-0.0053; phys CRPS=0.1185+/-0.0013",
+      "gate_verdict": "ENCE(T)<0.20 FAIL overall and on surface/thermocline/>800 m strata",
+      "caveats": ["Fail border drawn at ENCE >= 0.20 per METRICS_MANIFEST thresholds.ence_max."]
     },
     {
-      "artifact_id": "tbl_osse_canonical",
+      "artifact_id": "tbl_osse",
       "kind": "table",
       "rendered_in": ["EVOLUTION.md#6-osse", "index.html#osse"],
       "source_files": [
         "reports/osse_results.md",
         "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json",
-        "reports/osse_preregistration.md"
+        "HANDOFF.md"
       ],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "E0=1.5382 E1=1.5382 E2=0.5410 E3=0.5454 E4=0.6160 E5=1.4008",
-      "gate_verdict": "E3_gt_E2: FAIL (0.5454 not < 0.5410). E4_ge_E3: FAIL (0.6160 > 0.5454)",
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "E2=0.5410 E3=0.5454 E4=0.6160 E5=1.4008 retention=0.444; diag-control E4=0.546 (HANDOFF)",
+      "gate_verdict": "E3_gt_E2 FAIL; E4_ge_E3 FAIL",
       "caveats": [
-        "cast-column proxy: truth = ARGO at cast columns, not a 2021 ISAS20 gridded field (not on disk); map-level horizontal localization (L_h) not wired.",
-        "E0 == E1 by construction (background is monthly climatology; E1 casts are the same climatology).",
-        "See contradiction c2_osse_runlog_vs_committed_results: run.log for this same run path disagrees with the committed JSON/MD; the committed pair is authoritative."
+        "cast-column proxy (no 2021 ISAS grid)",
+        "E0≡E1",
+        "v1 diagonal R_cal superseded by v2 full-localized promotion; diag-control 0.546 from HANDOFF.md"
       ]
     },
     {
-      "artifact_id": "tbl_rcal_diag_control",
+      "artifact_id": "tbl_established_ledger",
       "kind": "table",
-      "rendered_in": ["EVOLUTION.md#6b-structured-covariance", "index.html#osse"],
+      "rendered_in": ["EVOLUTION.md#7-ledger", "index.html#overview"],
       "source_files": [
-        "HANDOFF.md",
+        "reports/gate_floor_provenance.md",
+        "reports/ablation_summary.md",
+        "reports/phase5_A_CRPS_physical_strata.md",
         "reports/osse_results.md",
-        "reports/osse_preregistration.md",
-        "git commit 490de67738321368659180f8b173b42fcb22a9c8 (message)"
+        "HANDOFF.md"
       ],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "E3_R_fixed=0.5454 E4_diag=0.5463 E4_full=0.6160",
-      "gate_verdict": "off-diagonals HURT: 0.6160 (full) > 0.5463 (diag) > 0.5454 (E3 R_fixed, still lower than either R_cal variant)",
-      "caveats": [
-        "0.5463 (4 sig figs) is sourced verbatim from the commit 490de67 message ('reproduces v1 E4=0.5463'); HANDOFF.md independently states the rounded 'diag-control 0.546' -- consistent, not contradictory.",
-        "diag(Sigma) is exactly preserved by the Schur localization (osse_preregistration.md), so sigma-bar and the E5-tau QC rule are numerically identical between v1 and v2 -- the only thing that changed between 0.546 and 0.616 is which off-diagonal terms of Sigma_T are switched on."
-      ]
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": null,
+      "gate_verdict": null,
+      "caveats": ["Every ledger row cites a source path inline in EVOLUTION.md."]
     },
     {
       "artifact_id": "fig_lineage_dag",
       "kind": "figure",
       "path": "reports/evolution/figs/lineage_dag.svg",
       "png_path": "reports/evolution/figs/lineage_dag.png",
-      "source_files": ["reports/evolution/lineage.json", "reports/gate_floor_provenance.md", "PLAN-v2-recovery.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
+      "rendered_in": ["EVOLUTION.md#3-lineage", "index.html#lineage"],
+      "source_files": [
+        "reports/evolution/lineage.json"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
       "judgment_number": null,
       "gate_verdict": null,
-      "caveats": ["Node placement is top-to-bottom by phase; horizontal position within a phase is not meaningful."]
+      "caveats": ["Layout is presentational; verdicts and edges come only from lineage.json."]
     },
     {
-      "artifact_id": "fig_matrix_heatmap",
+      "artifact_id": "fig_matrix_gate_heatmap",
       "kind": "figure",
       "path": "reports/evolution/figs/matrix_gate_heatmap.svg",
       "png_path": "reports/evolution/figs/matrix_gate_heatmap.png",
+      "rendered_in": ["EVOLUTION.md#4-matrix", "index.html#matrix"],
       "source_files": [
-        "reports/phase5_A_CRPS.md","reports/phase5_A_NLL.md","reports/phase5_A_det.md",
-        "reports/phase5_B_CRPS.md","reports/phase5_B_NLL.md","reports/phase5_B_det.md",
-        "reports/phase5_C_CRPS.md","reports/phase5_C_NLL.md","reports/phase5_C_det.md",
-        "reports/ablation_summary.md"
+        "reports/phase5_A_CRPS.md",
+        "reports/phase5_A_NLL.md",
+        "reports/phase5_A_det.md",
+        "reports/phase5_B_CRPS.md",
+        "reports/phase5_B_NLL.md",
+        "reports/phase5_B_det.md",
+        "reports/phase5_C_CRPS.md",
+        "reports/phase5_C_NLL.md",
+        "reports/phase5_C_det.md",
+        "reports/ablation_summary.md",
+        "reports/gate_floor_provenance.md"
       ],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "see tbl_matrix_latent",
-      "gate_verdict": "winner cell A x CRPS ringed",
-      "caveats": ["CRPS/NLL cells (6 of 9) are hatched: PC-space CRPS is not comparable across representations."]
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "latent cell means as in tbl_matrix_latent; winner ring on A x CRPS from ablation_summary.md",
+      "gate_verdict": "see tbl_matrix_latent",
+      "caveats": [
+        "PC-space CRPS cells hatched — not comparable across representations.",
+        "Winner ring marks Section 3 physical-space pick (A x CRPS), not latent CRPS rank."
+      ]
     },
     {
       "artifact_id": "fig_depthband_season_crps",
       "kind": "figure",
       "path": "reports/evolution/figs/depthband_season_crps.svg",
       "png_path": "reports/evolution/figs/depthband_season_crps.png",
-      "source_files": ["reports/phase5_A_CRPS_physical_strata.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "range 0.0282-0.3753",
+      "rendered_in": ["EVOLUTION.md#5-calibration", "index.html#strata"],
+      "source_files": [
+        "reports/phase5_A_CRPS_physical_strata.md"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "depth x season CRPS means from phase5_A_CRPS_physical_strata.md",
       "gate_verdict": null,
-      "caveats": ["CRPS(T+S) combined, not T-only."]
+      "caveats": []
     },
     {
       "artifact_id": "fig_depthband_season_ence",
       "kind": "figure",
       "path": "reports/evolution/figs/depthband_season_ence.svg",
       "png_path": "reports/evolution/figs/depthband_season_ence.png",
-      "source_files": ["reports/phase5_A_CRPS_physical_strata.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "range 0.0585-0.6622",
-      "gate_verdict": "cells >= 0.20 fail-bordered: 0-50 (all seasons), 50-200 (all seasons), >800 (all seasons), 200-800 MAM/JJA",
-      "caveats": ["Surface, thermocline (50-200m) and >800m bands failing is the expected/reported pattern -- not a plotting artifact."]
+      "rendered_in": ["EVOLUTION.md#5-calibration", "index.html#strata"],
+      "source_files": [
+        "reports/phase5_A_CRPS_physical_strata.md",
+        "NeSPReSO2_onTemplate/evalphys/METRICS_MANIFEST.json"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "depth x season ENCE(T) means; fail border at ENCE >= 0.20",
+      "gate_verdict": "FAIL on 0-50 all seasons, 50-200 DJF/MAM/JJA, >800 all seasons",
+      "caveats": ["Surface, thermocline, and >800 m bands light up — that is correct."]
     },
     {
       "artifact_id": "fig_osse_panel",
       "kind": "figure",
       "path": "reports/evolution/figs/osse_panel.svg",
       "png_path": "reports/evolution/figs/osse_panel.png",
-      "source_files": ["reports/osse_results.md", "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json", "reports/osse_preregistration.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "see tbl_osse_canonical",
-      "gate_verdict": "E3>E2 FAIL, E4>=E3 FAIL annotated on face",
-      "caveats": ["cast-column proxy; E0==E1; diagonal-R-only for E1-E3 (R_fixed); n=1101 casts, year 2021"]
+      "rendered_in": ["EVOLUTION.md#6-osse", "index.html#osse"],
+      "source_files": [
+        "reports/osse_results.md",
+        "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json",
+        "HANDOFF.md"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "E0..E5 overall + depth bands from osse_results.md",
+      "gate_verdict": "E3>E2 FAIL; E4>=E3 FAIL",
+      "caveats": [
+        "cast-column proxy",
+        "E0≡E1",
+        "diagonal-R-only was the v1 form; face also notes v2 full-localized E4=0.6160 and diag-control 0.546 from HANDOFF"
+      ]
     },
     {
       "artifact_id": "fig_ruler_sparkline",
       "kind": "figure",
       "path": "reports/evolution/figs/ruler_sparkline.svg",
       "png_path": "reports/evolution/figs/ruler_sparkline.png",
-      "source_files": ["reports/gate_floor_provenance.md"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "0.4158 -> 0.514 -> 0.5367 -> 0.5903",
+      "rendered_in": ["EVOLUTION.md#3-lineage", "index.html#overview"],
+      "source_files": [
+        "reports/gate_floor_provenance.md"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
+      "judgment_number": "0.4158 -> 0.514 leaked -> 0.5367 clean -> 0.5903 floor",
       "gate_verdict": null,
-      "caveats": ["0.514 is a leaked-optimistic figure (train/test overlap), kept on the ruler as an erratum point, not a valid floor candidate.", "0.5903 = 0.5367 x 1.10 (corrected same-split floor)."]
+      "caveats": ["0.4574 published-random floor shown as do-not-use for chrono candidates."]
     },
     {
-      "artifact_id": "fig_rcal_etable_depthband",
+      "artifact_id": "fig_reuse_depth_rmse_bias",
       "kind": "figure",
-      "path": "reports/evolution/figs/rcal_etable_depthband.svg",
-      "png_path": "reports/evolution/figs/rcal_etable_depthband.png",
-      "source_files": ["reports/osse_results.md", "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "E2=0.5410 E3=0.5454 E4=0.6160 E5=1.4008",
-      "gate_verdict": "E4>=E3: FAIL. E3>E2: FAIL",
-      "caveats": ["canonical 2021 n=1101 cast-column run"]
-    },
-    {
-      "artifact_id": "fig_diag_control_headline",
-      "kind": "figure",
-      "path": "reports/evolution/figs/diag_control_headline.svg",
-      "png_path": "reports/evolution/figs/diag_control_headline.png",
-      "source_files": ["HANDOFF.md", "reports/osse_results.md", "git commit 490de67738321368659180f8b173b42fcb22a9c8 (message)"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "E3=0.5454 E4_diag=0.5463 E4_full=0.6160",
-      "gate_verdict": "localization preserves diag(Sigma); the 0.546->0.616 degradation is the CRPS-head off-diagonals alone",
-      "caveats": ["This is the headline visual of the structured-covariance strand, per workplan.md Step 2b."]
-    },
-    {
-      "artifact_id": "fig_rcal_schematic",
-      "kind": "figure",
-      "path": "reports/evolution/figs/rcal_schematic.svg",
-      "png_path": "reports/evolution/figs/rcal_schematic.png",
-      "source_files": ["reports/osse_preregistration.md", "HANDOFF.md", "reports/phase5_A_CRPS.md", "NeSPReSO2_onTemplate/saved/runs/phase6_osse/cast_column_s42.json", "NeSPReSO2_onTemplate/dacov/__init__.py"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "rank=16 n_levels=60 near_null_dim=44 L_loc=150m raw_cond=2e8",
-      "gate_verdict": null,
-      "caveats": [
-        "near_null_dim=44 is arithmetic on two sourced numbers (60 levels - 16 PCA rank), not a new empirical result.",
-        "Synthetic stabilization RMSE/cond numbers requested by the workplan for the localized case are NOT shown -- see unsourced[] (Step 2b entry)."
-      ]
-    },
-    {
-      "artifact_id": "fig_cube_schematic",
-      "kind": "figure",
-      "path": "reports/evolution/figs/cube_schematic.svg",
-      "source_files": ["utils/v2.json", "utils/v3.json", "NeSPReSO2_onTemplate/preproc/cube/cube_schema.py"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": null,
-      "gate_verdict": null,
-      "caveats": ["Channels shown are the union of v2.json/v3.json product lists (sst/ostia, sss, ssh incl. adt/sla/ugos/vgos, bathymetry) plus v3-only error channels (analysis_error, sos_error, err_sla).", "Domain box (lat 18-31N, lon -98..-81W) and time range (2015-01-01..2022-03-01) from cube_schema.py constants."]
-    },
-    {
-      "artifact_id": "fig_cube_extraction_inset",
-      "kind": "figure",
-      "path": "reports/evolution/figs/cube_extraction_inset.svg",
-      "source_files": ["utils/v2.json", "utils/v3.json"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "spatial_pad=20 temporal_pad=6",
-      "gate_verdict": null,
-      "caveats": ["pads are unchanged from v2 to v3 by explicit design note in v3.json (_notes.pads) so patch geometry stays identical across the error-channel upgrade."]
-    },
-    {
-      "artifact_id": "fig_cube_dataflow",
-      "kind": "figure",
-      "path": "reports/evolution/figs/cube_dataflow.svg",
-      "source_files": ["NeSPReSO2_onTemplate/preproc/cube/build_cube.py", "NeSPReSO2_onTemplate/preproc/features/sampler.py", "NeSPReSO2_onTemplate/preproc/cube/cube_schema.py"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": null,
-      "gate_verdict": null,
-      "caveats": ["'before' side (per-station HDF5 + fixed spatial_pad/temporal_pad windows) is the legacy path still used by v2/v3 error-channel extraction; 'after' side (regional Zarr cube + FeatureSampler bilinear on-demand interpolation) is what point/patch/residual models read from at train/eval time."]
-    },
-    {
-      "artifact_id": "fig_cube_stale_fingerprint",
-      "kind": "figure",
-      "path": "reports/evolution/figs/cube_stale_fingerprint.svg",
-      "source_files": ["reports/stale_by_split.md", "reports/stale_by_split.json", "NeSPReSO2_onTemplate/diagnostics/stale_sat/h5_stale_check.py"],
-      "git_sha": "490de67738321368659180f8b173b42fcb22a9c8",
-      "judgment_number": "stale_frac=0.0 all splits/channels; gate OPEN",
-      "gate_verdict": "OPEN (not embargoed)",
-      "caveats": ["'old vs cube' comparison requested by the workplan could not be populated with a real pre-cube number -- see unsourced[] (Step 1b(d) entry). Figure shows only the current fingerprint."]
-    },
-    {
-      "artifact_id": "reuse_depth_rmse_bias",
-      "kind": "reused_png",
       "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_bias.png",
-      "source_files": ["NeSPReSO2_onTemplate/notebooks/compare_outputs/results.json"],
-      "git_sha": null,
+      "png_path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_bias.png",
+      "rendered_in": ["EVOLUTION.md#appendix-reused", "index.html#overview"],
+      "source_files": [
+        "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_bias.png",
+        "NeSPReSO2_onTemplate/notebooks/compare_outputs/results.json"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
       "judgment_number": null,
       "gate_verdict": null,
-      "caveats": ["Pre-dates PLAN-v2-recovery Phase 3-6; documents the point/L4-patch/anom model comparison, not the Phase-5 matrix winner. Referenced for the datacube-strand narrative only. Not regenerated."]
+      "caveats": ["Reused as-is; not regenerated. Pre-matrix diagnostic plot."]
     },
     {
-      "artifact_id": "reuse_depth_rmse_overlay",
-      "kind": "reused_png",
-      "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_overlay.png",
-      "source_files": ["NeSPReSO2_onTemplate/notebooks/compare_outputs/results.json"],
-      "git_sha": null,
-      "judgment_number": null,
-      "gate_verdict": null,
-      "caveats": ["Same era/caveat as reuse_depth_rmse_bias. Not regenerated."]
-    },
-    {
-      "artifact_id": "reuse_argo_production_depth_rmse",
-      "kind": "reused_png",
+      "artifact_id": "fig_reuse_argo_production_depth_rmse",
+      "kind": "figure",
       "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_depth_rmse.png",
-      "source_files": ["NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_results.json"],
-      "git_sha": null,
+      "png_path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_depth_rmse.png",
+      "rendered_in": ["EVOLUTION.md#appendix-reused", "index.html#overview"],
+      "source_files": [
+        "NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_depth_rmse.png",
+        "NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_results.json"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
       "judgment_number": null,
       "gate_verdict": null,
-      "caveats": ["ARGO-point golden checkpoint (argo16_scales) vs L4-patch / anom variants; the golden point model here (native T 0.5155/0.5143) is the direct ancestor of the argo16 baseline used throughout gate_floor_provenance.md. Not regenerated."]
+      "caveats": ["Reused as-is; not regenerated."]
     },
     {
-      "artifact_id": "reuse_bin_maps_best",
-      "kind": "reused_png",
-      "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/bin_maps_best.png",
-      "source_files": ["NeSPReSO2_onTemplate/notebooks/compare_outputs/argo_production_results.json"],
-      "git_sha": null,
+      "artifact_id": "fig_reuse_depth_rmse_overlay",
+      "kind": "figure",
+      "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_overlay.png",
+      "png_path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_overlay.png",
+      "rendered_in": ["EVOLUTION.md#appendix-reused", "index.html#overview"],
+      "source_files": [
+        "NeSPReSO2_onTemplate/notebooks/compare_outputs/depth_rmse_overlay.png",
+        "NeSPReSO2_onTemplate/notebooks/compare_outputs/results.json"
+      ],
+      "git_sha": "73fa5f6236f54aa206e16c1df7750604df71f63e",
       "judgment_number": null,
       "gate_verdict": null,
-      "caveats": ["Not regenerated."]
-    },
-    {
-      "artifact_id": "reuse_fixedsat_bin_maps",
-      "kind": "reused_png",
-      "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/fixedsat_bin_maps.png",
-      "source_files": ["NeSPReSO2_onTemplate/notebooks/compare_outputs/fixedsat_eval_report.json"],
-      "git_sha": null,
-      "judgment_number": null,
-      "gate_verdict": null,
-      "caveats": ["Documents the L4-patch stale-satellite fix (fixed-sat vs stale-ckpt-on-new-cache), a data-quality strand distinct from the Phase 3-6 representation/head matrix but relevant to the datacube's data-quality contribution. Not regenerated."]
-    },
-    {
-      "artifact_id": "reuse_fixedsat_vs_golden_depth_rmse",
-      "kind": "reused_png",
-      "path": "NeSPReSO2_onTemplate/notebooks/compare_outputs/fixedsat_vs_golden_depth_rmse.png",
-      "source_files": ["NeSPReSO2_onTemplate/notebooks/compare_outputs/fixedsat_eval_report.json"],
-      "git_sha": null,
-      "judgment_number": null,
-      "gate_verdict": null,
-      "caveats": ["Same era/caveat as reuse_fixedsat_bin_maps. Not regenerated."]
+      "caveats": ["Reused as-is; not regenerated."]
     }
   ]
 }
