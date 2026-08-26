@@ -1,0 +1,58 @@
+{
+  "id": "A_CRPS_z32_roni_ops_heave",
+  "seed": 42,
+  "baseline": "A_CRPS_z32",
+  "not": "Do not overwrite A_CRPS_z32 checkpoint. Not ingest products.",
+  "cells": {
+    "roni": {
+      "config": "NeSPReSO2_onTemplate/config/argo/config_argo_A_CRPS_z32_roni.json",
+      "cache": "data/cache/train_ready_4ee013852d33.pkl",
+      "checkpoint_s42": "NeSPReSO2_onTemplate/saved/acrps_z32_roni/models/NeSPReSO2_ARGO_GoM_A_CRPS_z32_roni_acrps_z32_roni_s42_s2/acrps_z32_roni_s42_s2/model_best.pth",
+      "eval": {
+        "rmse": "reports/eval_A_CRPS_z32_roni_s42.json",
+        "cal": "reports/eval_A_CRPS_z32_roni_cal.json"
+      },
+      "test_s42": {
+        "raw_profile_rmse_T": 0.538,
+        "raw_profile_rmse_S": 0.091,
+        "ence_T_raw": 0.461,
+        "ence_T_recalib_depth_band_var": 0.180,
+        "ence_T_50_200_recalib": 0.411
+      }
+    },
+    "ops": {
+      "config": "NeSPReSO2_onTemplate/config/argo/config_argo_A_CRPS_z32_ops.json",
+      "cache": "data/cache/train_ready_heave_ops_pca32.pkl",
+      "checkpoint_s42": "NeSPReSO2_onTemplate/saved/acrps_z32_ops/models/NeSPReSO2_ARGO_GoM_A_CRPS_z32_ops_acrps_z32_ops_s42_s2/acrps_z32_ops_s42_s2/model_best.pth",
+      "eval": {
+        "rmse": "reports/eval_A_CRPS_z32_ops_s42.json",
+        "cal": "reports/eval_A_CRPS_z32_ops_cal.json"
+      },
+      "test_s42": {
+        "raw_profile_rmse_T": 0.535,
+        "raw_profile_rmse_S": 0.091,
+        "ence_T_raw": 0.671,
+        "ence_T_recalib_depth_band_var": 0.371,
+        "ence_T_50_200_recalib": 0.247
+      }
+    },
+    "heave": {
+      "config": "NeSPReSO2_onTemplate/config/argo/config_argo_A_CRPS_z32_heave.json",
+      "cache": "data/cache/train_ready_3adcff404b0b.pkl",
+      "checkpoint_s42": "NeSPReSO2_onTemplate/saved/acrps_z32_heave/models/NeSPReSO2_ARGO_GoM_A_CRPS_z32_heave_acrps_z32_heave_s42_s2/0825_140921/model_best.pth",
+      "eval": {
+        "rmse": "reports/eval_A_CRPS_z32_heave_s42.json",
+        "cal": "reports/eval_A_CRPS_z32_heave_cal.json"
+      },
+      "test_s42": {
+        "raw_profile_rmse_T": 0.570,
+        "raw_profile_rmse_S": 0.099,
+        "ence_T_raw": 0.353,
+        "ence_T_recalib_global_var": 0.257,
+        "ence_T_50_200_recalib": 0.381
+      },
+      "note": "Protocol is val ENCE stop. An earlier s2 snapshot printed T RMSE 0.533 in tmux before the path vanished."
+    }
+  },
+  "md": "reports/eval_A_CRPS_z32_ablation.md"
+}

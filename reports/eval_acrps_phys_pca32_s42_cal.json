@@ -1,0 +1,18 @@
+{
+  "checkpoint": "saved/acrps_phys_pca32/models/NeSPReSO2_ARGO_GoM_acrps_phys_pca32_acrps_phys_pca32_s42_s2/acrps_phys_pca32_s42_s2/model_best.pth",
+  "split": "test",
+  "n": 623,
+  "n_z": 1801,
+  "overall": {
+    "crps_mean": 0.12237433158365033,
+    "ence": 0.2064863054371168
+  },
+  "temperature": {
+    "crps_mean": 0.2150733999533051,
+    "ence": 0.2890523658446495
+  },
+  "salinity": {
+    "crps_mean": 0.029675263213995398,
+    "ence": 0.22628007648533593
+  }
+}

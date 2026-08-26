@@ -1,0 +1,32 @@
+{
+  "id": "A_CRPS_z32",
+  "prose": "A×CRPS-z",
+  "seed": 42,
+  "config": "NeSPReSO2_onTemplate/config/argo/config_argo_A_CRPS_z32.json",
+  "cache": "data/cache/train_ready_4ee013852d33.pkl",
+  "pca": {"temperature": 32, "salinity": 32},
+  "loss": {
+    "crps_space": "physical",
+    "equal_var": true,
+    "band_equal": true,
+    "pc_crps_scale": 0.1,
+    "val_ence": "temperature",
+    "protocol": "v2 two-stage, stage-2 min val_ence(T)"
+  },
+  "checkpoint_s42": "NeSPReSO2_onTemplate/saved/acrps_phys_pca32_b/models/NeSPReSO2_ARGO_GoM_acrps_phys_pca32_b_acrps_phys_pca32_b_s42_s2/acrps_phys_pca32_b_s42_s2/model_best.pth",
+  "lab_run_id": "acrps_phys_pca32_b_s42",
+  "eval": {
+    "rmse": "reports/eval_acrps_phys_pca32_b_s42.json",
+    "cal": "reports/eval_acrps_phys_pca32_b_cal.json",
+    "md": "reports/eval_acrps_phys_pca32_b.md"
+  },
+  "test_s42": {
+    "n": 623,
+    "raw_profile_rmse_T": 0.560,
+    "raw_profile_rmse_S": 0.095,
+    "ence_T_raw": 0.164,
+    "ence_T_recalib_depth_band_var": 0.135,
+    "ence_T_gate_0.20": "pass (pooled); fail 0-50 and 50-200 bands"
+  },
+  "not": "Frozen Phase-5 A_CRPS (PCA-16, PC-space CRPS). Not a Dai ingest cell (surface/thermocline ENCE still miss)."
+}

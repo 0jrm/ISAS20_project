@@ -1,0 +1,20 @@
+{
+  "checkpoint": "saved/acrps_phys_pca32/models/NeSPReSO2_ARGO_GoM_acrps_phys_pca32_acrps_phys_pca32_s42_s2/acrps_phys_pca32_s42_s2/model_best.pth",
+  "cache": "../data/cache/train_ready_4ee013852d33.pkl",
+  "dataset_tag": "argo_v2",
+  "split": "test",
+  "n_samples": 623,
+  "loss": 1.0523245130840504,
+  "latent_target_rmse": {
+    "temperature": 0.5800738948521877,
+    "salinity": 0.09000658717041059
+  },
+  "raw_profile_rmse": {
+    "temperature": 0.5813453025954465,
+    "salinity": 0.09037884652353827
+  },
+  "pca_target_rmse": {
+    "temperature": 0.5800738948521877,
+    "salinity": 0.09000658717041059
+  }
+}

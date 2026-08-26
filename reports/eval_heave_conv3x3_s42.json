@@ -1,0 +1,17 @@
+{
+  "checkpoint": "saved/models/NeSPReSO2_ARGO_GoM_heave_fast_conv3x3/heave_conv3x3_s42/model_best.pth",
+  "cache": "../data/cache/train_ready_heave_conv_3x3_fix.pkl",
+  "dataset_tag": "argo_v2",
+  "split": "test",
+  "n_samples": 623,
+  "loss": 7.2465564443058605,
+  "latent_target_rmse": {
+    "note": "z-PCA targets unused; residual PCs live on the warped grid"
+  },
+  "raw_profile_rmse": {
+    "temperature": 0.6611076870683217,
+    "salinity": 0.10195522542770728
+  },
+  "decode": "heave_residual_fast",
+  "pca_target_rmse": null
+}

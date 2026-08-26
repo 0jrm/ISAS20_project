@@ -1,0 +1,20 @@
+{
+  "checkpoint": "saved/acrps_z32_roni/models/NeSPReSO2_ARGO_GoM_A_CRPS_z32_roni_acrps_z32_roni_s42_s2/acrps_z32_roni_s42_s2/model_best.pth",
+  "cache": "../data/cache/train_ready_4ee013852d33.pkl",
+  "dataset_tag": "argo_v2",
+  "split": "test",
+  "n_samples": 623,
+  "loss": 0.27531118578551095,
+  "latent_target_rmse": {
+    "temperature": 0.536812863542637,
+    "salinity": 0.09019792666604427
+  },
+  "raw_profile_rmse": {
+    "temperature": 0.5381864805215929,
+    "salinity": 0.09056939954441744
+  },
+  "pca_target_rmse": {
+    "temperature": 0.536812863542637,
+    "salinity": 0.09019792666604427
+  }
+}
