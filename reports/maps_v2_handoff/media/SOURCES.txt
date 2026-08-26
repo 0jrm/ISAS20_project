@@ -1,0 +1,13 @@
+Campaign media copied 20 August 2026.
+
+drift_vs_null.mp4, still_*.png
+  /gpfs/research/coaps/jrm22n/scratch/da_loop_20240106/eval/figures/
+
+3mo_fromic_owned_vs_053.mp4
+  /gpfs/research/coaps/jrm22n/scratch/hycom_val_053free/eval/
+
+argo_rmse_T.png, inc_nespreso_*.png, ke_24h.png, twin_dT_layer1.png, twins_sst.mp4
+  /gpfs/research/coaps/jrm22n/scratch/da_loop_20240102/eval/figures/
+
+column_*.png, tsis_maps_dT_dSSH.png
+  /gpfs/research/coaps/jrm22n/scratch/class3_nespreso_probe/figures/

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MAPS v2 handoff · layout prototypes</title>
+  <style>
+    :root { --ink: #1a1a1a; --mute: #5c6570; --paper: #f4f0e8; --line: #d5cfc3; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: var(--paper); color: var(--ink); }
+    header { padding: 1.25rem 1.5rem 0.5rem; max-width: 1200px; margin: 0 auto; }
+    h1 { margin: 0 0 .35rem; font-family: "IBM Plex Serif", Georgia, serif; font-size: 1.7rem; }
+    p { color: var(--mute); max-width: 62ch; line-height: 1.45; }
+    .tabs { display: flex; gap: .5rem; flex-wrap: wrap; padding: 0 1.5rem 1rem; max-width: 1200px; margin: 0 auto; }
+    .tabs button {
+      border: 1px solid var(--line); background: #fff; padding: .55rem .9rem; border-radius: 999px; cursor: pointer; font: inherit;
+    }
+    .tabs button[aria-selected="true"] { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .frame-wrap { padding: 0 1rem 1.25rem; max-width: 1200px; margin: 0 auto; }
+    iframe {
+      width: 100%; height: calc(100vh - 210px); min-height: 640px; border: 1px solid var(--line);
+      border-radius: 12px; background: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.06);
+    }
+    .notes {
+      max-width: 1200px; margin: 0 auto 1.5rem; padding: 0 1.5rem;
+      font-size: .92rem; line-height: 1.45;
+    }
+    .notes a { color: #3d348b; }
+    code { font-family: ui-monospace, monospace; font-size: .88em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MAPS v2 architecture handoff · layout bakeoff</h1>
+    <p>
+      Throwaway prototypes only. Same sample deck JSON, same companion notes file, three chromes.
+      Pick a layout; production deck comes after.
+    </p>
+  </header>
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" aria-selected="true" data-src="variant_a.html">A · Bracket map</button>
+    <button type="button" role="tab" aria-selected="false" data-src="variant_b.html">B · Slide theater</button>
+    <button type="button" role="tab" aria-selected="false" data-src="variant_c.html">C · Editor workbench</button>
+  </div>
+  <div class="frame-wrap">
+    <iframe id="frame" title="Prototype variant" src="variant_a.html"></iframe>
+  </div>
+  <div class="notes">
+    Companion notes (separate file, all variants):
+    <a href="notes_stub.md" target="_blank" rel="noopener"><code>notes_stub.md</code></a>.
+    Edit the JSON panel inside a variant; the slide stage updates live.
+  </div>
+  <script>
+    const frame = document.getElementById("frame");
+    document.querySelectorAll(".tabs button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", "false"));
+        btn.setAttribute("aria-selected", "true");
+        frame.src = btn.dataset.src;
+      });
+    });
+  </script>
+</body>
+</html>

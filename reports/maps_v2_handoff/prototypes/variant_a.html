@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Variant A · Bracket map</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <style>
+    :root {
+      --encoder: #0B6E4F; --uncertainty: #C81D25; --heave: #3D348B; --da: #E09F3E;
+      --ink: #1A1A1A; --mute: #5C6570; --paper: #F7F5F0; --line: #D9D3C7; --white: #fff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: #ebe6dc; color: var(--ink); }
+    .chrome { display: flex; justify-content: space-between; align-items: center; padding: .6rem 1rem; background: #1a1a1a; color: #f3efe6; font-size: .85rem; }
+    .chrome a { color: #ffd27a; }
+    .label { font-weight: 700; letter-spacing: .04em; text-transform: uppercase; font-size: .72rem; color: #b8b0a2; }
+    .stage-wrap { padding: 1rem; max-width: 1180px; margin: 0 auto; }
+    .slide {
+      background: var(--white); border: 1px solid var(--line); min-height: 420px;
+      display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 0;
+      box-shadow: 0 12px 40px rgba(26,26,26,.08);
+    }
+    .code-col { padding: 1.25rem 1rem 1.25rem 1.4rem; border-right: 1px solid var(--line); background: #fbfaf7; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .82rem; line-height: 1.55; }
+    .viz-col { padding: 1.1rem 1.25rem 1.25rem; display: flex; flex-direction: column; gap: .75rem; }
+    .bracket { position: relative; padding-left: .9rem; margin: .35rem 0; }
+    .bracket::before { content: ""; position: absolute; left: 0; top: .2rem; bottom: .2rem; width: 4px; border-radius: 2px; background: var(--accent, var(--encoder)); }
+    .k { color: var(--mute); }
+    .hl-encoder { color: var(--encoder); font-weight: 700; }
+    .hl-uncertainty { color: var(--uncertainty); font-weight: 700; }
+    .hl-heave { color: var(--heave); font-weight: 700; }
+    .hl-da { color: var(--da); font-weight: 700; }
+    h1 { margin: 0 0 .2rem; font-size: 1.55rem; font-family: "IBM Plex Serif", Georgia, serif; }
+    .sub { color: var(--mute); font-size: .9rem; margin-bottom: .4rem; }
+    .body { font-size: .95rem; line-height: 1.45; }
+    .eq {
+      margin-top: auto; padding: .75rem .9rem; border-left: 5px solid var(--accent, var(--encoder));
+      background: var(--paper); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .88rem;
+    }
+    .nav { display: flex; gap: .5rem; margin: .75rem 0 0; }
+    button, .btn {
+      border: 1px solid var(--line); background: var(--white); padding: .4rem .75rem; cursor: pointer; border-radius: 4px; font: inherit;
+    }
+    button:hover { border-color: var(--ink); }
+    .editor {
+      margin-top: 1rem; background: #1e1f22; color: #e8e6e1; border-radius: 8px; overflow: hidden;
+      display: grid; grid-template-columns: 1fr; 
+    }
+    .editor-head { display: flex; justify-content: space-between; padding: .55rem .8rem; background: #121316; font-size: .8rem; }
+    #status[data-ok="1"] { color: #7dcea0; }
+    #status[data-ok="0"] { color: #f1948a; }
+    textarea {
+      width: 100%; min-height: 180px; border: 0; resize: vertical; padding: .8rem;
+      background: #1e1f22; color: #f0ece4; font: 12.5px/1.45 "IBM Plex Mono", ui-monospace, monospace;
+    }
+    .legend { display: flex; flex-wrap: wrap; gap: .6rem; font-size: .75rem; margin-top: .2rem; }
+    .swatch { display: inline-flex; align-items: center; gap: .35rem; }
+    .swatch i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div class="chrome">
+    <div><span class="label">Variant A</span> · Bracket map (explainer-inspired, cleaned)</div>
+    <div><a href="notes_stub.md" target="_blank" rel="noopener">Open companion notes →</a> · <a href="index.html">Switcher</a></div>
+  </div>
+  <div class="stage-wrap">
+    <div class="slide" id="slide" style="--accent: var(--encoder)">
+      <div class="code-col" id="codeCol"></div>
+      <div class="viz-col">
+        <div>
+          <h1 id="title"></h1>
+          <div class="sub" id="subtitle"></div>
+          <div class="body" id="body"></div>
+        </div>
+        <div id="diagram"></div>
+        <div class="legend">
+          <span class="swatch"><i style="background:var(--encoder)"></i> SatEncoder</span>
+          <span class="swatch"><i style="background:var(--uncertainty)"></i> Uncertainty Head</span>
+          <span class="swatch"><i style="background:var(--heave)"></i> Heave Residual</span>
+          <span class="swatch"><i style="background:var(--da)"></i> DA handoff</span>
+        </div>
+        <div class="eq" id="eq"></div>
+      </div>
+    </div>
+    <div class="nav">
+      <button type="button" id="prev">← Prev</button>
+      <button type="button" id="next">Next →</button>
+      <span id="pos" style="align-self:center;color:var(--mute);font-size:.85rem"></span>
+    </div>
+    <div class="editor">
+      <div class="editor-head"><strong>Editable deck JSON</strong> <span id="status"></span></div>
+      <textarea id="json" spellcheck="false"></textarea>
+    </div>
+  </div>
+  <script src="shared.js"></script>
+  <script>
+    const codeSnippets = {
+      backbone: `<div class="bracket" style="--accent:var(--encoder)"><span class="k"># SatEncoder</span><br>
+<span class="hl-encoder">e</span> = EncProj(scalars)<br>
+<span class="hl-encoder">s</span> = SatProj(Conv2d(sat_patch))<br>
+<span class="hl-encoder">h</span> = e + s<br>
+<span class="hl-encoder">h</span> = MLP(h)</div>`,
+      uncertainty: `<div class="bracket" style="--accent:var(--uncertainty)"><span class="k"># Uncertainty Head</span><br>
+<span class="hl-uncertainty">μ</span> = mu_out(h)<br>
+<span class="hl-uncertainty">σ</span> = softplus(sigma_out(h)) + σ_min<br>
+loss = mean(<span class="hl-uncertainty">CRPS</span>(μ, σ, y))</div>`,
+      heave: `<div class="bracket" style="--accent:var(--heave)"><span class="k"># Heave Residual</span><br>
+<span class="hl-heave">MLD, D26, stretch</span> = decode_warp(raw)<br>
+<span class="hl-heave">T_res</span> = V_T @ z_T + μ_T<br>
+<span class="hl-heave">T</span> = unwarp(warp(clim) + T_res)</div>`,
+      da: `<div class="bracket" style="--accent:var(--da)"><span class="k"># DA handoff</span><br>
+export <span class="hl-da">μ(z)</span>, <span class="hl-da">σ_o(z)</span><br>
+prefer <span class="hl-da">R = diag(σ_o²)</span><br>
+pair cache ↔ checkpoint</div>`,
+    };
+    let idx = 0;
+    let deck = null;
+    const accentVar = { encoder: "var(--encoder)", uncertainty: "var(--uncertainty)", heave: "var(--heave)", da: "var(--da)" };
+
+    function paint() {
+      const s = deck.slides[idx];
+      document.getElementById("slide").style.setProperty("--accent", accentVar[s.accent] || "var(--encoder)");
+      document.getElementById("title").textContent = s.title;
+      document.getElementById("subtitle").textContent = s.subtitle || "";
+      document.getElementById("body").textContent = s.body || "";
+      document.getElementById("eq").textContent = s.equation || "";
+      document.getElementById("codeCol").innerHTML = codeSnippets[s.id] || codeSnippets.backbone;
+      MAPS_PROTO.renderDiagram(s.diagram || s.accent, document.getElementById("diagram"));
+      document.getElementById("pos").textContent = `${idx + 1} / ${deck.slides.length}`;
+      if (window.katex && s.equation) {
+        try { katex.render(s.equation.replace(/CRPS.*/,"\\mathrm{CRPS}"), document.getElementById("eq"), { throwOnError: false }); }
+        catch (_) { document.getElementById("eq").textContent = s.equation; }
+      }
+    }
+
+    MAPS_PROTO.bindEditor({
+      textarea: document.getElementById("json"),
+      statusEl: document.getElementById("status"),
+      onDeck: (d) => { deck = d; idx = Math.min(idx, d.slides.length - 1); paint(); },
+    });
+    document.getElementById("prev").onclick = () => { idx = (idx - 1 + deck.slides.length) % deck.slides.length; paint(); };
+    document.getElementById("next").onclick = () => { idx = (idx + 1) % deck.slides.length; paint(); };
+  </script>
+</body>
+</html>

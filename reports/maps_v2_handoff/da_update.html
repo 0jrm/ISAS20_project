@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAPS lab update · NeSPReSO DA loops</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+:root {
+  --encoder: #0B6E4F;      /* NeSPReSO obs path */
+  --uncertainty: #C81D25;  /* scores / RMSE */
+  --heave: #3D348B;        /* HYCOM dynamics / apply / ownership */
+  --da: #E09F3E;           /* TSIS / DA cycle / experiment design */
+  --ink: #1a1a1a;
+  --mute: #5c6570;
+  --paper: #f7f5f0;
+  --line: #d9d3c7;
+  --white: #ffffff;
+  --panel: #0b1220;
+  --accent: var(--da);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: #e8e2d6;
+}
+button, select {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid #b9b1a3;
+  background: #fff;
+  border-radius: 8px;
+  padding: .4rem .7rem;
+}
+button:hover, select:hover { border-color: var(--ink); }
+button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: .45rem; align-items: center;
+  padding: .55rem .8rem; background: #12151a; color: #efeae1; font-size: .82rem;
+}
+.toolbar a { color: #f0c14b; }
+.toolbar .sep { width: 1px; height: 1.1rem; background: #3a414c; margin: 0 .2rem; }
+.toolbar label { opacity: .75; margin-right: .2rem; }
+.toolbar select { background: #1c222c; color: #efeae1; border-color: #3a414c; }
+.toolbar .grow { flex: 1; min-width: .5rem; }
+#app { display: flex; flex-direction: column; height: calc(100% - 0px); min-height: 0; }
+#main { flex: 1; min-height: 0; display: grid; }
+#main.editor-on { grid-template-columns: minmax(280px, 36%) 1fr; }
+#main.editor-off { grid-template-columns: 1fr; }
+#editorPane {
+  display: none; flex-direction: column; min-height: 0; background: var(--panel); color: #e8eef7;
+  border-right: 1px solid #1f2937;
+}
+#main.editor-on #editorPane { display: flex; }
+#editorPane h2 {
+  margin: 0; padding: .65rem .85rem; font-size: .75rem; letter-spacing: .06em;
+  text-transform: uppercase; color: #93a4bd; border-bottom: 1px solid #243044;
+}
+#json {
+  flex: 1; width: 100%; border: 0; resize: none; padding: .8rem;
+  background: #0b1220; color: #f8fafc; font: 12px/1.45 ui-monospace, SFMono-Regular, monospace;
+}
+#jsonStatus {
+  padding: .4rem .85rem; font-size: .75rem; border-top: 1px solid #243044;
+}
+#jsonStatus[data-ok="1"] { color: #34d399; }
+#jsonStatus[data-ok="0"] { color: #f87171; }
+#stageWrap { min-height: 0; overflow: auto; padding: 1rem; }
+.slide-shell { max-width: 1100px; margin: 0 auto; }
+.navrow { display: flex; gap: .5rem; align-items: center; margin-top: .75rem; flex-wrap: wrap; }
+.pos { color: var(--mute); font-size: .85rem; }
+.hint { color: var(--mute); font-size: .78rem; margin-left: auto; }
+
+.layout-a {
+  background: var(--white); border: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 3fr; min-height: 460px;
+  box-shadow: 0 12px 36px rgba(26,26,26,.08);
+}
+.layout-a .code {
+  padding: 1.1rem 1rem 1.1rem 1.25rem; border-right: 1px solid var(--line);
+  background: #fbfaf7; font-family: ui-monospace, monospace; font-size: .78rem; line-height: 1.5;
+  overflow: auto;
+}
+.layout-a .viz { padding: 1.1rem 1.25rem; display: flex; flex-direction: column; gap: .7rem; }
+.bracket { position: relative; padding-left: .85rem; margin: .3rem 0; }
+.bracket::before {
+  content: ""; position: absolute; left: 0; top: .15rem; bottom: .15rem; width: 4px;
+  border-radius: 2px; background: var(--accent);
+}
+/* RIR-style nested color brackets */
+.bkt {
+  position: relative; padding: .35rem .55rem .35rem .75rem; margin: .35rem 0;
+  border-left: 4px solid var(--bkt, var(--accent)); border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--bkt, var(--accent)) 8%, #fff);
+}
+.bkt .bkt { margin: .3rem 0 .15rem; background: color-mix(in srgb, var(--bkt, var(--accent)) 10%, #fff); }
+.bkt-label {
+  display: block; font-size: .62rem; letter-spacing: .07em; text-transform: uppercase;
+  font-weight: 700; color: var(--bkt, var(--accent)); margin-bottom: .15rem;
+}
+.bkt-encoder { --bkt: var(--encoder); }
+.bkt-uncertainty { --bkt: var(--uncertainty); }
+.bkt-heave { --bkt: var(--heave); }
+.bkt-da { --bkt: var(--da); }
+.code-plain { white-space: pre-wrap; }
+
+.layout-b {
+  aspect-ratio: 16 / 9; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 16px 44px rgba(15,20,25,.14); padding: 1.35rem 1.6rem 1.1rem;
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: .55rem;
+  min-height: 420px;
+}
+.layout-b::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 10px; background: var(--accent);
+}
+.layout-b .mid { display: grid; grid-template-columns: 1.15fr .95fr; gap: 1rem; flex: 1; min-height: 0; }
+
+.layout-c {
+  background: #fff; border: 1px solid #cfd6e2; border-radius: 12px; min-height: 480px;
+  padding: 1.25rem 1.4rem; box-shadow: 0 10px 30px rgba(15,23,42,.08);
+  display: flex; flex-direction: column; gap: .75rem; border-top: 6px solid var(--accent);
+}
+.layout-c .mid { display: grid; grid-template-columns: 1.1fr .95fr; gap: 1rem; }
+.layout-c.inline-diagram .mid,
+.layout-b.inline-diagram .mid { grid-template-columns: 1fr; }
+.diagram-inline { margin: .65rem 0 .85rem; width: clamp(50%, 70%, 75%); }
+.diagram-inline svg { width: 100%; height: auto; min-height: 180px; display: block; }
+
+.kicker {
+  font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700;
+}
+h1 {
+  margin: 0; font-family: "IBM Plex Serif", Georgia, serif; font-weight: 650;
+  font-size: clamp(1.35rem, 2.4vw, 2rem); line-height: 1.15;
+}
+.sub { color: var(--mute); font-size: .92rem; }
+.body { font-size: .96rem; line-height: 1.45; }
+.body p { margin: 0 0 .55rem; }
+.body table { width: 100%; border-collapse: collapse; font-size: .82rem; margin: .4rem 0; }
+.body th, .body td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid var(--line); }
+.body th { color: var(--mute); font-weight: 600; font-size: .72rem; }
+.body tr.hl-ops td { background: color-mix(in srgb, var(--da) 14%, #fff); font-weight: 600; }
+.body tr.hl-bad td { background: color-mix(in srgb, var(--uncertainty) 10%, #fff); }
+.eq {
+  margin-top: auto; padding: .7rem .85rem; background: var(--paper);
+  border: 1px solid var(--line); border-left: 5px solid var(--accent);
+  overflow-x: auto; font-size: .95rem;
+}
+.legend { display: flex; flex-wrap: wrap; gap: .55rem; font-size: .75rem; color: var(--mute); }
+.swatch { display: inline-flex; align-items: center; gap: .3rem; }
+.swatch i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.diagram svg { width: 100%; height: auto; display: block; }
+.media-block { margin: .2rem 0; }
+.media-block img, .media-block video {
+  width: 100%; max-height: 320px; object-fit: contain; display: block;
+  border: 1px solid var(--line); border-radius: 8px; background: #0f141c;
+}
+.media-cap { font-size: .78rem; color: var(--mute); margin-top: .35rem; }
+.media-block.media-top {
+  display: flex; flex-direction: column; align-items: center;
+}
+.media-block.media-top video, .media-block.media-top img {
+  max-height: min(34vh, 300px); width: auto; max-width: 88%;
+  margin: 0 auto;
+}
+.media-block.media-top .media-cap { text-align: center; max-width: 88%; }
+.layout-b.stack-media {
+  display: flex; flex-direction: column; gap: .45rem;
+  aspect-ratio: auto; min-height: 0; overflow: visible; height: auto;
+}
+.layout-b.stack-media .stack-body {
+  flex: 0 1 auto; min-height: 0; overflow: visible;
+}
+.layout-b.stack-media .stack-body .body { font-size: .9rem; }
+.layout-b.stack-media .eq { margin-top: .35rem; }
+.chip {
+  display: inline-block; padding: .12rem .45rem; border-radius: 999px;
+  background: #eef2ff; color: #3730a3; font-size: .72rem; font-weight: 700;
+}
+.meta { display: flex; justify-content: space-between; align-items: center; color: var(--mute); font-size: .8rem; }
+.callout {
+  font-size: .85rem; padding: .55rem .7rem; border-radius: 8px;
+  background: #fff7ed; border: 1px solid #fdba74; color: #7c2d12;
+}
+.hl-encoder { color: var(--encoder); font-weight: 700; }
+.hl-uncertainty { color: var(--uncertainty); font-weight: 700; }
+.hl-heave { color: var(--heave); font-weight: 700; }
+.hl-da { color: var(--da); font-weight: 700; }
+.muted { color: var(--mute); }
+@media (max-width: 900px) {
+  #main.editor-on { grid-template-columns: 1fr; }
+  .layout-a, .layout-b .mid, .layout-c .mid { grid-template-columns: 1fr; }
+  .layout-b { aspect-ratio: auto; min-height: 520px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar" role="toolbar" aria-label="Deck controls">
+    <strong>MAPS · DA lab update</strong>
+    <span class="sep"></span>
+    <label for="layoutSlide">Slide layout</label>
+    <select id="layoutSlide" title="Layout for current slide">
+      <option value="a">A · Bracket map</option>
+      <option value="b">B · Slide theater</option>
+      <option value="c">C · Workbench</option>
+    </select>
+    <label for="layoutDefault">Default</label>
+    <select id="layoutDefault" title="Default when a slide omits layout">
+      <option value="a" selected>A</option>
+      <option value="b">B</option>
+      <option value="c">C</option>
+    </select>
+    <span class="sep"></span>
+    <button type="button" id="btnEditor" aria-pressed="true">JSON editor</button>
+    <button type="button" id="btnExport">Save HTML</button>
+    <span class="sep"></span>
+    <a href="da_update_notes.md" target="_blank" rel="noopener">Companion notes</a>
+    <a href="index.html">ML architecture deck</a>
+    <span class="grow"></span>
+    <span id="deckTitleBar" class="muted"></span>
+  </div>
+  <div id="main" class="editor-on">
+    <aside id="editorPane">
+      <h2>Deck JSON · live preview</h2>
+      <textarea id="json" spellcheck="false" aria-label="Editable deck JSON"></textarea>
+      <div id="jsonStatus" data-ok="1">JSON ok</div>
+    </aside>
+    <div id="stageWrap">
+      <div class="slide-shell">
+        <div id="stage"></div>
+        <div class="navrow">
+          <button type="button" id="btnPrev">← Prev</button>
+          <button type="button" id="btnNext">Next →</button>
+          <span class="pos" id="pos"></span>
+          <span class="hint">← → keys · layouts A/B/C · editor toggle</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ========== Embedded default deck ========== */
+const DEFAULT_DECK = {
+  "title": "MAPS lab update · NeSPReSO DA loops",
+  "defaultLayout": "a",
+  "legend": [
+    { "key": "encoder", "label": "NeSPReSO obs path" },
+    { "key": "da", "label": "TSIS / DA cycle" },
+    { "key": "heave", "label": "HYCOM apply / forecast" },
+    { "key": "uncertainty", "label": "Scores / RMSE" }
+  ],
+  "slides": [
+    {
+      "id": "cover",
+      "accent": "da",
+      "layout": "b",
+      "title": "NeSPReSO into HYCOM / TSIS",
+      "subtitle": "Graduate lab update · ~15 min · Aug 2026",
+      "body": "<p>Progress update on Aim 2’s data-assimilation loop. I own the pipe from a HYCOM restart through TSIS into an owned forecast, and I have scored NeSPReSO profiles against a traditional analysis on the same background.</p><p>Today: what works, what lost to a free run, and where I want feedback. This is <strong>not</strong> an OSSE skill claim.</p>",
+      "equation": "\\text{HYCOM bg} \\xrightarrow{\\text{TSIS}} \\delta x \\xrightarrow{\\texttt{incflg}=-1} \\text{forecast}",
+      "diagram": "cover",
+      "code": "lab update\\npipe owned · ops wins\\nNeSPReSO profile-only loses"
+    },
+    {
+      "id": "bottom_line",
+      "accent": "da",
+      "layout": "a",
+      "title": "Bottom line · three facts",
+      "subtitle": "Pipe · traditional DA · NeSPReSO profiles",
+      "body": "<p><span class=\"hl-heave\">One.</span> The pipe is owned. Stage a restart, run TSIS, convert the NetCDF increment, apply it in owned HYCOM, forecast a week.</p><p><span class=\"hl-da\">Two.</span> Traditional TSIS on a Gulf that has already drifted four days beats the free run against Argo. Analysis-time T RMSE 0.912 → 0.496 °C; ops still ahead at day 7.</p><p><span class=\"hl-uncertainty\">Three.</span> Profile-only NeSPReSO on that same background did <strong>not</strong> beat doing nothing. A separate V08 HYCOM matches abozec expt 05.3 byte-for-byte on the first archive (configuration ownership, not DA skill).</p>",
+      "equation": "\\mathrm{RMSE}^{\\mathrm{ops}}_{\\mathrm{anl}} = 0.496^{\\circ}\\mathrm{C} \\lt \\mathrm{RMSE}^{\\mathrm{null}} = 0.912 \\lt \\mathrm{RMSE}^{\\mathrm{Nesp}}",
+      "diagram": "bottom",
+      "codeHtml": true,
+      "code": "<div class=\"bkt bkt-heave\"><span class=\"bkt-label\">pipe</span>restart → TSIS → xa2inc<br>→ incflg=-1 → forecast</div><div class=\"bkt bkt-da\"><span class=\"bkt-label\">ops wins</span>0.912 → 0.496 °C (anl)<br>still ahead at +168 h</div><div class=\"bkt bkt-uncertainty\"><span class=\"bkt-label\">NeSPReSO loses</span>argo 1.414 · tracks 1.815<br>worse than null at anl</div>"
+    },
+    {
+      "id": "three_machines",
+      "accent": "da",
+      "layout": "a",
+      "title": "Three machines that must agree",
+      "subtitle": "NeSPReSO estimates profiles · TSIS analyzes · HYCOM absorbs",
+      "body": "<p><span class=\"hl-encoder\">NeSPReSO</span> turns surface context into estimated T/S profiles. Think of it as an observation operator that estimates profile-like information where floats are missing.</p><p><span class=\"hl-da\">TSIS</span> compares those observations to a HYCOM background and writes an increment (xprep → xgmrf → xa2inc).</p><p><span class=\"hl-heave\">HYCOM</span> is the dynamical ocean. It forecasts forward and must absorb the increment without blowing up. A messy increment shows up as spin-up noise the next day.</p>",
+      "equation": "y^{o}=\\mathcal{H}_{\\mathrm{Nesp}}(\\mathrm{SST},\\mathrm{SSS},\\mathrm{SSH}),\\quad \\delta x=\\mathrm{TSIS}(y^{o}-H x^{b})",
+      "diagram": "machines",
+      "codeHtml": true,
+      "code": "<div class=\"bkt bkt-encoder\"><span class=\"bkt-label\">NeSPReSO</span>surface → μ(z) profiles<br>API / serve path</div><div class=\"bkt bkt-da\"><span class=\"bkt-label\">TSIS</span>xprep → xgmrf → xa2inc<br>writes incupd diff archive</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">HYCOM</span>reads incupd<br>incflg=-1 applies patch</div>"
+    },
+    {
+      "id": "daily_loop",
+      "accent": "da",
+      "layout": "a",
+      "title": "Daily loop I now own",
+      "subtitle": "Background → analysis → difference archive → apply",
+      "body": "<p>Read the <span class=\"hl-da\">TSIS</span> bracket as the analysis chain, then the <span class=\"hl-heave\">HYCOM</span> bracket as the model apply.</p><p>xa2inc writes a <em>difference</em> archive (header says diff day; T mins/maxes are a few degrees, not 0–30). HYCOM must treat it as a patch: <code>incflg=-1</code>. Positive one treats the file as a target state. That is how early attempts blew up layer thickness (<code>neg dp</code>).</p><p>On the drifted forecast members, apply logs show 97 <code>finished incupdate</code> lines and zero <code>neg dp</code>.</p>",
+      "equation": "\\texttt{incflg}=-1:\\; x \\leftarrow x + \\Delta_{\\mathrm{xa2inc}},\\quad \\texttt{incflg}=+1:\\; \\text{treat as target (unsafe)}",
+      "diagram": "loop",
+      "codeHtml": true,
+      "code": "<div class=\"bkt bkt-heave\"><span class=\"bkt-label\">HYCOM bg</span>integrate restart<br>→ archv / restart_dayN<div class=\"bkt bkt-da\"><span class=\"bkt-label\">TSIS</span>xprep (ops) or prebuilt obs<br>xgmrf → inc.*.nc<br>xa2inc → incupd.*</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">apply</span>incflg=-1 day 1 only<br>then forecast incflg=0</div></div>"
+    },
+    {
+      "id": "campaigns",
+      "accent": "da",
+      "layout": "a",
+      "title": "Three campaigns this summer",
+      "subtitle": "2 Jan twins · 6 Jan drifted · 05.3 canary",
+      "body": "<p><strong>2 Jan twins</strong> (13 Aug). Four copies from the same restart; analysis six hours later. Too close to reanalysis. Ops beat null. NeSPReSO and dense lost.</p><p><strong>6 Jan drifted</strong> (18 Aug). Four free days with no assimilation, then TSIS once against that drifted ocean, then seven forecast days. Every member shares <code>restart_day04</code>. Innovations are NeSPReSO minus the <em>drifted</em> column.</p><p><strong>05.3 canary</strong> (20 Aug). V08 binary matches abozec expt 05.3 on the first archive byte-for-byte. Configuration ownership, separate from DA skill.</p>",
+      "equation": "\\underbrace{t_{0}+6\\mathrm{h}}_{\\text{2 Jan}}\\;\\big\\|\\;\\underbrace{t_{0}+4\\mathrm{d}}_{\\text{drifted}}\\;\\big\\|\\;\\underbrace{\\mathrm{archm}_{1}}_{\\text{05.3 bit-id}}",
+      "diagram": "campaigns",
+      "codeHtml": true,
+      "code": "<div class=\"bkt bkt-da\"><span class=\"bkt-label\">members</span>null · ops<br>nespreso_argo · tracks/dense</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">shared bg</span>2 Jan: near restart<br>6 Jan: restart_day04</div><div class=\"bkt bkt-encoder\"><span class=\"bkt-label\">NeSPReSO sites</span>argo: GDAC columns<br>tracks: 0.25° SLA thin</div>"
+    },
+    {
+      "id": "obs_path",
+      "accent": "encoder",
+      "layout": "a",
+      "title": "NeSPReSO obs on the drifted state",
+      "subtitle": "Profile-only write-out · satellites masked",
+      "body": "<p><span class=\"hl-encoder\">build_obs.py</span> loads the drifted 3D T/S/thk, calls the NeSPReSO profile or grid API, layer-averages onto HYCOM interfaces, masks every satellite obs/inov variable, sets profiles-only gates.</p><p><span class=\"hl-da\">Ops</span> takes a different path. qcobs has no 6 Jan file, so <code>run_tsis.sh ops</code> runs xprep from cargo <code>ocn_obs</code> (Argo ±4 d, L3/L4 SLA, L4 SST; no L3 SST).</p><p>Mechanical fact: NeSPReSO members write T, S, thickness. Their increment <code>uvl</code>, <code>vvl</code>, and <code>ssh</code> are identically zero. Ops SSH increment RMS is 0.075.</p>",
+      "equation": "d = y^{\\mathrm{Nesp}} - H x^{b}_{\\mathrm{drifted}},\\quad \\mathrm{SSH}^{\\mathrm{inc}}_{\\mathrm{Nesp}}\\equiv 0",
+      "diagram": "obs",
+      "media": { "type": "img", "src": "media/inc_nespreso_argo_tem.png", "caption": "2 Jan · nespreso_argo T increment map (SSH blank on purpose)." },
+      "codeHtml": true,
+      "code": "<div class=\"bkt bkt-heave\"><span class=\"bkt-label\">drifted bg</span>archv.2024_005_18</div><div class=\"bkt bkt-encoder\"><span class=\"bkt-label\">build_obs</span>API profiles / tracks<br>layer-avg → HYCOM<br>mask satellites · SPVAL<div class=\"bkt bkt-da\"><span class=\"bkt-label\">xgmrf</span>skip xprep (NeSPReSO)<br>ops: xprep then xgmrf</div></div><div class=\"bkt bkt-uncertainty\"><span class=\"bkt-label\">sanity</span>9 argo cols · 119 tracks<br>SSH/uv ≡ 0 in inc</div>"
+    },
+    {
+      "id": "headlines",
+      "accent": "uncertainty",
+      "layout": "b",
+      "title": "Headline scores (Argo T RMSE)",
+      "subtitle": "Analysis-time ranking · drifted campaign",
+      "body": "<p>Pooled GDAC Argo temperature RMSE (°C) at analysis on the drifted loop. Profile counts are small (8–11 floats/day). Ranking is still clear.</p><ul><li><span class=\"hl-da\">ops 0.496</span> — only member that beats the free run</li><li><span class=\"hl-heave\">null 0.912</span> — drifted free run</li><li><span class=\"hl-uncertainty\">nespreso_argo 1.414</span> — worse than null at the floats it assimilated</li><li><span class=\"hl-uncertainty\">nespreso_tracks 1.815</span> — denser sampling, worse still</li></ul><p>2 Jan contrast (near restart): null 1.03, ops 0.64, nespreso_argo 2.34, dense 4.36.</p>",
+      "equation": "\\mathrm{rank:\\ ops \\prec null \\prec nesp\\_argo \\prec nesp\\_tracks}",
+      "diagram": "headlines",
+      "media": { "type": "img", "src": "media/argo_rmse_T.png", "caption": "2 Jan Argo RMSE bars (packet figure)." }
+    },
+    {
+      "id": "rmse_table",
+      "accent": "uncertainty",
+      "layout": "c",
+      "title": "Full Argo T RMSE table (drifted)",
+      "subtitle": "Source: MAPS-handoff-drift-loop.html verification · da_loop_20240106",
+      "body": "<p>Pooled at native Argo pressures. Counts 9 / 11 / 8 / 10 at anl / +24 h / +48 h / +168 h.</p><table><thead><tr><th>Member</th><th>anl</th><th>+24 h</th><th>+48 h</th><th>+168 h</th><th>incupd</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.496</td><td>0.667</td><td>0.510</td><td>0.748</td><td>97</td></tr><tr><td>null</td><td>0.912</td><td>0.840</td><td>0.783</td><td>0.853</td><td>0</td></tr><tr class=\"hl-bad\"><td>nespreso_argo</td><td>1.414</td><td>0.850</td><td>0.771</td><td>0.849</td><td>97</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>1.815</td><td>1.784</td><td>1.681</td><td>1.553</td><td>97</td></tr></tbody></table><p>Ops stays better than null through +168 h. Tracks stay cold all week. Analysis-time T bias vs Argo: null −0.26, ops −0.18, argo −0.44, tracks −0.78 °C.</p>",
+      "equation": "\\mathrm{RMSE}_T\\ (^{\\circ}\\mathrm{C})\\ \\text{vs GDAC Argo, Gulf subset}",
+      "diagram": "none"
+    },
+    {
+      "id": "movie",
+      "accent": "heave",
+      "layout": "b",
+      "mediaTop": true,
+      "title": "Movie · drifted members versus ops",
+      "subtitle": "SST / SSS / SSH · first 96 h shared freerun",
+      "body": "<p>Absolute columns: null, ops, NeSPReSO argo, tracks. Difference columns are member minus ops.</p><p>First 96 hours are the shared free run (differences zero). Apply starts 5 Jan 19Z.</p><p>Look at tracks−ops SSH. Basin-scale mismatch even though increment SSH is identically zero. That is steric/thickness response (<em>inference</em>), not a written SSH patch. Ops increment SSH RMS = 0.075.</p>",
+      "equation": "\\Delta \\mathrm{SSH}_{\\mathrm{tracks}} \\neq 0 \\quad\\text{even though}\\quad \\delta\\mathrm{SSH}^{\\mathrm{inc}}\\equiv 0",
+      "media": { "type": "video", "src": "media/drift_vs_null.mp4", "caption": "264 hourly frames · differences = member − ops." }
+    },
+    {
+      "id": "next",
+      "accent": "da",
+      "layout": "a",
+      "title": "What we learned · open questions · next",
+      "subtitle": "Feedback wanted on error model, SSH, ingest, OSSE gate",
+      "body": "<p><strong>Learned.</strong> Traditional DA on this drifted ocean works. Profile-only NeSPReSO does not beat null. More columns made it worse. Bottleneck is the observation (cold bias, error model, missing SSH), not HYCOM apply.</p><p><strong>Ask the room.</strong> (1) Error model / native NeSPReSO vs those nine GDAC profiles on 6 Jan was not recomputed here. (2) Write SSH, keep satellites on, or stay profile-only until T/S bias is honest? (3) Production Class 3 still wants xprep to write the profile. (4) No OSSE until obs quality is why we win or lose.</p><p><strong>Next.</strong> Score native NeSPReSO vs GDAC on drifted dates · fix error model / vertical remap (not another dense grid) · optional SSH/hybrid once T/S stops pulling floats the wrong way · keep V08 and masterB separate · OSSE only after beating ops or a documented reason not to.</p>",
+      "equation": "\\text{obs quality first},\\quad \\text{OSSE later}",
+      "diagram": "next",
+      "codeHtml": true,
+      "code": "<div class=\"bkt bkt-uncertainty\"><span class=\"bkt-label\">bottleneck</span>cold bias · R · no SSH<br>not apply / neg dp</div><div class=\"bkt bkt-da\"><span class=\"bkt-label\">ask</span>error model · SSH?<br>xprep ingest · OSSE gate</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">keep separate</span>masterB (DA, 92)<br>V08 (05.3, 189)</div>"
+    },
+    {
+      "id": "backup_inc",
+      "accent": "uncertainty",
+      "layout": "c",
+      "title": "Backup · how big was the correction?",
+      "subtitle": "Size of the TSIS increment · apply stayed healthy",
+      "body": "<p><strong>Takeaway.</strong> Ops wrote a real surface-height correction (SSH rms 0.075) plus a modest temperature patch (T rms 0.070). NeSPReSO members wrote <em>no</em> SSH and <em>no</em> velocity — only T/S/thickness. Their temperature patches were smaller (argo 0.047) or larger and colder (tracks 0.167), and both still lost to Argo. The model applied every increment cleanly (97 update steps, zero negative-thickness crashes).</p><table><thead><tr><th>Member</th><th>SSH rms</th><th>T rms</th><th>plain reading</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.075</td><td>0.070</td><td>has SSH + T</td></tr><tr><td>nespreso_argo</td><td>0</td><td>0.047</td><td>T/S only</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>0</td><td>0.167</td><td>T/S only, larger T</td></tr></tbody></table><p>Thickness numbers in the raw files use HYCOM pressure units (<code>onem≈9806 ≈ 1 m</code>). Treat thickness stats as untrusted until someone reports wet-ocean-only values.</p>",
+      "equation": "\\texttt{onem}\\approx 9806 \\Rightarrow \\Delta p/\\texttt{onem}\\ \\text{in meters}",
+      "diagram": "none",
+      "media": { "type": "img", "src": "media/still_anl.png", "caption": "Drifted movie poster · analysis time." }
+    },
+    {
+      "id": "backup_053",
+      "accent": "heave",
+      "layout": "b",
+      "title": "Backup · 05.3 free-run canary",
+      "subtitle": "V08 · 189 ranks · first archm bit-identical",
+      "body": "<p>Same source family, namelist, IC, nest, interpolated CFSv2 forcing, 189 ranks, SERIAL_IO rebuild. First 6-hour archive matched 05.3 byte-for-byte.</p><p>Month-3 interior SST RMS 0.17 K and SSH 2.8 cm is expected mesoscale wander, not the old hour-1 southern Montgomery band from mixing masterB namelist hacks.</p><p>If DA must share that ocean, port DA hycom to V08. Do not strip <code>hybthn</code> to force masterB onto 05.3 blkdat.</p>",
+      "equation": "\\mathrm{archm}_{1}(\\mathrm{V08}) \\equiv \\mathrm{archm}_{1}(05.3)",
+      "diagram": "canary",
+      "media": { "type": "video", "src": "media/3mo_fromic_owned_vs_053.mp4", "caption": "91 daily frames · SSH in m (srfhgt/9.806) · Δ ±5 cm · frame 1 should look empty." }
+    }
+  ]
+};
+
+const COLORS = {
+  encoder: "#0B6E4F",
+  uncertainty: "#C81D25",
+  heave: "#3D348B",
+  da: "#E09F3E",
+  ink: "#1A1A1A",
+  mute: "#5C6570",
+  paper: "#F7F5F0",
+  line: "#D9D3C7",
+};
+
+function diagramSVG(kind) {
+  const C = COLORS;
+  const common = `<defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${C.ink}"/></marker>
+    </defs>`;
+  const map = {
+    cover: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="55" width="100" height="60" rx="10" fill="${C.encoder}"/><text x="70" y="90" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">NeSPReSO</text>
+      <path d="M120 85 H150" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="155" y="55" width="100" height="60" rx="10" fill="${C.da}"/><text x="205" y="90" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">TSIS</text>
+      <path d="M255 85 H285" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="290" y="55" width="100" height="60" rx="10" fill="${C.heave}"/><text x="340" y="90" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">HYCOM</text>
+      <path d="M390 85 H420" stroke="${C.uncertainty}" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <rect x="425" y="55" width="75" height="60" rx="10" fill="${C.uncertainty}" opacity=".2" stroke="${C.uncertainty}" stroke-width="2"/><text x="462" y="90" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">RMSE</text>
+    </svg>`,
+    bridge: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="30" y="40" width="200" height="80" rx="10" fill="${C.encoder}" opacity=".15" stroke="${C.encoder}" stroke-width="2"/>
+      <text x="130" y="75" text-anchor="middle" fill="${C.encoder}" font-size="13" font-weight="700">index.html</text>
+      <text x="130" y="98" text-anchor="middle" fill="${C.mute}" font-size="11">ML architecture</text>
+      <path d="M230 80 H280" stroke="${C.da}" stroke-width="3" marker-end="url(#arrow)"/>
+      <rect x="285" y="40" width="200" height="80" rx="10" fill="${C.da}"/>
+      <text x="385" y="75" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">da_update.html</text>
+      <text x="385" y="98" text-anchor="middle" fill="#3a2a00" font-size="11">this lab update</text>
+    </svg>`,
+    bottom: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="30" width="150" height="110" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="95" y="75" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">1 · pipe owned</text>
+      <text x="95" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">apply works</text>
+      <rect x="185" y="30" width="150" height="110" rx="10" fill="${C.da}" opacity=".25" stroke="${C.da}" stroke-width="2"/>
+      <text x="260" y="75" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">2 · ops wins</text>
+      <text x="260" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">0.496 &lt; 0.912</text>
+      <rect x="350" y="30" width="150" height="110" rx="10" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="425" y="75" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">3 · Nesp loses</text>
+      <text x="425" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">1.414 / 1.815</text>
+    </svg>`,
+    machines: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="15" y="50" width="140" height="70" rx="10" fill="${C.encoder}"/><text x="85" y="80" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">NeSPReSO</text><text x="85" y="100" text-anchor="middle" fill="#d9ffe9" font-size="10">μ profiles</text>
+      <path d="M155 85 H185" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="190" y="50" width="140" height="70" rx="10" fill="${C.da}"/><text x="260" y="80" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">TSIS</text><text x="260" y="100" text-anchor="middle" fill="#3a2a00" font-size="10">δx increment</text>
+      <path d="M330 85 H360" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="365" y="50" width="140" height="70" rx="10" fill="${C.heave}"/><text x="435" y="80" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">HYCOM</text><text x="435" y="100" text-anchor="middle" fill="#ddd6ff" font-size="10">forecast</text>
+    </svg>`,
+    loop: `<svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="36" width="100" height="52" rx="8" fill="${C.heave}"/><text x="70" y="67" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">bg</text>
+      <path d="M120 62 H148" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="150" y="36" width="100" height="52" rx="8" fill="${C.da}"/><text x="200" y="67" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">xprep</text>
+      <path d="M250 62 H278" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="280" y="36" width="100" height="52" rx="8" fill="${C.da}"/><text x="330" y="67" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">xgmrf</text>
+      <path d="M380 62 H408" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="410" y="36" width="120" height="52" rx="8" fill="${C.da}"/><text x="470" y="67" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">xa2inc</text>
+      <path d="M470 88 V118" stroke="${C.heave}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="150" y="122" width="380" height="44" rx="8" fill="${C.heave}"/><text x="340" y="149" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">apply · incflg=−1 · then forecast</text>
+      <path d="M150 144 H70 V88" stroke="${C.heave}" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+      <text x="20" y="188" fill="${C.mute}" font-size="11">Order: HYCOM background → TSIS (xprep → xgmrf → xa2inc) → HYCOM apply</text>
+    </svg>`,
+    campaigns: `<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="35" width="150" height="110" rx="10" fill="${C.da}" opacity=".2" stroke="${C.da}" stroke-width="2"/>
+      <text x="95" y="70" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">2 Jan twins</text>
+      <text x="95" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">+6 h from IC</text>
+      <text x="95" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">ops ≺ null ≺ nesp</text>
+      <rect x="185" y="35" width="150" height="110" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="260" y="70" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">6 Jan drift</text>
+      <text x="260" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">+4 d freerun</text>
+      <text x="260" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">same ranking</text>
+      <rect x="350" y="35" width="150" height="110" rx="10" fill="${C.heave}" opacity=".2" stroke="${C.heave}" stroke-width="2"/>
+      <text x="425" y="70" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">05.3 canary</text>
+      <text x="425" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">V08 bit-id</text>
+      <text x="425" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">not DA skill</text>
+    </svg>`,
+    obs: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="45" width="110" height="70" rx="10" fill="${C.heave}"/><text x="75" y="85" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">drifted xᵇ</text>
+      <path d="M130 80 H160" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="165" y="45" width="130" height="70" rx="10" fill="${C.encoder}"/><text x="230" y="75" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">build_obs</text><text x="230" y="95" text-anchor="middle" fill="#d9ffe9" font-size="10">mask satellites</text>
+      <path d="M295 80 H325" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="330" y="45" width="160" height="70" rx="10" fill="${C.da}"/><text x="410" y="75" text-anchor="middle" fill="#1a1200" font-size="12" font-weight="700">tsis_obs</text><text x="410" y="95" text-anchor="middle" fill="#3a2a00" font-size="10">profiles only</text>
+    </svg>`,
+    headlines: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="30" y="36" fill="${C.uncertainty}" font-size="13" font-weight="700">Argo T RMSE at analysis (°C)</text>
+      <rect x="30" y="55" width="90" height="70" rx="8" fill="${C.da}"/><text x="75" y="85" text-anchor="middle" fill="#1a1200" font-size="14" font-weight="700">0.496</text><text x="75" y="105" text-anchor="middle" fill="#3a2a00" font-size="11">ops</text>
+      <rect x="140" y="55" width="90" height="70" rx="8" fill="${C.heave}" opacity=".25" stroke="${C.heave}" stroke-width="2"/><text x="185" y="85" text-anchor="middle" fill="${C.heave}" font-size="14" font-weight="700">0.912</text><text x="185" y="105" text-anchor="middle" fill="${C.mute}" font-size="11">null</text>
+      <rect x="250" y="55" width="100" height="70" rx="8" fill="${C.uncertainty}" opacity=".2" stroke="${C.uncertainty}" stroke-width="2"/><text x="300" y="85" text-anchor="middle" fill="${C.uncertainty}" font-size="14" font-weight="700">1.414</text><text x="300" y="105" text-anchor="middle" fill="${C.mute}" font-size="11">argo</text>
+      <rect x="370" y="55" width="110" height="70" rx="8" fill="${C.uncertainty}"/><text x="425" y="85" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">1.815</text><text x="425" y="105" text-anchor="middle" fill="#ffd0d0" font-size="11">tracks</text>
+    </svg>`,
+    table: `<svg viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="40" y="55" fill="${C.uncertainty}" font-size="14" font-weight="700">Full table lives in the body</text>
+      <text x="40" y="85" fill="${C.mute}" font-size="12">Pinned from drift-loop verification section</text>
+    </svg>`,
+    movie: `<svg viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="40" y="30" width="440" height="60" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="260" y="65" text-anchor="middle" fill="${C.heave}" font-size="14" font-weight="700">drift_vs_null.mp4 · play beside talk</text>
+    </svg>`,
+    next: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="40" width="150" height="80" rx="10" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="95" y="85" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">fix R / bias</text>
+      <rect x="185" y="40" width="150" height="80" rx="10" fill="${C.da}" opacity=".2" stroke="${C.da}" stroke-width="2"/>
+      <text x="260" y="85" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">SSH? ingest?</text>
+      <rect x="350" y="40" width="150" height="80" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="425" y="85" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">OSSE later</text>
+    </svg>`,
+    backup: `<svg viewBox="0 0 520 100" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="40" y="55" fill="${C.mute}" font-size="13">Increment diagnostics · backup only</text>
+    </svg>`,
+    canary: `<svg viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="60" y="30" width="180" height="60" rx="10" fill="${C.heave}"/><text x="150" y="65" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">V08 owned</text>
+      <text x="260" y="65" fill="${C.ink}" font-size="20" font-weight="700">≡</text>
+      <rect x="290" y="30" width="180" height="60" rx="10" fill="${C.da}"/><text x="380" y="65" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">05.3 ref</text>
+    </svg>`,
+  };
+  return map[kind] || map.cover;
+}
+
+let deck = null;
+let htmlFileHandle = null;
+const HTML_SAVE_NAME = "da_update.html";
+const DECK_RE = /const DEFAULT_DECK = \{[\s\S]*?\n\};/;
+let idx = 0;
+let editorVisible = true;
+let syncingEditor = false;
+
+function accentCSS(a) {
+  return ({ encoder: "var(--encoder)", uncertainty: "var(--uncertainty)", heave: "var(--heave)", da: "var(--da)" })[a] || "var(--da)";
+}
+
+function resolveLayout(slide) {
+  const L = (slide && slide.layout) || (deck && deck.defaultLayout) || "a";
+  return ["a", "b", "c"].includes(L) ? L : "a";
+}
+
+function renderKatex(el, tex) {
+  if (!tex) { el.innerHTML = ""; return; }
+  if (window.katex) {
+    try {
+      katex.render(tex, el, { throwOnError: false, displayMode: true });
+      return;
+    } catch (_) { /* fall through */ }
+  }
+  el.textContent = tex;
+}
+
+function legendHTML() {
+  const items = (deck && deck.legend) || [
+    { key: "encoder", label: "NeSPReSO obs path" },
+    { key: "da", label: "TSIS / DA cycle" },
+    { key: "heave", label: "HYCOM apply / forecast" },
+    { key: "uncertainty", label: "Scores / RMSE" },
+  ];
+  return `<div class="legend">${items.map((it) =>
+    `<span class="swatch"><i style="background:var(--${it.key})"></i> ${esc(it.label)}</span>`
+  ).join("")}</div>`;
+}
+
+function mediaHTML(media, top) {
+  if (!media || !media.src) return "";
+  const cap = media.caption ? `<div class="media-cap">${esc(media.caption)}</div>` : "";
+  const cls = top ? "media-block media-top" : "media-block";
+  if (media.type === "video") {
+    return `<div class="${cls}"><video controls preload="metadata" src="${esc(media.src)}"></video>${cap}</div>`;
+  }
+  return `<div class="${cls}"><img src="${esc(media.src)}" alt="${esc(media.caption || "")}" />${cap}</div>`;
+}
+
+function codeColumn(s) {
+  if (s.codeHtml) return s.code || "";
+  const code = (s.code || "").replace(/\\n/g, "\n");
+  return `<div class="bracket code-plain">${esc(code).replace(/\n/g, "<br>")}</div>`;
+}
+
+function sidePanel(s, diag, inline) {
+  if (inline || s.mediaTop) return "";
+  const media = mediaHTML(s.media, false);
+  if (media) return media;
+  if (!s.diagram || s.diagram === "none") return "";
+  return `<div class="diagram">${diag}</div>`;
+}
+
+function paint() {
+  if (!deck || !deck.slides || !deck.slides.length) {
+    document.getElementById("stage").innerHTML = `<div class="callout">Deck has no slides.</div>`;
+    return;
+  }
+  idx = ((idx % deck.slides.length) + deck.slides.length) % deck.slides.length;
+  const s = deck.slides[idx];
+  const layout = resolveLayout(s);
+  const accent = s.accent || "da";
+  document.getElementById("stage").style.setProperty("--accent", accentCSS(accent));
+  document.getElementById("layoutSlide").value = layout;
+  document.getElementById("layoutDefault").value = deck.defaultLayout || "a";
+  document.getElementById("deckTitleBar").textContent = deck.title || "";
+  document.getElementById("pos").textContent = `${idx + 1} / ${deck.slides.length} · layout ${layout.toUpperCase()}`;
+
+  const title = s.title || "";
+  const sub = s.subtitle || "";
+  const rawBody = s.body || "";
+  const diag = diagramSVG(s.diagram || accent);
+  const eqId = "eq_" + idx;
+  const inline = rawBody.includes("{{diagram}}");
+  const body = inline
+    ? rawBody.replace("{{diagram}}", `<div class="diagram diagram-inline">${diag}</div>`)
+    : rawBody;
+  const side = sidePanel(s, diag, inline);
+  const inlineClass = inline ? " inline-diagram" : "";
+  const codeCol = codeColumn(s);
+  const topMedia = s.mediaTop ? mediaHTML(s.media, true) : "";
+
+  let html = "";
+  if (layout === "a") {
+    html = `<div class="layout-a${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="code">${codeCol}</div>
+      <div class="viz">
+        <div class="kicker">${esc(deck.title || "DA lab update")}</div>
+        <h1>${esc(title)}</h1>
+        <div class="sub">${esc(sub)}</div>
+        <div class="body">${body}</div>
+        ${side}
+        ${legendHTML()}
+        <div class="eq" id="${eqId}"></div>
+      </div>
+    </div>`;
+  } else if (layout === "b" && topMedia) {
+    html = `<div class="layout-b stack-media" style="--accent:${accentCSS(accent)}">
+      <div class="kicker">${esc(deck.title || "DA lab update")} · ${esc(accent)}</div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      ${topMedia}
+      <div class="stack-body">
+        <div class="body">${body}</div>
+        <div class="eq" id="${eqId}"></div>
+      </div>
+    </div>`;
+  } else if (layout === "b") {
+    html = `<div class="layout-b${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="kicker">${esc(deck.title || "DA lab update")} · ${esc(accent)}</div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      <div class="mid">
+        <div>
+          <div class="body">${body}</div>
+          <div class="eq" id="${eqId}"></div>
+        </div>
+        ${side || (s.diagram && s.diagram !== "none" ? `<div class="diagram">${diag}</div>` : "")}
+      </div>
+      ${legendHTML()}
+    </div>`;
+  } else {
+    const sideOrDiag = side || (s.diagram && s.diagram !== "none" ? `<div class="diagram">${diag}</div>` : "");
+    const cInline = sideOrDiag ? inlineClass : " inline-diagram";
+    html = `<div class="layout-c${cInline}" style="--accent:${accentCSS(accent)}">
+      <div class="meta"><span class="chip">${esc(accent)}</span><span>${esc(s.id || "")}</span></div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      <div class="mid">
+        <div class="body">${body}</div>
+        ${sideOrDiag}
+      </div>
+      <div class="eq" id="${eqId}"></div>
+      ${legendHTML()}
+    </div>`;
+  }
+  document.getElementById("stage").innerHTML = html;
+  renderKatex(document.getElementById(eqId), s.equation || "");
+}
+
+function esc(t) {
+  return String(t)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function writeEditorFromDeck() {
+  syncingEditor = true;
+  document.getElementById("json").value = JSON.stringify(deck, null, 2);
+  syncingEditor = false;
+}
+
+function applyJSON() {
+  if (syncingEditor) return;
+  const status = document.getElementById("jsonStatus");
+  try {
+    const parsed = JSON.parse(document.getElementById("json").value);
+    if (!parsed.slides || !Array.isArray(parsed.slides)) throw new Error("deck.slides must be an array");
+    deck = parsed;
+    if (!deck.defaultLayout) deck.defaultLayout = "a";
+    status.textContent = "JSON ok · live preview";
+    status.dataset.ok = "1";
+    paint();
+  } catch (err) {
+    status.textContent = "JSON error: " + err.message;
+    status.dataset.ok = "0";
+  }
+}
+
+function setEditorVisible(on) {
+  editorVisible = !!on;
+  document.getElementById("main").className = editorVisible ? "editor-on" : "editor-off";
+  document.getElementById("btnEditor").setAttribute("aria-pressed", editorVisible ? "true" : "false");
+}
+
+function setSaveStatus(ok, msg) {
+  const status = document.getElementById("jsonStatus");
+  status.textContent = msg;
+  status.dataset.ok = ok ? "1" : "0";
+}
+
+function bakeDeckIntoHtml(sourceHtml, d) {
+  if (sourceHtml.search(DECK_RE) < 0) throw new Error("DEFAULT_DECK block not found in that file — pick the existing " + HTML_SAVE_NAME);
+  return sourceHtml.replace(DECK_RE, "const DEFAULT_DECK = " + JSON.stringify(d, null, 2) + ";");
+}
+
+async function ensureWritePermission(handle) {
+  if (!handle) return false;
+  const opts = { mode: "readwrite" };
+  if ((await handle.queryPermission(opts)) === "granted") return true;
+  return (await handle.requestPermission(opts)) === "granted";
+}
+
+async function readHandleText(handle) {
+  const file = await handle.getFile();
+  return file.text();
+}
+
+function downloadHtml(text, name) {
+  const blob = new Blob([text], { type: "text/html;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function pickHtmlFileText() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".html,text/html";
+    input.addEventListener("change", () => {
+      const f = input.files && input.files[0];
+      if (!f) {
+        reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+        return;
+      }
+      f.text().then(resolve, reject);
+    });
+    input.addEventListener("cancel", () => {
+      reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+    });
+    input.click();
+  });
+}
+
+async function tryFetchSource() {
+  try {
+    const res = await fetch(location.href);
+    if (res.ok) return await res.text();
+  } catch (_) { /* file:// */ }
+  return null;
+}
+
+async function saveHtml() {
+  try {
+    // Reuse prior handle (same tab)
+    if (htmlFileHandle && (await ensureWritePermission(htmlFileHandle))) {
+      const source = await readHandleText(htmlFileHandle);
+      const out = bakeDeckIntoHtml(source, deck);
+      const w = await htmlFileHandle.createWritable();
+      await w.write(out);
+      await w.close();
+      setSaveStatus(true, "Saved HTML · " + (htmlFileHandle.name || HTML_SAVE_NAME));
+      return;
+    }
+
+    // Chromium: one Save picker — read that file, bake, write back (works on file://)
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: HTML_SAVE_NAME,
+        types: [{ description: "HTML deck", accept: { "text/html": [".html"] } }],
+      });
+      htmlFileHandle = handle;
+      let source = await readHandleText(handle);
+      if (source.search(DECK_RE) < 0) {
+        source = (await tryFetchSource()) || source;
+      }
+      const out = bakeDeckIntoHtml(source, deck);
+      const w = await handle.createWritable();
+      await w.write(out);
+      await w.close();
+      setSaveStatus(true, "Saved HTML · " + (handle.name || HTML_SAVE_NAME));
+      return;
+    }
+
+    // No FS Access API: pick existing HTML to read, then download baked copy
+    let source = await tryFetchSource();
+    if (!source || source.search(DECK_RE) < 0) {
+      setSaveStatus(true, "Choose the existing " + HTML_SAVE_NAME + "…");
+      source = await pickHtmlFileText();
+    }
+    const out = bakeDeckIntoHtml(source, deck);
+    downloadHtml(out, HTML_SAVE_NAME);
+    setSaveStatus(true, "Downloaded " + HTML_SAVE_NAME + " · replace the file on disk with this download");
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      setSaveStatus(false, "Save cancelled");
+      return;
+    }
+    setSaveStatus(false, "Save error: " + (err && err.message ? err.message : err));
+  }
+}
+
+function boot() {
+  deck = JSON.parse(JSON.stringify(DEFAULT_DECK));
+  writeEditorFromDeck();
+  paint();
+  document.getElementById("json").addEventListener("input", applyJSON);
+  document.getElementById("btnPrev").onclick = () => { idx -= 1; paint(); };
+  document.getElementById("btnNext").onclick = () => { idx += 1; paint(); };
+  document.getElementById("btnEditor").onclick = () => setEditorVisible(!editorVisible);
+  document.getElementById("btnExport").onclick = () => { saveHtml(); };
+  document.getElementById("layoutSlide").onchange = (e) => {
+    deck.slides[idx].layout = e.target.value;
+    writeEditorFromDeck();
+    paint();
+  };
+  document.getElementById("layoutDefault").onchange = (e) => {
+    deck.defaultLayout = e.target.value;
+    writeEditorFromDeck();
+    paint();
+  };
+  window.addEventListener("keydown", (e) => {
+    if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) return;
+    if (e.key === "ArrowRight" || e.key === "PageDown") { idx += 1; paint(); }
+    if (e.key === "ArrowLeft" || e.key === "PageUp") { idx -= 1; paint(); }
+  });
+  const wait = setInterval(() => {
+    if (window.katex) { clearInterval(wait); paint(); }
+  }, 50);
+  setTimeout(() => clearInterval(wait), 3000);
+}
+
+boot();
+</script>
+</body>
+</html>

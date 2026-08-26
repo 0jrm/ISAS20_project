@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>v2 models for data assimilation</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&family=Source+Serif+4:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<style>
+:root {
+  --ink: #1a1a1a;
+  --mute: #5a5854;
+  --paper: #ffffff;
+  --card: #f7f5f0;
+  --line: #2a2a2a;
+  --enc: #2d6a4f;
+  --sat: #c05621;
+  --fuse: #0f766e;
+  --mlp: #9d174d;
+  --mu: #1e3a5f;
+  --sig: #6b21a8;
+  --warp: #b45309;
+  --res: #be123c;
+  --ice: #e4f0ea;
+  --sand: #f3ead6;
+  --blush: #f6e4ea;
+  --mist: #e4ebf3;
+  --lilac: #eee4f5;
+  --notes: #f4f1ea;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+  color: var(--ink);
+  background: #e8e4db;
+  display: grid;
+  grid-template-columns: minmax(280px, 34vw) 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas: "bar bar" "notes stage" "foot foot";
+}
+.bar {
+  grid-area: bar;
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.45rem 0.9rem;
+  background: var(--ink); color: #f4f1ea;
+  font-family: "IBM Plex Sans", "Source Sans 3", system-ui, sans-serif;
+  font-size: 0.82rem;
+}
+.bar b { font-weight: 650; }
+.bar .sp { flex: 1; }
+.bar button, .rail button {
+  font: inherit; cursor: pointer;
+  background: #2c2a27; color: #f4f1ea; border: 1px solid #555;
+  padding: 0.22rem 0.55rem; border-radius: 3px;
+}
+.bar button:hover { background: #3d3a36; }
+.notes {
+  grid-area: notes;
+  background: var(--notes);
+  border-right: 1px solid #d6d0c4;
+  overflow: auto;
+  padding: 1.1rem 1.15rem 2rem;
+}
+.notes h2 {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--mute); margin: 0 0 0.55rem; font-weight: 650;
+}
+.notes .script {
+  font-size: 1.02rem; line-height: 1.55;
+  outline: 1px dashed transparent; min-height: 40vh;
+}
+.notes .script:focus { outline-color: var(--sat); background: #fffdf8; }
+.notes p { margin: 0 0 0.85rem; }
+.notes p:last-child { margin-bottom: 0; }
+.hint { font-family: "IBM Plex Sans", sans-serif; font-size: 0.78rem; color: var(--mute); margin-top: 1.2rem; }
+.stage {
+  grid-area: stage;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0.7rem;
+  background: #cfc9bc;
+}
+.slide {
+  width: min(100%, 1100px);
+  aspect-ratio: 16 / 9;
+  background: var(--paper);
+  border: 1px solid #bbb;
+  box-shadow: 0 10px 40px rgba(0,0,0,.12);
+  position: relative;
+  overflow: hidden;
+  padding: 1.15rem 1.35rem 1.6rem;
+  display: flex; flex-direction: column;
+}
+.slide h1 {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 1.55rem; margin: 0; font-weight: 700; letter-spacing: -0.02em;
+  outline: 1px dashed transparent;
+}
+.slide h1:focus, .cap:focus, [contenteditable]:focus { outline-color: var(--sat); }
+.cap {
+  font-family: "IBM Plex Sans", sans-serif;
+  color: var(--mute); font-size: 0.95rem; margin: 0.15rem 0 0.7rem;
+}
+.body { flex: 1; min-height: 0; position: relative; overflow: auto; }
+.pg {
+  position: absolute; right: 1.1rem; bottom: 0.45rem;
+  font-family: "IBM Plex Sans", sans-serif; font-size: 0.78rem; color: var(--mute);
+}
+.foot {
+  grid-area: foot;
+  display: flex; gap: 0.35rem; flex-wrap: wrap;
+  padding: 0.35rem 0.6rem;
+  background: #ddd8ce;
+  font-family: "IBM Plex Sans", sans-serif; font-size: 0.72rem;
+}
+.foot button {
+  border: 1px solid #c3bdb2; background: #f7f5f0; cursor: pointer;
+  padding: 0.18rem 0.4rem; border-radius: 3px; color: var(--ink);
+}
+.foot button.on, .foot button:hover { background: var(--ink); color: #fff; }
+pre.code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.78rem; line-height: 1.42;
+  margin: 0; white-space: pre; background: #fbfaf7;
+  border: 1px solid #ddd; padding: 0.55rem 0.7rem;
+}
+.rail { display: inline-block; width: 7px; margin-right: 8px; vertical-align: middle; }
+.eq {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 1.05rem; text-align: center; margin: 0.35rem 0;
+}
+.row { display: flex; gap: 0.7rem; height: 100%; }
+.col { flex: 1; min-width: 0; }
+.card {
+  border: 1.5px solid var(--line); border-radius: 8px; padding: 0.55rem 0.7rem;
+  background: var(--card);
+}
+.tag { font-family: "IBM Plex Sans", sans-serif; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; }
+table.op {
+  width: 100%; border-collapse: collapse;
+  font-family: "IBM Plex Sans", sans-serif; font-size: 0.72rem;
+}
+table.op th, table.op td {
+  border-bottom: 1px solid #e4dfd6; padding: 0.22rem 0.35rem; text-align: left; vertical-align: top;
+}
+table.op th { color: var(--mute); font-weight: 600; }
+.sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.mono { font-family: "IBM Plex Mono", monospace; }
+.tiny { font-size: 0.78rem; color: var(--mute); }
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.84em; }
+.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+table.op { font-size: 0.78rem; }
+.card p { margin: 0.35rem 0 0; }
+.c-enc { color: var(--enc); } .c-sat { color: var(--sat); } .c-fuse { color: var(--fuse); }
+.c-mlp { color: var(--mlp); } .c-mu { color: var(--mu); } .c-sig { color: var(--sig); }
+.c-warp { color: var(--warp); } .c-res { color: var(--res); }
+@media (max-width: 980px) {
+  body { grid-template-columns: 1fr; grid-template-areas: "bar" "stage" "notes" "foot"; }
+  .slide { aspect-ratio: auto; min-height: 62vh; width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>v2 → DA</b>
+  <span>Notes are the lecture. Click them to edit. Stored in this browser.</span>
+  <span class="sp"></span>
+  <button type="button" id="btnPrev">← prev</button>
+  <button type="button" id="btnNext">next →</button>
+  <button type="button" id="btnReset">reset notes</button>
+</div>
+<aside class="notes">
+  <h2>Reader notes</h2>
+  <div class="script" id="script" contenteditable="true" spellcheck="true"></div>
+  <p class="hint">Arrow keys or click the index. Edits persist in localStorage. Reset notes restores the shipped script for the current slide only.</p>
+</aside>
+<main class="stage"><article class="slide" id="slide"></article></main>
+<nav class="foot" id="rail"></nav>
+
+<script>
+const C = {
+  enc:"#2d6a4f", sat:"#c05621", fuse:"#0f766e", mlp:"#9d174d",
+  mu:"#1e3a5f", sig:"#6b21a8", warp:"#b45309", res:"#be123c", mute:"#5a5854"
+};
+const SLIDES = [
+{
+  id: "cover",
+  title: "v2 models for data assimilation",
+  cap: "Three served cells. Shared point-fuse MLP. Two reconstructors.",
+  notes: `<p>v1 is settled. Harmonics of day, latitude, and longitude. Three satellite scalars. A PCA of T and S. An MLP. We are not going back over that.</p>
+<p>This deck is the architecture that was handed to the API and is ready for the DA pipeline. Three cells. Native-z CRPS is the frozen ingest and the OSSE background. Heave residual is the heave-family challenger for basin ingest. Operator heave is the Loop Current box challenger only.</p>
+<p>The class in the checkpoint is still called PatchConvMLP. On every served cell, patch_shape is None. There is no convolution. Two linear maps are added in 128-d, then a 1024-1024 MLP, then a μ head and a σ head. We will call that a point-fuse MLP.</p>
+<p>Serve μ. Decode to T(z) and S(z) on the cache 1 m grid. Observation error is Dai σ_o after H, not the CRPS head.</p>`,
+  html: () => `
+    <div class="row" style="gap:1rem;align-items:stretch">
+      ${card("Native-z CRPS","A_CRPS","9 → 32","native-z PCA 16+16",C.enc,"#e4f0ea")}
+      ${card("Heave residual","HeaveFast","11 → 35","warp + residual PCA",C.warp,"#f3ead6")}
+      ${card("Operator heave","ops","30 → 35","heave + 19 cube operators",C.sig,"#eee4f5")}
+    </div>
+    <p class="tiny" style="margin:.7rem 0 0">API strings stay in small type. Titles are the names we will use.</p>`
+},
+{
+  id: "roster",
+  title: "Who is served",
+  cap: "Legacy /v1_profile stays Ozavala. These three are new routes.",
+  notes: `<p>The API keeps the old SAT profile route alone. Do not point NESPRESO_MODEL_PATH at these .pth files.</p>
+<p>Native-z CRPS. Three seeds, 42 43 44. Default 42. Cache train_ready_3adcff404b0b.pkl. 16 temperature PCs and 16 salinity PCs on native z, 0 to 1800 m at 1 m. Role: frozen TSIS ingest and OSSE x_b.</p>
+<p>Heave residual. Seed 42. Same 9-d cache, then ONI and RONI spliced after the six harmonics. Decode is not cache PCA. The loss fits residual PCA on warped residuals. Role: heave-family basin challenger if only one heave cell ships.</p>
+<p>Operator heave. Seed 42. Different pickle, cache_kind heave_ops. The hash string 3adcff404b0b is inherited and is not an identity. Residual PCA must be rebuilt on this pickle. Role: Loop Current box, 24–28 N, 88–84 W. Not a better basin ingest than Heave residual.</p>
+<p>Do not serve conv3, bathy, bathy_wind, heave_s42d, Latent, or Direct.</p>`,
+  html: () => `
+    <table class="op">
+      <tr><th></th><th>API</th><th>in → μ</th><th>decode</th><th>cache</th><th>role</th></tr>
+      <tr><td><span class="sw" style="background:${C.enc}"></span><b>Native-z CRPS</b></td><td class="mono">A_CRPS</td><td>9 → 32</td><td>sklearn inverse, native z</td><td>3adcff404b0b</td><td>ingest + OSSE x<sub>b</sub></td></tr>
+      <tr><td><span class="sw" style="background:${C.warp}"></span><b>Heave residual</b></td><td class="mono">HeaveFast</td><td>11 → 35</td><td>warp, residual PCs, unwarp</td><td>same 9-d + ENSO splice</td><td>basin heave challenger</td></tr>
+      <tr><td><span class="sw" style="background:${C.sig}"></span><b>Operator heave</b></td><td class="mono">ops</td><td>30 → 35</td><td>same heave decode, ops PCA</td><td>heave_ops pickle</td><td>LC-box only</td></tr>
+    </table>
+    <p class="tiny" style="margin-top:.8rem">Shared PRES: 1801 levels, 0…1800 m, Δz = 1 m. Pair checkpoint with the cache it was trained on.</p>`
+},
+{
+  id: "backbone",
+  title: "Point-fuse MLP",
+  cap: "patch_shape is None. Conv2d is never built. Fusion is add, not concat.",
+  notes: `<p>Now the backbone that every served cell actually runs.</p>
+<p>The input is split by column, not by a learned tokenizer. The first n_enc columns go through a linear map to 128 dimensions. The remaining n_sat columns go through a second linear map to 128. Those two 128-d vectors are added. That is the whole “encoder.” There is no concatenation, so the width stays 128.</p>
+<p>The green block in the pseudocode is that context map. The orange block is the surface map. The teal line is the add.</p>
+<p>Then two pink layers, 128 to 1024 and 1024 to 1024, ReLU and dropout 0.2. From that trunk, a navy linear writes μ and a purple linear writes raw σ. σ is softplus(raw) plus 10<sup>−3</sup>.</p>
+<p>PatchConvMLP can build a Conv2d trunk when patch_shape is a 4-tuple. The DA cells all pass None. The checkpoints have no conv.* keys. The name is leftover from a patch ablation that is not served.</p>
+<p>Heave residual is this same class, wrapped. The wrapper adds no weights. It only zeros the first three μ rows at init so training starts at canonical MLD and D26.</p>`,
+  html: () => `
+    <div class="row">
+      <div class="col">
+        <pre class="code">${codeBlock([
+          ["enc = x[:, :n_enc]", "enc"],
+          ["h_e = Linear(n_enc, 128)(enc)", "enc"],
+          ["sat = x[:, n_enc:]", "sat"],
+          ["h_s = Linear(n_sat, 128)(sat)", "sat"],
+          ["h = h_e + h_s          # conv is None", "fuse"],
+          ["h = Drop(ReLU(Linear(128,1024)(h)))", "mlp"],
+          ["h = Drop(ReLU(Linear(1024,1024)(h)))", "mlp"],
+          ["μ = Linear(1024, d)(h)", "mu"],
+          ["σ = softplus(Linear(1024,d)(h)) + ε", "sig"],
+        ])}</pre>
+      </div>
+      <div class="col">
+        <svg viewBox="0 0 420 260" width="100%" height="100%" aria-hidden="true">
+          ${cube(20,90,70,48,C.enc,"enc")}
+          ${cube(120,90,70,48,C.sat,"sat")}
+          ${cube(220,90,54,48,C.fuse,"+")}
+          ${cube(300,40,90,40,C.mlp,"1024")}
+          ${cube(300,100,90,40,C.mlp,"1024")}
+          ${cube(300,168,70,36,C.mu,"μ")}
+          ${cube(380,168,70,36,C.sig,"σ")}
+          <text x="210" y="28" text-anchor="middle" fill="${C.fuse}" font-size="13" font-family="IBM Plex Sans">add in 128-d</text>
+        </svg>
+        <p class="eq">\\(h_0 = W_e x_{\\mathrm{enc}} + W_s x_{\\mathrm{sat}}\\)</p>
+      </div>
+    </div>`
+},
+{
+  id: "inputs",
+  title: "Input layout",
+  cap: "Six harmonics. Optional ENSO after them. Then satellite columns. Operators last.",
+  notes: `<p>The six harmonics are the v1 ones. cos and sin of 2π doy/365, 2π lat/180, 2π lon/360. doy is juld modulo 365, the same convention the cache builder used. MATLAB datenum is fine if that remainder matches.</p>
+<p>Native-z CRPS stops there and appends SSS, SST, SSH. n_enc=6, n_sat=3. No ENSO.</p>
+<p>Heave residual splices ONI and RONI after column 6, before the three satellite scalars. The 9-d pickle does not contain them. inject_enso_columns does it at load. After splice, n_enc=8 and n_sat=3. Missing index values become 0.</p>
+<p>Operator heave splices the same two indices into a 28-d pickle, which becomes 30. Here the split is different. n_enc=11. The context bus holds the six harmonics, ONI, RONI, and the three local satellite scalars. The other Linear sees only the 19 operators. pin_arch_dims, which we call lock widths, freezes that split. Without it, sync_arch_with_io would recompute 8+3 from input_params and scramble the columns.</p>
+<p>Same three satellite numbers. Different Linear. That is not a cosmetic detail.</p>`,
+  html: () => `
+    <div style="display:flex;flex-direction:column;gap:.55rem">
+      ${inRow("Native-z CRPS", [["6 harmonics","mist",C.mu],["SSS SST SSH","sand",C.sat]], "n_enc=6, n_sat=3")}
+      ${inRow("Heave residual", [["6 harmonics","mist",C.mu],["ONI RONI","ice",C.enc],["SSS SST SSH","sand",C.sat]], "n_enc=8, n_sat=3")}
+      ${inRow("Operator heave", [["6 harm.","mist",C.mu],["ONI RONI","ice",C.enc],["SSS SST SSH","sand",C.sat],["19 operators","lilac",C.sig]], "n_enc=11, n_sat=19")}
+    </div>
+    <p class="eq" style="margin-top:.8rem">\\((\\cos,\\sin)\\,2\\pi\\,\\mathrm{doy}/365,\\quad (\\cos,\\sin)\\,2\\pi\\,\\mathrm{lat}/180,\\quad (\\cos,\\sin)\\,2\\pi\\,\\mathrm{lon}/360\\)</p>`
+},
+{
+  id: "head",
+  title: "Heteroscedastic head",
+  cap: "Forward is 2d wide. Serve the first d. Predictive σ is not ingest R.",
+  notes: `<p>The trunk is 1024-d. Two linear maps sit on it. μ is unconstrained. σ is softplus plus ε, ε=10^{−3}. At init the σ bias is set so softplus is about 1.</p>
+<p>If the tensor width is 2d, take [:, :d]. That is μ. Native-z CRPS has d=32. Both heave cells have d=35. The second half is predictive σ in the same coordinates the loss used. PC space for Native-z CRPS. Metres-plus-PC for heave.</p>
+<p>That σ was trained with independent Gaussian CRPS. It is not a vertical covariance. It failed ENCE as a usable observation-error profile. Do not write it into NetCDF err or into R. Ingest R is Dai σ_o after H, floors 0.05 °C and 0.02 psu.</p>
+<p>A sigma_recalib_per_dim.json sits next to the Native-z CRPS checkpoints. Physical-space ENCE used it. The serve spec does not. Leave it on disk.</p>`,
+  html: () => `
+    <div class="row" style="align-items:center;justify-content:center;gap:1.2rem;height:100%">
+      <div class="card" style="background:#f6e4ea;border-color:${C.mlp};text-align:center;padding:1.1rem 1.4rem">
+        <div class="tag" style="color:${C.mlp}">TRUNK</div>
+        <div style="font-size:1.35rem;margin-top:.3rem">\\(h \\in \\mathbb{R}^{1024}\\)</div>
+      </div>
+      <div class="card" style="background:#e4ebf3;border-color:${C.mu};text-align:center;min-width:12rem">
+        <div class="tag" style="color:${C.mu}">μ  SERVE THIS</div>
+        <div class="eq">\\(\\mu = W_\\mu h + b_\\mu\\)</div>
+        <div class="tiny">unconstrained</div>
+      </div>
+      <div class="card" style="background:#eee4f5;border-color:${C.sig};text-align:center;min-width:12rem">
+        <div class="tag" style="color:${C.sig}">PREDICTIVE σ</div>
+        <div class="eq">\\(\\sigma = \\mathrm{softplus}(W_\\sigma h)+\\varepsilon\\)</div>
+        <div class="tiny">not Dai R</div>
+      </div>
+    </div>`
+},
+{
+  id: "nativez",
+  title: "Native-z reconstruction",
+  cap: "Fixed depth ruler. Sixteen T modes, sixteen S modes. No warp.",
+  notes: `<p>This is the v1 idea with a CRPS head. The vertical coordinate never moves. Each PC is a full-column pattern on the 1 m grid. μ is 32 coefficients. The first 16 rebuild temperature. The next 16 rebuild salinity.</p>
+<p>Decode is sklearn PCA.inverse_transform on the cache models. T(z) = T-bar(z) + V_T α. Same for S. PRES comes from the cache. 1801 levels. Pair the checkpoint with cache 3adcff404b0b. The .pth also stores components_. Do not mix either with v1 pca_stats.pkl, which is 15 PCs and a different grid.</p>
+<p>The PCA was fit on all 4145 cache rows, val and test included. That is a shared basis leak. The network still does not train on test labels. Name it in the notes and move on.</p>
+<p>Analogy. You are drawing a profile on graph paper whose vertical axis is already metres. Heave will first stretch the paper.</p>`,
+  html: () => `
+    <p class="eq">\\(T(z)=\\bar T(z)+\\sum_{k=1}^{16}\\alpha_k v_k^{(T)}(z)\\qquad S(z)=\\bar S(z)+\\sum_{k=1}^{16}\\beta_k v_k^{(S)}(z)\\)</p>
+    <div class="row" style="height:72%">
+      ${profPanel("mean \\(\\bar T(z)\\)", C.mute)}
+      <div style="align-self:center;font-size:1.6rem">+</div>
+      ${profPanel("mode \\(v_k\\)", C.mlp)}
+      <div style="align-self:center">× α</div>
+      <div style="align-self:center;font-size:1.6rem">=</div>
+      ${profPanel("T(z)", C.enc)}
+    </div>`
+},
+{
+  id: "crps",
+  title: "PCA CRPS",
+  cap: "Independent Gaussian scores. No predicted covariance.",
+  notes: `<p>Training uses closed-form Gaussian CRPS on each coordinate of μ, independently. For Native-z CRPS those coordinates are the 32 PC scores. For heave they are MLD, D26, and 32 residual scores. Stretch is not in the CRPS state.</p>
+<p>z = (y − μ)/σ. CRPS = σ [ z(2Φ(z)−1) + 2φ(z) − π^{−1/2} ]. That is a proper score for a univariate Gaussian. Average over coordinates. Average over the batch.</p>
+<p>There is no off-diagonal. A later OSSE that built Σ_T = V diag((ασ)^2) V^T from these head σ values and localized it still lost to a diagonal. The head was never asked for cross-level structure. Do not invent it at ingest.</p>
+<p>Native-z CRPS was trained in two stages. Stage 1 is μ-only MSE. The σ path is unused, not frozen in Adam. Stage 2 turns CRPS on, lower lr, stop on val ENCE.</p>`,
+  html: () => `
+    <div class="row">
+      <div class="col" style="display:flex;flex-direction:column;justify-content:center">
+        <div class="card" style="background:#e4ebf3;border-color:${C.sig}">
+          <p class="eq">\\(\\mathrm{CRPS}=\\sigma\\big[z(2\\Phi(z)-1)+2\\varphi(z)-\\pi^{-1/2}\\big]\\)</p>
+          <p class="eq">\\(z=(y-\\mu)/\\sigma\\)</p>
+        </div>
+        <p class="tiny" style="margin-top:.7rem">Code name PCAHeteroLoss. Config still says combined. make_loss diverts on prob_mode=crps.</p>
+      </div>
+      <div class="col">
+        <svg viewBox="0 0 280 200" width="100%" height="180">
+          <rect x="8" y="8" width="264" height="184" fill="#fafafa" stroke="#2a2a2a"/>
+          <path d="M24 160 C 60 160, 80 40, 140 40 C 200 40, 220 160, 256 160" fill="none" stroke="${C.sig}" stroke-width="2.4"/>
+          <line x1="175" y1="36" x2="175" y2="168" stroke="${C.res}" stroke-dasharray="4 3"/>
+          <text x="182" y="32" fill="${C.res}" font-size="14">y</text>
+          <text x="140" y="188" text-anchor="middle" font-size="12" fill="${C.sig}">N(μ, σ²)</text>
+        </svg>
+      </div>
+    </div>`
+},
+{
+  id: "heave-idea",
+  title: "Heave, the idea",
+  cap: "Register two landmarks. Draw leftover shape. Snap the paper back.",
+  notes: `<p>Native-z PCA spends many modes moving the thermocline up and down. That is heave. A 1.5-layer picture already knows it. SSH slope and a mode-1 displacement are almost the same object. The DA leftover, after SLA has spoken, is mostly shape. Native-z CRPS is honest about that. Heave residual tries to spend its 32 PCs on shape after it has registered mixed layer and 26 °C.</p>
+<p>Analogy. Take a rubber sheet printed with the basin-mean T(z). Pull it vertically until the mixed layer sits at 50 m and D26 sits at 120 m on a canonical ruler. Subtract that warped mean from the warped truth. Fit PCA on the residual. At serve, predict the two depths and the residual scores, add, then let the sheet snap back to physical z.</p>
+<p>The Fast suffix is batched searchsorted lerp in the loss. The net is an empty subclass. Heave_s42d is the same science with a Python loop. It stopped earlier. Do not serve it. Do not treat Fast versus s42d as an architecture bake-off.</p>`,
+  html: () => `
+    <div class="row">
+      ${stepBox("1","physical z","basin-mean profile",C.warp)}
+      ${stepBox("2","canonical z","warp to 50 m / 120 m",C.enc)}
+      ${stepBox("3","canonical z","add residual PCs",C.res)}
+      ${stepBox("4","physical z","unwarp to T(z), S(z)",C.mu)}
+    </div>
+    <p class="eq" style="margin-top:.8rem">\\(T_{\\mathrm{phys}}=\\mathcal{U}_{\\hat m,\\hat d}\\big(\\mathcal{W}_{\\hat m,\\hat d}(\\bar T)+V\\alpha+\\bar r\\big)\\)</p>`
+},
+{
+  id: "warp",
+  title: "Warp",
+  cap: "Piecewise linear map. Knots 0, MLD, D26, 1800 m onto 0, 50, 120, 1800 m.",
+  notes: `<p>decode_warp maps three unbounded logits. raw=0 is the canonical start, 50 m and 120 m.</p>
+<p>MLD = 50 exp(r_0), then clamped between 5 m and z_bot − 10 m. D26 = MLD + 5 + 65 exp(r_1), then clamped below z_bot − 5 m. The 65 is 120 − 50 − 5. An older tanh floor sat at 10 m with a dead gradient. Exp replaced it.</p>
+<p>The map is piecewise linear between those knots. Same numeric nodes as PRES. Warp samples physical T at the physical z that corresponds to each canonical node. Unwarp is the inverse interpolation.</p>
+<p>Truth MLD in the loss is de Boyer Montégut density, +0.03 kg m^{−3} from 10 m. Truth D26 is the shallowest 26 °C crossing. Predicted MLD is a free exp logit. Same names, different definitions, except as a training target.</p>
+<p>The third logit is stretch = 1 + 0.3 tanh(r_2). Knots ignore it. CRPS ignores it. Geometry ignores it. It occupies a slot so the 35-d checkpoint still loads. Call it a dead stretch logit. Do not lecture it as thermocline stretch.</p>`,
+  html: () => `
+    <div class="row">
+      <div class="col">
+        <p class="eq">\\(\\mathrm{MLD}=50\\,e^{r_0},\\quad \\mathrm{D26}=\\mathrm{MLD}+5+65\\,e^{r_1}\\)</p>
+        <p class="eq tiny">\\(\\mathrm{stretch}=1+0.3\\tanh(r_2)\\quad\\text{(unused in knots and loss)}\\)</p>
+        <pre class="code">${codeBlock([
+          ["mld, d26, _ = decode_warp(μ[:, :3])", "warp"],
+          ["# knots phys:  0, mld, d26, 1800", "warp"],
+          ["# knots canon: 0, 50,  120, 1800", "enc"],
+        ])}</pre>
+      </div>
+      <div class="col">
+        <svg viewBox="0 0 360 220" width="100%" height="200">
+          <line x1="70" y1="20" x2="70" y2="200" stroke="${C.sat}" stroke-width="4"/>
+          <line x1="250" y1="20" x2="250" y2="200" stroke="${C.enc}" stroke-width="4"/>
+          <text x="70" y="14" text-anchor="middle" font-size="11">physical z</text>
+          <text x="250" y="14" text-anchor="middle" font-size="11">canonical z</text>
+          <polygon points="74,20 246,20 246,64 74,44" fill="#fde7d0" opacity=".7"/>
+          <polygon points="74,44 246,64 246,108 74,84" fill="#e7f3ee" opacity=".7"/>
+          <polygon points="74,84 246,108 246,200 74,200" fill="#e7eef6" opacity=".7"/>
+          ${knot(70,20,"0 m",C.sat)}${knot(70,44,"MLD",C.sat)}${knot(70,84,"D26",C.sat)}${knot(70,200,"1800",C.sat)}
+          ${knot(250,20,"0 m",C.enc)}${knot(250,64,"50 m",C.enc)}${knot(250,108,"120 m",C.enc)}${knot(250,200,"1800",C.enc)}
+        </svg>
+      </div>
+    </div>`
+},
+{
+  id: "prior-pca",
+  title: "Basin-mean prior, then residual PCA",
+  cap: "No clim_profiles in these caches. Residual PCs live on canonical z.",
+  notes: `<p>These v2 pickles have no clim_profiles. The loss fills T_clim with nanmean of true_profiles over every cache row, all 4145, not train-only, not a nearest Argo neighbor. That same vector is broadcast to every row. Reproduce it at serve. Dummy index 0 is correct because every row shares the vector.</p>
+<p>Fit-time warp uses truth MLD and D26. Residuals are warped T minus warped clim. PCA 16+16 is sklearn, train_idx only, chronological 70/15/15. Buffers t_components (16, 1801) are not in the checkpoint. Rebuild HeaveResidualFastLoss on the paired cache to get them.</p>
+<p>Cache pca_models are native-z PCA for Native-z CRPS. Heave decode must not inverse_transform those. Mixing heave_ops_s42.pth with the 9-d cache is invalid even though the inherited hash string matches.</p>
+<p>Serve at an arbitrary lat, lon, date still uses that global basin-mean prior. There is no local climatology lookup.</p>`,
+  html: () => `
+    <pre class="code">${codeBlock([
+      ["T_clim = nanmean(true_profiles)          # all rows, broadcast", "warp"],
+      ["T_w = warp(T_true, z, mld*, d26*)", "enc"],
+      ["R = T_w - warp(T_clim, z, mld*, d26*)", "res"],
+      ["V, m = PCA(16).fit(R[train_idx])", "res"],
+      ["μ_T = Residual T scores, canonical z     # not cache PCA", "res"],
+    ])}</pre>
+    <p class="eq">\\(T_{\\mathrm{res}}=\\alpha_T V_T + \\bar m_T\\qquad\\text{on canonical }z\\)</p>`
+},
+{
+  id: "unwarp",
+  title: "Decode to physical T, S",
+  cap: "Gold path. Match this, not a reimplementation from memory.",
+  notes: `<p>Gold decode is thermocline_scorecard._decode_heave_ts, which calls HeaveResidualFastLoss.physical_ts. Tolerances 1e-5 on T and S, 1e-4 m on D26.</p>
+<p>Take μ[:, :35]. decode_warp on the first three. Inverse residual PCA for T and S on canonical z. Warp the basin-mean clim with the predicted MLD and D26, not the truth ones. Add. Unwarp to physical z. z_bot=1800.</p>
+<p>That predicted-versus-truth warp mismatch is the architecture. PCA was fit in truth-warp space. Serve uses predicted knots. If the net misses D26, the residual is added on the wrong rubber sheet.</p>
+<p>HYCOM layer_sample is not applied here. TSIS applies H on cycle thknss. The scorecard used a reference H from 2024-01-05 18Z. Live DA must re-extract thickness.</p>`,
+  html: () => `
+    <pre class="code">${codeBlock([
+      ["μ = out[:, :35]                          # drop predictive σ", "mu"],
+      ["mld, d26, _ = decode_warp(μ[:, :3])", "warp"],
+      ["T_res = μ[:, 3:19] @ V_T + m_T", "res"],
+      ["T_prior = warp(T_clim, z, mld, d26)", "warp"],
+      ["T = unwarp(T_prior + T_res, z, mld, d26)", "enc"],
+    ])}</pre>
+    <p class="tiny">Same four lines for S on μ[:, 19:35]. Operator heave uses V and m from the ops cache, not the 9-d cache.</p>`
+},
+{
+  id: "heave-loss",
+  title: "Heave loss",
+  cap: "Geometry, CRPS, and a weak 50–200 m ∂T/∂z term.",
+  notes: `<p>L = 10 L_geom + L_CRPS + 0.1 L_∂zT. Steric is off in the served configs.</p>
+<p>Geometry is mean of ((MLD − MLD*)/50)² + ((D26 − D26*)/120)². Stretch is unused. MLD and D26 then appear again inside CRPS, in metres, concatenated with 32 PC scores. Mixed units, averaged. σ for the two depths is the exponential Jacobian of decode_warp. PC σ is σ[:, 3:].</p>
+<p>The ∂T/∂z term is MSE of vertical derivatives on 50–200 m, predicted versus truth after full decode. It is not N². Heave still has a higher level instability rate than Native-z CRPS. That is one reason Native-z CRPS remains the frozen x_b.</p>
+<p>Heave residual is the better hydrography of the two CRPS models in the candidate table. It is the worse background for OI. Stability, σ_D26 ENCE, and pedigree. Promote it only if 50–200 m T and D26 beat the frozen cell and the analysis is not worse than x_b.</p>`,
+  html: () => `
+    <p class="eq">\\(L=10\\,L_{\\mathrm{geom}}+L_{\\mathrm{CRPS}}+0.1\\,L_{\\partial_z T}\\)</p>
+    <div class="row">
+      ${card("L_geom","MLD/50, D26/120","scaled MSE","stretch unused",C.warp,"#f3ead6")}
+      ${card("L_CRPS","MLD, D26, 32 PCs","Gaussian CRPS","mixed units",C.sig,"#eee4f5")}
+      ${card("L_∂zT","50–200 m","MSE of ∂T/∂z","not N²",C.res,"#f6e4ea")}
+    </div>`
+},
+{
+  id: "ops-bus",
+  title: "Operator heave, the buses",
+  cap: "Nineteen cube operators on the surface Linear. Local SSS SST SSH sit on the context Linear.",
+  notes: `<p>Operator heave is Heave residual with a 30-d input. Same 35-d μ, same decode, same basin-mean prior recipe. Different cache, different residual PCA, different column split.</p>
+<p>Lock widths is on. n_enc=11, n_sat=19. The context Linear sees harmonics, ONI, RONI, and point SSS SST SSH. The surface Linear sees only operators. Heave residual put those three satellite numbers on n_sat=3. Same scalars, other weights.</p>
+<p>The 19 names are OP_NAMES in export_heave_ablation_cache.py. They are not L3. They come from gom_cube.zarr. Gradients are mask-normalized Gaussians, version 2. Local scales are product-specific, SST 0.15°, SSS 0.35°, SSH 0.4°. The 1.0deg operators use a 1° Gaussian. Tendency is a 7-day least-squares slope. geo_uv is geostrophy from SSH slope.</p>
+<p>Why operators at all. A point SSS SST SSH is the value at the float. The Loop Current is a front, an eddy, a pulse. Derivatives, curvature, a week of change, and a geostrophic velocity are the local kinematics of that front. They are useful when the job is to place D26 and the thermocline shape inside the LC box. They are not a basin-wide replacement for Heave residual. The serve spec says so.</p>`,
+  html: () => `
+    <pre class="code">${codeBlock([
+      ["ctx = x[:, :11]   # 6 harm + ONI RONI + SSS SST SSH", "enc"],
+      ["op  = x[:, 11:]   # 19 cube operators, not 3 sats", "sig"],
+      ["h = Linear(11,128)(ctx) + Linear(19,128)(op)", "fuse"],
+      ["# lock widths: do not recompute 8+3 from input_params", "mlp"],
+    ])}</pre>
+    <p class="tiny">Train cache is 28-d on disk, then ENSO splice → 30. Identify by path and cache_kind=heave_ops, not the inherited hash.</p>`
+},
+{
+  id: "ops-grad",
+  title: "Operators. Gradients, twelve of them",
+  cap: "Local front versus 1° background. SST, SSS, SSH. x is zonal, y is meridional.",
+  notes: `<p>Each gradient is a mask-normalized Gaussian derivative, in field units per metre. local uses the product σ. 1.0deg uses 1°. Pair x and y. A front has a direction.</p>
+<p>sst.grad_x@local and sst.grad_y@local. SST slope at about 15 km. The Loop Current north wall is a SST step. A sharp surface front is a proxy for a tilted thermocline. That is heave you can see from SST without waiting for the MLP to invent it from a point value.</p>
+<p>sst.grad_x@1.0deg and sst.grad_y@1.0deg. Same derivative after a 1° blur. Gyre-scale SST slope, shelf versus interior, not the filament. The net can tell a LC eddy from a basin gradient.</p>
+<p>sss.grad_* , four of them, local and 1°. Mississippi and Atchafalaya water against salty LC water. A salinity front marks a different mixed layer and a different water mass. SSS is not a thermocline tracer the way SST is. It is a water-mass tracer. The 1° pair is the large plume. The local pair is the edge of that plume.</p>
+<p>ssh.grad_* , four of them. Surface pressure slope. In a 1.5-layer Gulf, SSH slope tracks thermocline slope. These four are also the raw material for geo_uv. We still feed both. The Linear can use slope as a heave cue without committing to a geostrophic u, v.</p>`,
+  html: () => `
+    <table class="op">
+      <tr><th>name</th><th>what it is</th><th>why it can help T,S</th></tr>
+      ${opTr("sst.grad_x@local","∂SST/∂x, σ≈0.15°","LC / eddy SST front, zonal")}
+      ${opTr("sst.grad_y@local","∂SST/∂y, σ≈0.15°","north wall, meridional front")}
+      ${opTr("sst.grad_x@1.0deg","∂SST/∂x, 1° Gaussian","basin SST slope, not the filament")}
+      ${opTr("sst.grad_y@1.0deg","∂SST/∂y, 1°","gyre versus shelf")}
+      ${opTr("sss.grad_x@local","∂SSS/∂x, σ≈0.35°","plume edge, water mass")}
+      ${opTr("sss.grad_y@local","∂SSS/∂y, σ≈0.35°","same, meridional")}
+      ${opTr("sss.grad_x@1.0deg","∂SSS/∂x, 1°","large river plume")}
+      ${opTr("sss.grad_y@1.0deg","∂SSS/∂y, 1°","shelf-to-LC salinity contrast")}
+      ${opTr("ssh.grad_x@local","∂η/∂x, σ≈0.4°","pressure slope ~ thermocline slope")}
+      ${opTr("ssh.grad_y@local","∂η/∂y, σ≈0.4°","same, meridional")}
+      ${opTr("ssh.grad_x@1.0deg","∂η/∂x, 1°","LC / gyre scale SSH slope")}
+      ${opTr("ssh.grad_y@1.0deg","∂η/∂y, 1°","same, meridional")}
+    </table>`
+},
+{
+  id: "ops-rest",
+  title: "Operators. Curvature, tendency, geostrophy",
+  cap: "Seven remaining names. Vorticity stamp, a week of change, then u_g, v_g.",
+  notes: `<p>ssh.laplacian@1.0deg. ∇²η after a 1° smooth. On an f-plane, geostrophic vorticity is (g/f) ∇²η. Positive curvature in the usual ocean sign for a cyclone. Cyclonic SSH: cold core, raised thermocline, D26 shallow. Anticyclonic: warm core, D26 deep. The 1° scale is eddy scale. A point SSH cannot tell a high from a bowl. This can.</p>
+<p>sst.tendency@7d. Least-squares dSST/dt over a 7-day stack, per pixel. Need at least about 4 finite days. A warming patch can be a deepening mixed layer or LC water arriving. The snapshot SST does not know which way the front is moving.</p>
+<p>ssh.tendency@7d. dη/dt over the same week. LC pulsing, eddy shedding, steric heave. This is the operator closest to vertical motion of the thermocline as a function of time.</p>
+<p>ssh.geo_u@local and ssh.geo_v@local. u = −(g/f) ∂η/∂y, v = (g/f) ∂η/∂x, f from profile latitude, local SSH σ. The current at the front. Advection of the water you are about to sound. If the float sits on a jet, the profile is not the point SST.</p>
+<p>ssh.geo_u@1.0deg and ssh.geo_v@1.0deg. Same geostrophy after a 1° blur. LC and gyre transport, not the filament. Four velocity numbers, two scales. They are not independent of the SSH gradients. They add the f and g conversion so the MLP does not have to learn Coriolis from a GoM latitude range.</p>`,
+  html: () => `
+    <table class="op">
+      <tr><th>name</th><th>formula</th><th>why it can help T,S</th></tr>
+      ${opTr("ssh.laplacian@1.0deg","∇²η at 1°","cyclone vs anticyclone, D26 up or down")}
+      ${opTr("sst.tendency@7d","LSQ dSST/dt, 7 d","front moving, mixed-layer heat")}
+      ${opTr("ssh.tendency@7d","LSQ dη/dt, 7 d","LC pulse, eddy shed, steric heave")}
+      ${opTr("ssh.geo_u@local","−(g/f) ∂η/∂y","along-front advection, local")}
+      ${opTr("ssh.geo_v@local","+(g/f) ∂η/∂x","cross-front advection, local")}
+      ${opTr("ssh.geo_u@1.0deg","−(g/f) ∂η/∂y at 1°","LC / gyre u")}
+      ${opTr("ssh.geo_v@1.0deg","+(g/f) ∂η/∂x at 1°","LC / gyre v")}
+    </table>
+    <p class="eq">\\(u_g=-(g/f)\\partial_y\\eta,\\quad v_g=(g/f)\\partial_x\\eta\\)</p>`
+},
+{
+  id: "ops-serve",
+  title: "Train operators versus live operators",
+  cap: "Copy an Argo-row pickle at train. Recompute from gom_cube.zarr at request.",
+  notes: `<p>Training does not sample the cube. export_heave_ablation_cache copies 19 columns from train_ready_2ab55b15b14f.pkl, asserts JULD match, nan_to_num zero. That pickle is Argo-row aligned. n=4145. It is not an arbitrary lat, lon, date accessor.</p>
+<p>Serve must recompute OP_NAMES from gom_cube.zarr with the sampler and operators modules. Missing cube plane is HTTP 503. Do not zero-fill. Train zero-filled. That mismatch is real. Live DA should fail closed rather than invent a flat operator.</p>
+<p>Do not identify the ops cache by hash 3adcff404b0b. That string is inherited from the 9-d parent. Path plus cache_kind=heave_ops.</p>
+<p>geo_uv at request uses a single profile_lat for f. Whether that matches the training columns depends on the API path. The API is not in this repo. Pin it when you wire CubeProvider.sample.</p>`,
+  html: () => `
+    <div class="row">
+      <div class="card col" style="background:#f3ead6;border-color:${C.warp}">
+        <div class="tag" style="color:${C.warp}">TRAIN</div>
+        <p>hstack 19 columns from the Argo-row cube cache. NaN → 0. Not z-scored.</p>
+      </div>
+      <div class="card col" style="background:#eee4f5;border-color:${C.sig}">
+        <div class="tag" style="color:${C.sig}">SERVE</div>
+        <p>sample gom_cube.zarr at the request point. Missing plane → 503. No zero-fill.</p>
+      </div>
+    </div>
+    <p class="tiny" style="margin-top:.8rem">Residual PCA from this ops cache. Clim prior is nanmean of this cache’s true_profiles.</p>`
+},
+{
+  id: "serve",
+  title: "What DA actually gets",
+  cap: "Profiles from μ. Diagonal R from Dai σ_o after H. H belongs to TSIS.",
+  notes: `<p>The product is T(z), S(z) on native 1 m z, decoded from μ. NetCDF attrs: model, seed, checkpoint, cache_hash with the ops caveat, decode pca_inverse or heave_residual_fast, r_kind dai_sigma_o_after_H.</p>
+<p>R is diagonal. CSV reports/sigma_o_hycom.csv. 41 HYCOM layers. Dai RMSE after H. Floors max(RMSE, 0.05 °C / 0.02 psu). Native-z CRPS uses the 3-seed mean, regime all, for the first ingest file. Heave residual seed 42. Operator heave seed 42, prefer regime lc if you split. The CSV model column may say A_CRPS. Map the spec name when ingesting.</p>
+<p>Do not apply HYCOM layer_sample in the API. TSIS applies H on cycle thknss. Scorecard H is reference H. Layers k≥33 are empty at ZMAX=1800 m.</p>
+<p>export_heave_tsis.py dumps CRPS σ into a research NPZ. That is not the ingest product. If someone wires that file into err, they have violated the pin.</p>`,
+  html: () => `
+    <div class="row" style="align-items:center">
+      ${flowNode("inputs",C.mu)} ${arr()} ${flowNode("point-fuse MLP",C.enc)} ${arr()} ${flowNode("μ",C.mlp)} ${arr()} ${flowNode("decode",C.warp)} ${arr()} ${flowNode("T(z), S(z)",C.enc)}
+    </div>
+    <div class="card" style="margin-top:1rem;background:#eee4f5;border-color:${C.sig};text-align:center">
+      \\(R=\\mathrm{diag}(\\sigma_o^{\\mathrm{Dai}})\\) after H. Not σ<sub>CRPS</sub>. Not 1 m RMSE. Not dense Σ.
+    </div>`
+},
+{
+  id: "pins",
+  title: "Pins",
+  cap: "Break any of these and the profile is a different model.",
+  notes: `<p>Never mix a checkpoint with a different cache. PCA lives in the cache pickle for Native-z CRPS and inside the loss for heave.</p>
+<p>Serve μ only. Width 2d means take the first d. Do not write CRPS-head σ into NetCDF err or R.</p>
+<p>Ingest R is Dai σ_o after H, floors 0.05 °C and 0.02 psu.</p>
+<p>Do not apply HYCOM layer_sample here.</p>
+<p>Do not serve conv3, bathy, bathy_wind, Heave s42d, Latent, or Direct.</p>
+<p>torch.load map_location cpu, weights_only False. Arch from ckpt['config']['arch'].</p>
+<p>Operator heave. Lock widths. Recompute operators from the cube. 503 on missing. Residual PCA from the ops pickle. LC box only.</p>
+<p>Legacy /v1_profile is Ozavala TorchScript and 15-PC sklearn. Different PCA, depth, and architecture.</p>`,
+  html: () => `
+    <ol class="tiny" style="font-size:.92rem;line-height:1.55;margin:.2rem 1rem 0">
+      <li>Checkpoint ↔ cache pair. Heave residual PCA is not in state_dict.</li>
+      <li>μ only. Predictive σ stays in the checkpoint.</li>
+      <li>R = Dai after H, floored. CSV, not the head.</li>
+      <li>H is TSIS cycle thknss. Not the API.</li>
+      <li>Operator columns from gom_cube.zarr at request. No zero-fill.</li>
+      <li>Dead stretch logit stays in the 35-d vector. Do not decode it as a knot.</li>
+    </ol>`
+},
+{
+  id: "compare",
+  title: "Two reconstructors",
+  cap: "Native-z CRPS adds modes at fixed depth. Heave adds residual shape after a vertical map.",
+  notes: `<p>Native-z CRPS is additive in z. The paper is already in metres. Sixteen T modes, sixteen S modes, a mean profile. That is v1 with a proper score on the coefficients.</p>
+<p>Heave residual is additive after a vertical map. Two landmarks, a basin-mean prior, residual PCA on the registered grid, then the inverse map. Fast is the batched interpolator that made that loss cheap enough to train longer.</p>
+<p>Operator heave is the second reconstructor with extra kinematics on the surface bus, locked to the LC box.</p>
+<p>The frozen ingest is Native-z CRPS. Heave residual is the challenger. Operator heave is the LC-box second challenger. Predictive σ never leaves the training room.</p>`,
+  html: () => `
+    <div class="row">
+      <div class="card col" style="background:#e4f0ea;border-color:${C.enc}">
+        <div class="tag" style="color:${C.enc}">NATIVE-Z CRPS</div>
+        <p>\\(T(z)=\\bar T(z)+V_T\\alpha\\)</p>
+        <p class="tiny">fixed z. cache PCA. 9-d point inputs.</p>
+      </div>
+      <div class="card col" style="background:#f3ead6;border-color:${C.warp}">
+        <div class="tag" style="color:${C.warp}">HEAVE RESIDUAL</div>
+        <p>register, add Vα, unwarp</p>
+        <p class="tiny">canonical z. loss-fitted PCA. 11-d or 30-d.</p>
+      </div>
+    </div>`
+}
+];
+
+function card(title, api, dim, dec, col, bg) {
+  return `<div class="card col" style="background:${bg};border-color:${col};text-align:center">
+    <div style="font-size:1.25rem;font-weight:700;color:${col}">${title}</div>
+    <div class="tiny mono">${api}</div>
+    <div style="font-size:1.35rem;margin:.45rem 0">${dim}</div>
+    <div class="tiny">${dec}</div>
+  </div>`;
+}
+function inRow(name, chunks, note) {
+  const bits = chunks.map(([lab, bg, ec]) =>
+    `<span style="display:inline-block;padding:.35rem .55rem;margin-right:.25rem;border:1.5px solid ${ec};background:var(--${bg});border-radius:6px;font-family:IBM Plex Sans;font-weight:650;font-size:.82rem">${lab}</span>`
+  ).join("");
+  return `<div><div style="font-family:IBM Plex Sans;font-weight:700;margin-bottom:.25rem">${name}</div>${bits}<span class="tiny" style="float:right">${note}</span></div>`;
+}
+function codeBlock(lines) {
+  return lines.map(([t, k]) => {
+    const c = C[k] || "#1a1a1a";
+    return `<span class="rail" style="background:${c}"></span><span style="color:${c}">${esc(t)}</span>`;
+  }).join("\n");
+}
+function esc(s) {
+  return s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+}
+function cube(x,y,w,h,fill,lab) {
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" rx="3"/>
+    <text x="${x+w/2}" y="${y+h/2+4}" text-anchor="middle" fill="#fff" font-size="12" font-family="IBM Plex Sans" font-weight="700">${lab}</text>`;
+}
+function knot(x,y,lab,col) {
+  return `<circle cx="${x}" cy="${y}" r="4" fill="${col}"/>
+    <text x="${x+10}" y="${y+4}" font-size="11" fill="${col}" font-family="IBM Plex Sans">${lab}</text>`;
+}
+function stepBox(n, sub, title, col) {
+  return `<div class="card col" style="border-color:${col}">
+    <div style="font-size:1.2rem;font-weight:700;color:${col}">${n}</div>
+    <div>${title}</div>
+    <div class="tiny">${sub}</div>
+  </div>`;
+}
+function profPanel(lab, col) {
+  return `<div class="card col" style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end">
+    <svg viewBox="0 0 80 120" width="70" height="110">
+      <path d="M40 8 C 55 30, 20 50, 48 70 C 60 90, 35 110, 42 118" fill="none" stroke="${col}" stroke-width="2.5"/>
+    </svg>
+    <div class="tiny">${lab}</div>
+  </div>`;
+}
+function opTr(name, what, why) {
+  return `<tr><td class="mono">${name}</td><td>${what}</td><td>${why}</td></tr>`;
+}
+function flowNode(t, col) {
+  return `<div class="card" style="border-color:${col};text-align:center;min-width:6.2rem;font-family:IBM Plex Sans;font-weight:700;color:${col}">${t}</div>`;
+}
+function arr() { return `<div style="font-size:1.4rem;align-self:center">→</div>`; }
+
+const KEY = "da-arch-explainer-notes-v1";
+let idx = 0;
+const scriptEl = document.getElementById("script");
+const slideEl = document.getElementById("slide");
+const rail = document.getElementById("rail");
+
+function loadNotes() {
+  try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { return {}; }
+}
+function saveNotes(map) { localStorage.setItem(KEY, JSON.stringify(map)); }
+
+function render(i) {
+  idx = (i + SLIDES.length) % SLIDES.length;
+  const s = SLIDES[idx];
+  const stored = loadNotes();
+  scriptEl.innerHTML = stored[s.id] || s.notes;
+  slideEl.innerHTML = `<h1 contenteditable="true">${s.title}</h1>
+    <div class="cap" contenteditable="true">${s.cap}</div>
+    <div class="body">${s.html()}</div>
+    <div class="pg">${idx+1} / ${SLIDES.length}</div>`;
+  rail.querySelectorAll("button").forEach((b, j) => b.classList.toggle("on", j === idx));
+  if (window.renderMathInElement) {
+    renderMathInElement(slideEl, {delimiters: [
+      {left:"$$", right:"$$", display:true},
+      {left:"\\(", right:"\\)", display:false}
+    ]});
+  }
+  history.replaceState(null, "", "#" + s.id);
+}
+
+scriptEl.addEventListener("input", () => {
+  const map = loadNotes();
+  map[SLIDES[idx].id] = scriptEl.innerHTML;
+  saveNotes(map);
+});
+
+SLIDES.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = (i+1) + " " + s.id;
+  b.addEventListener("click", () => render(i));
+  rail.appendChild(b);
+});
+
+document.getElementById("btnPrev").onclick = () => render(idx-1);
+document.getElementById("btnNext").onclick = () => render(idx+1);
+document.getElementById("btnReset").onclick = () => {
+  const map = loadNotes();
+  delete map[SLIDES[idx].id];
+  saveNotes(map);
+  render(idx);
+};
+document.addEventListener("keydown", (e) => {
+  const editing = e.target && e.target.isContentEditable;
+  if (editing && (e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey) return;
+  if (e.key === "ArrowRight" || e.key === "PageDown") { e.preventDefault(); render(idx+1); }
+  if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); render(idx-1); }
+});
+
+const start = SLIDES.findIndex(s => s.id === location.hash.slice(1));
+render(start >= 0 ? start : 0);
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="render(idx)"></script>
+</body>
+</html>

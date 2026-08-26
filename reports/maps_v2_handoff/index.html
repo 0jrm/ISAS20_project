@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NeSPReSO v2 → DA · MAPS handoff</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+:root {
+  --encoder: #0B6E4F;
+  --uncertainty: #C81D25;
+  --heave: #3D348B;
+  --da: #E09F3E;
+  --ink: #1a1a1a;
+  --mute: #5c6570;
+  --paper: #f7f5f0;
+  --line: #d9d3c7;
+  --white: #ffffff;
+  --panel: #0b1220;
+  --accent: var(--encoder);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: #e8e2d6;
+}
+button, select {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid #b9b1a3;
+  background: #fff;
+  border-radius: 8px;
+  padding: .4rem .7rem;
+}
+button:hover, select:hover { border-color: var(--ink); }
+button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: .45rem; align-items: center;
+  padding: .55rem .8rem; background: #12151a; color: #efeae1; font-size: .82rem;
+}
+.toolbar a { color: #f0c14b; }
+.toolbar .sep { width: 1px; height: 1.1rem; background: #3a414c; margin: 0 .2rem; }
+.toolbar label { opacity: .75; margin-right: .2rem; }
+.toolbar select { background: #1c222c; color: #efeae1; border-color: #3a414c; }
+.toolbar .grow { flex: 1; min-width: .5rem; }
+#app { display: flex; flex-direction: column; height: calc(100% - 0px); min-height: 0; }
+#main { flex: 1; min-height: 0; display: grid; }
+#main.editor-on { grid-template-columns: minmax(280px, 36%) 1fr; }
+#main.editor-off { grid-template-columns: 1fr; }
+#editorPane {
+  display: none; flex-direction: column; min-height: 0; background: var(--panel); color: #e8eef7;
+  border-right: 1px solid #1f2937;
+}
+#main.editor-on #editorPane { display: flex; }
+#editorPane h2 {
+  margin: 0; padding: .65rem .85rem; font-size: .75rem; letter-spacing: .06em;
+  text-transform: uppercase; color: #93a4bd; border-bottom: 1px solid #243044;
+}
+#json {
+  flex: 1; width: 100%; border: 0; resize: none; padding: .8rem;
+  background: #0b1220; color: #f8fafc; font: 12px/1.45 ui-monospace, SFMono-Regular, monospace;
+}
+#jsonStatus {
+  padding: .4rem .85rem; font-size: .75rem; border-top: 1px solid #243044;
+}
+#jsonStatus[data-ok="1"] { color: #34d399; }
+#jsonStatus[data-ok="0"] { color: #f87171; }
+#stageWrap { min-height: 0; overflow: auto; padding: 1rem; }
+.slide-shell { max-width: 1100px; margin: 0 auto; }
+.navrow { display: flex; gap: .5rem; align-items: center; margin-top: .75rem; flex-wrap: wrap; }
+.pos { color: var(--mute); font-size: .85rem; }
+.hint { color: var(--mute); font-size: .78rem; margin-left: auto; }
+
+/* Layout A: bracket map */
+.layout-a {
+  background: var(--white); border: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 3fr; min-height: 460px;
+  box-shadow: 0 12px 36px rgba(26,26,26,.08);
+}
+.layout-a .code {
+  padding: 1.1rem 1rem 1.1rem 1.25rem; border-right: 1px solid var(--line);
+  background: #fbfaf7; font-family: ui-monospace, monospace; font-size: .82rem; line-height: 1.55;
+}
+.layout-a .viz { padding: 1.1rem 1.25rem; display: flex; flex-direction: column; gap: .7rem; }
+.bracket { position: relative; padding-left: .85rem; margin: .3rem 0; }
+.bracket::before {
+  content: ""; position: absolute; left: 0; top: .15rem; bottom: .15rem; width: 4px;
+  border-radius: 2px; background: var(--accent);
+}
+
+/* Layout B: slide theater */
+.layout-b {
+  aspect-ratio: 16 / 9; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 16px 44px rgba(15,20,25,.14); padding: 1.35rem 1.6rem 1.1rem;
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: .55rem;
+  min-height: 420px;
+}
+.layout-b::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 10px; background: var(--accent);
+}
+.layout-b .mid { display: grid; grid-template-columns: 1.15fr .95fr; gap: 1rem; flex: 1; min-height: 0; }
+
+/* Layout C: workbench preview card */
+.layout-c {
+  background: #fff; border: 1px solid #cfd6e2; border-radius: 12px; min-height: 480px;
+  padding: 1.25rem 1.4rem; box-shadow: 0 10px 30px rgba(15,23,42,.08);
+  display: flex; flex-direction: column; gap: .75rem; border-top: 6px solid var(--accent);
+}
+.layout-c .mid { display: grid; grid-template-columns: 1.1fr .95fr; gap: 1rem; }
+.layout-c.inline-diagram .mid { grid-template-columns: 1fr; }
+.layout-b.inline-diagram .mid { grid-template-columns: 1fr; }
+.diagram-inline { margin: .65rem 0 .85rem; width: clamp(50%, 70%, 75%); }
+.diagram-inline svg { width: 100%; height: auto; min-height: 210px; display: block; }
+
+.kicker {
+  font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700;
+}
+h1 {
+  margin: 0; font-family: "IBM Plex Serif", Georgia, serif; font-weight: 650;
+  font-size: clamp(1.45rem, 2.6vw, 2.1rem); line-height: 1.15;
+}
+.sub { color: var(--mute); font-size: .92rem; }
+.body { font-size: .98rem; line-height: 1.45; }
+.body p { margin: 0 0 .55rem; }
+.eq {
+  margin-top: auto; padding: .7rem .85rem; background: var(--paper);
+  border: 1px solid var(--line); border-left: 5px solid var(--accent);
+  overflow-x: auto; font-size: .95rem;
+}
+.legend { display: flex; flex-wrap: wrap; gap: .55rem; font-size: .75rem; color: var(--mute); }
+.swatch { display: inline-flex; align-items: center; gap: .3rem; }
+.swatch i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.diagram svg { width: 100%; height: auto; display: block; }
+.chip {
+  display: inline-block; padding: .12rem .45rem; border-radius: 999px;
+  background: #eef2ff; color: #3730a3; font-size: .72rem; font-weight: 700;
+}
+.meta { display: flex; justify-content: space-between; align-items: center; color: var(--mute); font-size: .8rem; }
+.callout {
+  font-size: .85rem; padding: .55rem .7rem; border-radius: 8px;
+  background: #fff7ed; border: 1px solid #fdba74; color: #7c2d12;
+}
+.hl-encoder { color: var(--encoder); font-weight: 700; }
+.hl-uncertainty { color: var(--uncertainty); font-weight: 700; }
+.hl-heave { color: var(--heave); font-weight: 700; }
+.hl-da { color: var(--da); font-weight: 700; }
+.muted { color: var(--mute); }
+@media (max-width: 900px) {
+  #main.editor-on { grid-template-columns: 1fr; }
+  .layout-a, .layout-b .mid, .layout-c .mid { grid-template-columns: 1fr; }
+  .layout-b { aspect-ratio: auto; min-height: 520px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar" role="toolbar" aria-label="Deck controls">
+    <strong>NeSPReSO v2 → DA</strong>
+    <span class="sep"></span>
+    <label for="layoutSlide">Slide layout</label>
+    <select id="layoutSlide" title="Layout for current slide">
+      <option value="a">A · Bracket map</option>
+      <option value="b">B · Slide theater</option>
+      <option value="c">C · Workbench</option>
+    </select>
+    <label for="layoutDefault">Default</label>
+    <select id="layoutDefault" title="Default when a slide omits layout">
+      <option value="a">A</option>
+      <option value="b">B</option>
+      <option value="c" selected>C</option>
+    </select>
+    <span class="sep"></span>
+    <button type="button" id="btnEditor" aria-pressed="true">JSON editor</button>
+    <button type="button" id="btnExport">Save HTML</button>
+    <span class="sep"></span>
+    <a href="notes.md" target="_blank" rel="noopener">Companion notes.md</a>
+    <a href="da_update.html">Lab update · DA loops</a>
+    <span class="grow"></span>
+    <span id="deckTitleBar" class="muted"></span>
+  </div>
+  <div id="main" class="editor-on">
+    <aside id="editorPane">
+      <h2>Deck JSON · live preview</h2>
+      <textarea id="json" spellcheck="false" aria-label="Editable deck JSON"></textarea>
+      <div id="jsonStatus" data-ok="1">JSON ok</div>
+    </aside>
+    <div id="stageWrap">
+      <div class="slide-shell">
+        <div id="stage"></div>
+        <div class="navrow">
+          <button type="button" id="btnPrev">← Prev</button>
+          <button type="button" id="btnNext">Next →</button>
+          <span class="pos" id="pos"></span>
+          <span class="hint">← → keys · layouts A/B/C · editor toggle</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ========== Embedded default deck ========== */
+const DEFAULT_DECK = {
+  "title": "NeSPReSO v2 → DA handoff",
+  "defaultLayout": "c",
+  "slides": [
+    {
+      "id": "cover",
+      "accent": "da",
+      "layout": "b",
+      "title": "NeSPReSO v2 → Data Assimilation",
+      "subtitle": "Uncertainty Head (A×CRPS) and Heave Residual for MAPS",
+      "body": "<p><strong>NeSPReSO</strong> (Neural Sparse Profiling of the Subsurface Ocean) maps surface satellite fields and encodings to subsurface Temperature/Salinity (T/S) profiles.</p><p>Today we walk the shared <span class=\"hl-encoder\">SatEncoder</span>, the operational <span class=\"hl-uncertainty\">Uncertainty Head</span>, the <span class=\"hl-heave\">Heave Residual</span> challenger, and the <span class=\"hl-da\">DA handoff</span> contract.</p>",
+      "equation": "\\text{surface} \\xrightarrow{\\text{SatEncoder}} h \\xrightarrow{\\text{head}} \\mu(z),\\;\\text{(optional }\\sigma\\text{)}",
+      "diagram": "cover",
+      "code": "# MAPS spine\\nSatEncoder  →  Uncertainty Head\\nSatEncoder  →  Heave Residual\\n               ↓\\n            DA ingest"
+    },
+    {
+      "id": "satencoder",
+      "accent": "encoder",
+      "title": "Shared trunk: SatEncoder",
+      "subtitle": "Code name: PatchConvMLP",
+      "body": "<p>Now let's focus on the shared backbone. Scalar encodings and satellite Sea Surface Temperature (SST), Sea Surface Salinity (SSS), and Sea Surface Height (SSH) are fused into a latent vector <em>h</em>.</p><p>Point mode: linear satellite embed. Patch mode: reshape the flat satellite block to (B, C, T, H, W), run a small Conv2d trunk, project to <em>d_model</em>, then an Multi-Layer Perceptron (MLP) head.</p>",
+      "equation": "h = \\mathrm{EncProj}(e) + \\mathrm{SatProj}(\\mathrm{sat})",
+      "diagram": "encoder",
+      "code": "e = EncProj(scalars)\\ns = SatProj(Conv2d(sat))  # or Linear\\nh = e + s\\nh = MLP(h)"
+    },
+    {
+      "id": "inputs",
+      "accent": "encoder",
+      "title": "Inputs & fusion",
+      "subtitle": "9-D A×CRPS vs 11-D Heave (+ ONI/RONI)",
+      "body": "<p><span class=\"hl-uncertainty\">Uncertainty Head (A×CRPS)</span> uses <strong>9</strong> inputs: 6 harmonics (time, lat, lon cos/sin) + SSS, SST, SSH. <code>n_enc=6</code>, <code>n_sat=3</code>.</p><p><span class=\"hl-heave\">Heave Residual</span> uses <strong>11</strong>: the same 6 + <strong>ONI</strong> (Oceanic Niño Index) + <strong>RONI</strong> (Relative Oceanic Niño Index) + SSS, SST, SSH. ENSO columns splice after harmonics, before sat.</p>",
+      "equation": "x_{\\mathrm{A}}\\in\\mathbb{R}^{9},\\quad x_{\\mathrm{Heave}}\\in\\mathbb{R}^{11}",
+      "diagram": "fusion",
+      "code": "A×CRPS:  [t,lat,lon]×2 + SSS,SST,SSH\\nHeave:   + ONI, RONI  (n_enc=8)"
+    },
+    {
+      "id": "unc_arch",
+      "accent": "uncertainty",
+      "title": "Uncertainty Head architecture",
+      "subtitle": "Operational PCA-coeff A×CRPS · dual μ / σ",
+      "body": "<p>After SatEncoder, two linear heads share trunk features. <span class=\"hl-uncertainty\">μ<sub>out</sub></span> predicts Principal Component Analysis (PCA) coefficients for T and S (16+16=32). <span class=\"hl-uncertainty\">σ<sub>out</sub></span> predicts a matching scale; softplus + σ<sub>min</sub> keeps σ positive.</p><p>Forward returns the concatenation <code>[μ, σ]</code> when <code>probabilistic=true</code>.</p>",
+      "equation": "\\sigma = \\mathrm{softplus}(\\mathrm{raw}_\\sigma) + \\sigma_{\\min},\\quad \\mathrm{out}=[\\mu\\,\\|\\,\\sigma]",
+      "diagram": "mu_sigma",
+      "code": "h = SatEncoder(x)\\nμ = mu_out(h)\\nσ = softplus(sigma_out(h))+σ_min\\nreturn cat(μ, σ)"
+    },
+    {
+      "id": "crps",
+      "accent": "uncertainty",
+      "title": "CRPS: Continuous Ranked Probability Score",
+      "subtitle": "Closed-form Gaussian training loss",
+      "body": "<p>Training minimizes mean Gaussian Continuous Ranked Probability Score (CRPS) over PCA coefficients (matrix A cell). For a Normal forecast N(μ, σ²) and observation y:</p><p>This is a proper scoring rule for the full predictive Cumulative Distribution Function (CDF), not just a point error.</p>",
+      "equation": "\\mathrm{CRPS}(\\mu,\\sigma,y)=\\sigma\\Big[z\\big(2\\Phi(z)-1\\big)+2\\varphi(z)-\\tfrac{1}{\\sqrt{\\pi}}\\Big],\\; z=\\tfrac{y-\\mu}{\\sigma}",
+      "diagram": "crps",
+      "code": "loss = mean(gaussian_crps(μ, σ, y_pc))\\n# evalphys.calibration.gaussian_crps_torch"
+    },
+    {
+      "id": "pca_map",
+      "accent": "uncertainty",
+      "title": "From PCA σ to T, S, spice, density, DA",
+      "subtitle": "What spread in score space is good for",
+      "body": "<p>PCA scores live in a reduced basis V. A diagonal score covariance induces a physical covariance <span class=\"hl-uncertainty\">Σ = V diag(σ²) Vᵀ</span> (plus mean reconstruction for μ).</p><p><strong>Research.</strong> Marginal CRPS on scores calibrates per-mode spread. You can study depth-band Continuous Ranked Probability Score / Expected Normalized Calibration Error (ENCE) after decoding.</p><p><strong>DA usability today.</strong> Serve <strong>μ profiles only</strong>. Ingest observation-error covariance <strong>R</strong> uses <strong>Dai σ<sub>o</sub></strong> (floored), <em>not</em> CRPS-head σ, until ENCE gates pass. Prefer <strong>diag(R)</strong>; full Σ from shared V is rank-deficient and can hurt column Optimal Interpolation (OI).</p><p><strong>Spice / density.</strong> From this head they are derived from decoded T/S (or from a separate density–spice representation), not as independent A×CRPS outputs.</p>",
+      "equation": "\\Sigma_{TS}=V\\,\\mathrm{diag}(\\sigma^2)\\,V^{\\mathsf T},\\quad R_{\\mathrm{ingest}}\\approx\\mathrm{diag}(\\sigma_o^{\\mathrm{Dai}})^2",
+      "diagram": "pca_map",
+      "code": "μ_z = V @ μ_pc + mean\\nΣ   = V @ diag(σ²) @ V.T\\n# serve μ; R ← Dai σ_o (not CRPS σ)"
+    },
+    {
+      "id": "heave_head",
+      "accent": "heave",
+      "title": "Heave Residual: what the head predicts",
+      "subtitle": "Output layout [warp 3 | T residual PCs | S residual PCs]",
+      "body": "<p>Heave Residual (code: <code>HeaveResidual</code> / <code>HeaveResidualFast</code>) still uses SatEncoder as backbone, but the output is different. Fast is the same weights with a batched warp implementation — not a different science model.</p><p>Width 35 when probabilistic μ-part is: <strong>3 warp logits</strong> + <strong>16 T residual PCs</strong> + <strong>16 S residual PCs</strong>. Residual PCs live on a <em>canonical</em> depth grid, not native-z PCA scores.</p>",
+      "equation": "\\mu = [\\underbrace{w_{0:3}}_{\\mathrm{warp}},\\; \\underbrace{z_T}_{16},\\; \\underbrace{z_S}_{16}]",
+      "diagram": "heave_head",
+      "code": "out = SatEncoder_backbone(x)  # 35 or 70\\nwarp, z_T, z_S = split(μ)\\n# residuals on canonical z"
+    },
+    {
+      "id": "warp",
+      "accent": "heave",
+      "title": "Warp mechanism: landmarks & decode_warp",
+      "subtitle": "Canonical knots (0, 50, 120, z_bot) vs physical (0, MLD, D26, z_bot)",
+      "body": "<p>Now let's focus on the warp. We register profiles by stretching vertical landmarks — no Residual-in-Residual metaphor, just a knot map.</p>{{diagram}}<p><strong>Canonical knots</strong> (fixed): surface 0, Mixed Layer Depth reference MLD<sub>0</sub> = 50 m, isotherm D26<sub>0</sub> = 120 m (depth of the 26 °C isotherm reference), bottom z<sub>bot</sub>.</p><p><strong>Physical knots</strong> (per profile): 0, MLD, D26, z<sub>bot</sub>. Unbounded logits map to positive depths via exp (raw = 0 → MLD 50 m, D26 120 m). Minimum layer thickness is 5 m.</p><p><strong>Warp</strong>: T<sub>canon</sub>(z) = T<sub>phys</sub>(z<sub>phys</sub>(z)), where z<sub>phys</sub> is piecewise-linear <code>interp</code> from canonical knots → physical knots. <strong>Unwarp</strong> is the inverse map.</p><p><span class=\"hl-heave\">stretch</span> = 1 + 0.3 tanh(w<sub>2</sub>) is predicted but <strong>not used</strong> in reconstruct; only MLD and D26 enter warp/unwarp.</p>",
+      "equation": "\\mathrm{MLD}=50\\,e^{w_0},\\;\\mathrm{D26}=\\mathrm{MLD}+5+65\\,e^{w_1},\\;T_{\\mathrm{c}}(z)=T_{\\mathrm{p}}(\\mathrm{interp}(z;\\mathbf{c}\\!\\to\\!\\mathbf{p}))",
+      "diagram": "warp_knots",
+      "code": "canon c = (0, 50, 120, z_bot)\\nphys  p = (0, MLD, D26, z_bot)\\nMLD = 50*exp(w0); D26 = MLD+5+65*exp(w1)\\nT_c(z) = T_p( interp(z; c→p) )   # warp\\nT_p(z) = T_c( interp(z; p→c) )   # unwarp\\n# stretch = 1+0.3*tanh(w2)  # predicted, unused"
+    },
+    {
+      "id": "unwarp",
+      "accent": "heave",
+      "title": "Residual on canonical → physical T/S",
+      "subtitle": "Warp climatology, add residual, unwarp",
+      "body": "<p>Decode path in <code>physical_ts</code>:</p><ol><li>Decode MLD, D26 from warp logits.</li><li>Build residual profiles on the canonical grid: T<sub>res</sub> = z<sub>T</sub> V<sub>T</sub> + μ<sub>T</sub> (same for S).</li><li><strong>Warp</strong> the climatology prior onto canonical landmarks: T<sub>prior</sub> = Warp(T<sub>clim</sub>; MLD, D26).</li><li>Add residual on canonical: T<sub>canon</sub> = T<sub>prior</sub> + T<sub>res</sub>.</li><li><strong>Unwarp</strong> back to physical depth: T<sub>phys</sub> = Unwarp(T<sub>canon</sub>; MLD, D26).</li></ol>{{diagram}}<p>Warp samples physical values onto the canonical numeric z-grid by interpolating at mapped coordinates. Unwarp is the inverse map.</p>",
+      "equation": "T_{\\mathrm{phys}}=\\mathrm{Unwarp}\\big(\\mathrm{Warp}(T_{\\mathrm{clim}};\\mathrm{MLD},\\mathrm{D26})+Vz_T+\\mu_T\\big)",
+      "diagram": "unwarp",
+      "code": "T_prior = warp(T_clim, MLD, D26)\\nT_canon = T_prior + T_res\\nT_phys  = unwarp(T_canon, MLD, D26)"
+    },
+    {
+      "id": "da",
+      "accent": "da",
+      "title": "DA handoff contract",
+      "subtitle": "What to serve · what not to invent",
+      "body": "<p><span class=\"hl-da\">Serve μ profiles</span> on the cache depth grid (1801 levels, 0…1800 m). If the forward width is 2d, take <code>[:, :d]</code> only.</p><p><strong>R</strong> is the observation-error covariance used by Data Assimilation / Optimal Interpolation (OI). Today we ingest a <strong>diagonal</strong> R: R ≈ diag((σ<sub>o</sub>)<sup>2</sup>).</p><p><strong>H</strong> is the TSIS observation operator: it averages the 1 m T/S profile into the <strong>41 HYCOM layers</strong> whose interfaces come from the background column thickness (<code>thknss</code>). Do not apply H in the ML export path — TSIS applies H on the cycle.</p><p><strong>Dai σ<sub>o</sub></strong> is the per-layer observation-error scale: RMSE of the model vs Argo <em>after</em> H, then floored (0.05 °C / 0.02 psu). It is <strong>not</strong> 1 m RMSE and <strong>not</strong> CRPS-head σ. Export: <code>reports/sigma_o_hycom.csv</code>.</p><p><strong>Hard rule:</strong> never mix a checkpoint with a different cache (PCA lives in the cache). Pair them.</p>",
+      "equation": "y^{o}=\\mu(z),\\quad R=\\mathrm{diag}\\big(\\sigma_o^{\\mathrm{Dai}}(H\\mu)\\big)^2",
+      "diagram": "da",
+      "code": "serve μ only (1 m grid)\\nH: 1 m → 41 HYCOM layers (TSIS)\\nR ← Dai σ_o after H (floored)\\npair ckpt ↔ cache"
+    },
+    {
+      "id": "tradeoffs",
+      "accent": "da",
+      "title": "Architectural tradeoffs",
+      "subtitle": "Choices that matter for DA and research",
+      "body": "<p><strong>Marginal CRPS vs joint R.</strong> Training scores each PCA mode separately. Induced Σ = V diag(σ²) Vᵀ is not a learned joint error model. For OI, diagonal R has been the safer ingest.</p><p><strong>Native PCA vs heave.</strong> A×CRPS decodes T/S PCs on physical z. Heave predicts landmarks + residuals on a warped canonical grid, then unwinds. Better thermocline geometry is the bet; clim prior fallback is basin-mean when the cache has no climatology field.</p><p><strong>Uncertainty for DA.</strong> CRPS σ is a research signal until ENCE-by-band gates; operational R stays Dai σ<sub>o</sub>.</p>",
+      "equation": "\\underbrace{\\mathrm{CRPS\\ on\\ scores}}_{\\mathrm{train}}\\;\\parallel\\;\\underbrace{\\mathrm{Dai\\,}\\sigma_o}_{\\mathrm{ingest\\ }R}",
+      "diagram": "tradeoffs",
+      "code": "train:  marginal CRPS(μ,σ,y_pc)\\nserve:  μ(z)\\ningest: diag Dai σ_o"
+    }
+  ]
+};
+
+const COLORS = {
+  encoder: "#0B6E4F",
+  uncertainty: "#C81D25",
+  heave: "#3D348B",
+  da: "#E09F3E",
+  ink: "#1A1A1A",
+  mute: "#5C6570",
+  paper: "#F7F5F0",
+  line: "#D9D3C7",
+};
+
+/* ========== Diagrams ========== */
+function diagramSVG(kind) {
+  const C = COLORS;
+  const common = `<defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${C.ink}"/></marker>
+      <marker id="arrowSoft" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#C4B8D9"/></marker>
+    </defs>`;
+  const map = {
+    cover: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="55" width="110" height="60" rx="10" fill="${C.encoder}"/><text x="75" y="90" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">SatEncoder</text>
+      <path d="M130 85 H160" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="165" y="30" width="130" height="50" rx="10" fill="${C.uncertainty}"/><text x="230" y="60" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Uncertainty Head</text>
+      <rect x="165" y="95" width="130" height="50" rx="10" fill="${C.heave}"/><text x="230" y="125" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Heave Residual</text>
+      <path d="M295 55 H330 V85 H350" stroke="${C.da}" stroke-width="2.5" fill="none"/>
+      <path d="M295 120 H330 V85" stroke="${C.da}" stroke-width="2.5" fill="none"/>
+      <rect x="350" y="55" width="140" height="60" rx="10" fill="${C.da}"/><text x="420" y="90" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">DA handoff</text>
+    </svg>`,
+    encoder: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <path d="M95 50 H150 V85 H195" stroke="${C.ink}" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+      <path d="M95 120 H150 V85" stroke="${C.ink}" stroke-width="2" fill="none"/>
+      <path d="M320 85 H360" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="15" y="20" width="80" height="60" rx="8" fill="${C.encoder}" opacity=".18" stroke="${C.encoder}" stroke-width="2"/><text x="55" y="45" text-anchor="middle" fill="${C.encoder}" font-size="12">enc e</text><text x="55" y="62" text-anchor="middle" fill="${C.mute}" font-size="10">EncProj</text>
+      <rect x="15" y="90" width="80" height="60" rx="8" fill="${C.encoder}" opacity=".22" stroke="${C.encoder}" stroke-width="2"/><text x="55" y="115" text-anchor="middle" fill="${C.encoder}" font-size="12">sat</text><text x="55" y="132" text-anchor="middle" fill="${C.mute}" font-size="10">SatProj</text>
+      <rect x="200" y="50" width="120" height="70" rx="10" fill="${C.encoder}"/><text x="260" y="80" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">SatEncoder</text><text x="260" y="100" text-anchor="middle" fill="#d9ffe9" font-size="11">h = e + s</text>
+      <rect x="365" y="55" width="85" height="60" rx="8" fill="${C.paper}" stroke="${C.line}" stroke-width="2"/><text x="407" y="90" text-anchor="middle" fill="${C.mute}" font-size="12">head</text>
+      <text x="470" y="90" fill="${C.mute}" font-size="11">μ / [μ‖σ]</text>
+    </svg>`,
+    fusion: `<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg">${common}
+      <defs><marker id="arrowHeave" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${C.heave}"/></marker>
+      <marker id="arrowUnc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${C.uncertainty}"/></marker></defs>
+      <text x="20" y="22" fill="${C.uncertainty}" font-size="13" font-weight="700">A×CRPS · 9-D</text>
+      <rect x="20" y="32" width="200" height="50" rx="8" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="120" y="62" text-anchor="middle" fill="${C.ink}" font-size="12">6 harmonics + SSS SST SSH</text>
+      <path d="M220 57 H275" stroke="${C.uncertainty}" stroke-width="2.5" marker-end="url(#arrowUnc)"/>
+      <rect x="20" y="100" width="200" height="50" rx="8" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="120" y="130" text-anchor="middle" fill="${C.ink}" font-size="12">+ ONI + RONI</text>
+      <path d="M220 125 H275" stroke="${C.heave}" stroke-width="2.5" marker-end="url(#arrowHeave)"/>
+      <text x="120" y="172" text-anchor="middle" fill="${C.heave}" font-size="13" font-weight="700">Heave · 11-D</text>
+      <rect x="285" y="48" width="200" height="90" rx="10" fill="${C.encoder}"/><text x="385" y="88" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">SatEncoder</text><text x="385" y="112" text-anchor="middle" fill="#d9ffe9" font-size="11">shared trunk class</text>
+    </svg>`,
+    mu_sigma: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="30" y="55" width="100" height="60" rx="10" fill="${C.encoder}"/><text x="80" y="90" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">h</text>
+      <path d="M130 85 H170" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="175" y="25" width="120" height="50" rx="8" fill="${C.uncertainty}" opacity=".2" stroke="${C.uncertainty}" stroke-width="2"/><text x="235" y="55" text-anchor="middle" fill="${C.uncertainty}" font-size="14" font-weight="700">μ<tspan baseline-shift="sub" font-size="11">out</tspan></text>
+      <rect x="175" y="95" width="120" height="50" rx="8" fill="${C.uncertainty}"/><text x="235" y="125" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">σ<tspan baseline-shift="sub" font-size="11">out</tspan></text>
+      <path d="M295 50 H330 V85 H360" stroke="${C.uncertainty}" stroke-width="2" fill="none"/>
+      <path d="M295 120 H330 V85" stroke="${C.uncertainty}" stroke-width="2" fill="none"/>
+      <rect x="365" y="55" width="120" height="60" rx="10" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/><text x="425" y="80" text-anchor="middle" fill="${C.uncertainty}" font-size="13" font-weight="700">[μ ‖ σ]</text><text x="425" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">32 + 32</text>
+    </svg>`,
+    crps: `<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="40" y="22" fill="${C.uncertainty}" font-size="13" font-weight="700">CRPS integrates |F − 1<tspan baseline-shift="sub" font-size="10">t≥y</tspan>|</text>
+      <path d="M40 140 C 100 140, 120 55, 200 55 C 280 55, 300 140, 360 140" fill="none" stroke="${C.uncertainty}" stroke-width="3"/>
+      <line x1="200" y1="55" x2="200" y2="150" stroke="${C.mute}" stroke-dasharray="4 3"/>
+      <text x="208" y="72" fill="${C.uncertainty}" font-size="12" font-weight="700">μ</text>
+      <circle cx="270" cy="108" r="5" fill="${C.da}"/>
+      <text x="280" y="112" fill="${C.da}" font-size="12" font-weight="700">y</text>
+      <text x="330" y="70" fill="${C.mute}" font-size="12">N(μ,σ²)</text>
+      <text x="40" y="172" fill="${C.mute}" font-size="11">closed form used in training (gaussian_crps_torch)</text>
+    </svg>`,
+    pca_map: `<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="40" width="130" height="100" rx="10" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="85" y="75" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">σ on PCs</text>
+      <text x="85" y="98" text-anchor="middle" fill="${C.mute}" font-size="11">diag(σ²)</text>
+      <text x="85" y="118" text-anchor="middle" fill="${C.mute}" font-size="11">marginal CRPS</text>
+      <path d="M150 90 H190" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="195" y="40" width="140" height="100" rx="10" fill="${C.paper}" stroke="${C.line}" stroke-width="2"/>
+      <text x="265" y="80" text-anchor="middle" fill="${C.ink}" font-size="12" font-weight="700">Σ = V diag(σ²) Vᵀ</text>
+      <text x="265" y="105" text-anchor="middle" fill="${C.mute}" font-size="11">T/S physical cov</text>
+      <path d="M335 90 H375" stroke="${C.da}" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <rect x="380" y="35" width="120" height="110" rx="10" fill="${C.da}"/>
+      <text x="440" y="75" text-anchor="middle" fill="#1a1200" font-size="12" font-weight="700">DA today</text>
+      <text x="440" y="98" text-anchor="middle" fill="#3a2a00" font-size="11">serve μ</text>
+      <text x="440" y="118" text-anchor="middle" fill="#3a2a00" font-size="11">R = Dai σ<tspan baseline-shift="sub" font-size="9">o</tspan></text>
+    </svg>`,
+    heave_head: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="50" width="100" height="60" rx="10" fill="${C.encoder}"/><text x="70" y="85" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">backbone</text>
+      <path d="M120 80 H155" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="160" y="25" width="90" height="45" rx="8" fill="${C.heave}"/><text x="205" y="52" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">warp 3</text>
+      <rect x="260" y="25" width="100" height="45" rx="8" fill="${C.heave}" opacity=".2" stroke="${C.heave}" stroke-width="2"/><text x="310" y="52" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">z_T 16</text>
+      <rect x="370" y="25" width="100" height="45" rx="8" fill="${C.heave}" opacity=".2" stroke="${C.heave}" stroke-width="2"/><text x="420" y="52" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">z_S 16</text>
+      <text x="160" y="110" fill="${C.mute}" font-size="12">MLD, D26, stretch(logits) · residual PCs on canonical z</text>
+      <text x="160" y="132" fill="${C.heave}" font-size="12" font-weight="700">output_dim μ = 35</text>
+    </svg>`,
+    warp_knots: `<svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg">${common}
+      <path d="M100 77 Q120 120 85 163" stroke="#C4B8D9" stroke-width="2.5" fill="none" marker-end="url(#arrowSoft)"/>
+      <path d="M160 77 Q180 120 150 163" stroke="#C4B8D9" stroke-width="2.5" fill="none" marker-end="url(#arrowSoft)"/>
+      <text x="40" y="24" fill="${C.heave}" font-size="13" font-weight="700">Canonical knots (fixed)</text>
+      <line x1="40" y1="70" x2="250" y2="70" stroke="${C.line}" stroke-width="3"/>
+      <circle cx="40" cy="70" r="7" fill="${C.heave}"/><text x="40" y="95" text-anchor="middle" font-size="11">0</text>
+      <circle cx="100" cy="70" r="7" fill="${C.heave}"/><text x="100" y="95" text-anchor="middle" font-size="11">50</text>
+      <circle cx="160" cy="70" r="7" fill="${C.heave}"/><text x="160" y="95" text-anchor="middle" font-size="11">120</text>
+      <circle cx="250" cy="70" r="7" fill="${C.heave}"/><text x="250" y="95" text-anchor="middle" font-size="11">z_bot</text>
+      <text x="40" y="130" fill="${C.da}" font-size="13" font-weight="700">Physical knots (predicted)</text>
+      <line x1="40" y1="170" x2="250" y2="170" stroke="${C.line}" stroke-width="3"/>
+      <circle cx="40" cy="170" r="7" fill="${C.da}"/><text x="40" y="195" text-anchor="middle" font-size="11">0</text>
+      <circle cx="85" cy="170" r="7" fill="${C.da}"/><text x="85" y="195" text-anchor="middle" font-size="11">MLD</text>
+      <circle cx="150" cy="170" r="7" fill="${C.da}"/><text x="150" y="195" text-anchor="middle" font-size="11">D26</text>
+      <circle cx="250" cy="170" r="7" fill="${C.da}"/><text x="250" y="195" text-anchor="middle" font-size="11">z_bot</text>
+      <text x="290" y="80" fill="${C.ink}" font-size="12">piecewise-linear map</text>
+      <text x="290" y="102" fill="${C.mute}" font-size="11">canon ↔ phys via np.interp /</text>
+      <text x="290" y="120" fill="${C.mute}" font-size="11">torch searchsorted + lerp</text>
+      <text x="290" y="155" fill="${C.heave}" font-size="12" font-weight="700">decode_warp</text>
+      <text x="290" y="175" fill="${C.mute}" font-size="11">MLD=50 e^{w0}</text>
+      <text x="290" y="193" fill="${C.mute}" font-size="11">D26=MLD+5+65 e^{w1}</text>
+    </svg>`,
+    unwarp: `<svg viewBox="0 0 520 190" xmlns="http://www.w3.org/2000/svg">${common}
+      <path d="M115 55 H145" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <path d="M260 55 H285" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <path d="M390 55 H415" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="15" y="30" width="100" height="50" rx="8" fill="${C.paper}" stroke="${C.line}" stroke-width="2"/><text x="65" y="60" text-anchor="middle" font-size="11">T_clim(z)</text>
+      <rect x="150" y="25" width="110" height="60" rx="8" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/><text x="205" y="50" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">Warp</text><text x="205" y="68" text-anchor="middle" fill="${C.mute}" font-size="10">→ canonical</text>
+      <rect x="290" y="20" width="100" height="70" rx="8" fill="${C.heave}"/><text x="340" y="50" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">+ T_res</text><text x="340" y="70" text-anchor="middle" fill="#ddd6ff" font-size="10">canonical</text>
+      <rect x="420" y="25" width="85" height="60" rx="8" fill="${C.da}"/><text x="462" y="50" text-anchor="middle" fill="#1a1200" font-size="12" font-weight="700">Unwarp</text><text x="462" y="68" text-anchor="middle" fill="#3a2a00" font-size="10">T_phys(z)</text>
+      <text x="20" y="120" fill="${C.mute}" font-size="12">Warp: T_canon(z) = T_phys( z_phys(z) ) via knot interp</text>
+      <text x="20" y="142" fill="${C.mute}" font-size="12">Unwarp: inverse knot map, then sample on physical z</text>
+      <text x="20" y="170" fill="${C.heave}" font-size="12" font-weight="700">stretch predicted but unused in this reconstruct</text>
+    </svg>`,
+    da: `<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="15" y="30" width="120" height="120" rx="10" fill="${C.uncertainty}" opacity=".12" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="75" y="70" text-anchor="middle" fill="${C.uncertainty}" font-size="13" font-weight="700">μ(z)</text>
+      <text x="75" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">1 m profiles</text>
+      <text x="75" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">drop CRPS σ</text>
+      <path d="M135 90 H170" stroke="${C.da}" stroke-width="3" marker-end="url(#arrow)"/>
+      <rect x="175" y="30" width="150" height="120" rx="10" fill="${C.da}"/>
+      <text x="250" y="60" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">H · Dai · R</text>
+      <text x="250" y="85" text-anchor="middle" fill="#3a2a00" font-size="11">H: 1 m → 41 layers</text>
+      <text x="250" y="105" text-anchor="middle" fill="#3a2a00" font-size="11">σ_o: RMSE after H</text>
+      <text x="250" y="125" text-anchor="middle" fill="#3a2a00" font-size="11">R = diag(σ_o²)</text>
+      <path d="M325 90 H360" stroke="${C.da}" stroke-width="3" marker-end="url(#arrow)"/>
+      <rect x="365" y="45" width="130" height="90" rx="10" fill="${C.paper}" stroke="${C.line}" stroke-width="2"/>
+      <text x="430" y="85" text-anchor="middle" fill="${C.mute}" font-size="13">DA / OI</text>
+      <text x="430" y="108" text-anchor="middle" fill="${C.mute}" font-size="11">ckpt ↔ cache</text>
+    </svg>`,
+    tradeoffs: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="30" width="150" height="110" rx="10" fill="${C.uncertainty}" opacity=".12" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="95" y="70" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">marginal CRPS</text>
+      <text x="95" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">good for scores</text>
+      <text x="95" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">weak as joint R</text>
+      <rect x="185" y="30" width="150" height="110" rx="10" fill="${C.heave}" opacity=".12" stroke="${C.heave}" stroke-width="2"/>
+      <text x="260" y="70" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">native vs heave</text>
+      <text x="260" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">PCA on z vs</text>
+      <text x="260" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">warp + residual</text>
+      <rect x="350" y="30" width="150" height="110" rx="10" fill="${C.da}" opacity=".2" stroke="${C.da}" stroke-width="2"/>
+      <text x="425" y="70" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">ingest R</text>
+      <text x="425" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">Dai σ_o now</text>
+      <text x="425" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">CRPS σ gated</text>
+    </svg>`,
+  };
+  return map[kind] || map.encoder;
+}
+
+/* ========== App state ========== */
+let deck = null;
+let htmlFileHandle = null;
+const HTML_SAVE_NAME = "index.html";
+const DECK_RE = /const DEFAULT_DECK = \{[\s\S]*?\n\};/;
+let idx = 0;
+let editorVisible = true;
+let syncingEditor = false;
+
+function accentCSS(a) {
+  return ({ encoder: "var(--encoder)", uncertainty: "var(--uncertainty)", heave: "var(--heave)", da: "var(--da)" })[a] || "var(--encoder)";
+}
+
+function resolveLayout(slide) {
+  const L = (slide && slide.layout) || (deck && deck.defaultLayout) || "c";
+  return ["a", "b", "c"].includes(L) ? L : "c";
+}
+
+function renderKatex(el, tex) {
+  if (!tex) { el.innerHTML = ""; return; }
+  if (window.katex) {
+    try {
+      katex.render(tex, el, { throwOnError: false, displayMode: true });
+      return;
+    } catch (_) { /* fall through */ }
+  }
+  el.textContent = tex;
+}
+
+function legendHTML() {
+  return `<div class="legend">
+    <span class="swatch"><i style="background:var(--encoder)"></i> SatEncoder</span>
+    <span class="swatch"><i style="background:var(--uncertainty)"></i> Uncertainty Head</span>
+    <span class="swatch"><i style="background:var(--heave)"></i> Heave Residual</span>
+    <span class="swatch"><i style="background:var(--da)"></i> DA handoff</span>
+  </div>`;
+}
+
+function paint() {
+  if (!deck || !deck.slides || !deck.slides.length) {
+    document.getElementById("stage").innerHTML = `<div class="callout">Deck has no slides.</div>`;
+    return;
+  }
+  idx = ((idx % deck.slides.length) + deck.slides.length) % deck.slides.length;
+  const s = deck.slides[idx];
+  const layout = resolveLayout(s);
+  const accent = s.accent || "encoder";
+  document.getElementById("stage").style.setProperty("--accent", accentCSS(accent));
+  document.getElementById("layoutSlide").value = layout;
+  document.getElementById("layoutDefault").value = deck.defaultLayout || "c";
+  document.getElementById("deckTitleBar").textContent = deck.title || "";
+  document.getElementById("pos").textContent = `${idx + 1} / ${deck.slides.length} · layout ${layout.toUpperCase()}`;
+
+  const title = s.title || "";
+  const sub = s.subtitle || "";
+  const rawBody = s.body || "";
+  const code = (s.code || "").replace(/\\n/g, "\n");
+  const diag = diagramSVG(s.diagram || accent);
+  const eqId = "eq_" + idx;
+  const inline = rawBody.includes("{{diagram}}");
+  const body = inline
+    ? rawBody.replace("{{diagram}}", `<div class="diagram diagram-inline">${diag}</div>`)
+    : rawBody;
+  const sideDiag = inline ? "" : `<div class="diagram">${diag}</div>`;
+  const inlineClass = inline ? " inline-diagram" : "";
+
+  let html = "";
+  if (layout === "a") {
+    html = `<div class="layout-a${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="code"><div class="bracket">${code.split("\n").map(esc).join("<br>")}</div></div>
+      <div class="viz">
+        <div class="kicker">${esc(deck.title || "NeSPReSO v2")}</div>
+        <h1>${esc(title)}</h1>
+        <div class="sub">${esc(sub)}</div>
+        <div class="body">${body}</div>
+        ${sideDiag}
+        ${legendHTML()}
+        <div class="eq" id="${eqId}"></div>
+      </div>
+    </div>`;
+  } else if (layout === "b") {
+    html = `<div class="layout-b${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="kicker">${esc(deck.title || "NeSPReSO v2")} · ${esc(accent)}</div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      <div class="mid">
+        <div>
+          <div class="body">${body}</div>
+          <div class="eq" id="${eqId}"></div>
+        </div>
+        ${sideDiag}
+      </div>
+      ${legendHTML()}
+    </div>`;
+  } else {
+    html = `<div class="layout-c${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="meta"><span class="chip">${esc(accent)}</span><span>${esc(s.id || "")}</span></div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      <div class="mid">
+        <div class="body">${body}</div>
+        ${sideDiag}
+      </div>
+      <div class="eq" id="${eqId}"></div>
+    </div>`;
+  }
+  document.getElementById("stage").innerHTML = html;
+  renderKatex(document.getElementById(eqId), s.equation || "");
+}
+
+function esc(t) {
+  return String(t)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function writeEditorFromDeck() {
+  syncingEditor = true;
+  document.getElementById("json").value = JSON.stringify(deck, null, 2);
+  syncingEditor = false;
+}
+
+function applyJSON() {
+  if (syncingEditor) return;
+  const status = document.getElementById("jsonStatus");
+  try {
+    const parsed = JSON.parse(document.getElementById("json").value);
+    if (!parsed.slides || !Array.isArray(parsed.slides)) throw new Error("deck.slides must be an array");
+    deck = parsed;
+    if (!deck.defaultLayout) deck.defaultLayout = "c";
+    status.textContent = "JSON ok · live preview";
+    status.dataset.ok = "1";
+    paint();
+  } catch (err) {
+    status.textContent = "JSON error: " + err.message;
+    status.dataset.ok = "0";
+  }
+}
+
+function setEditorVisible(on) {
+  editorVisible = !!on;
+  document.getElementById("main").className = editorVisible ? "editor-on" : "editor-off";
+  document.getElementById("btnEditor").setAttribute("aria-pressed", editorVisible ? "true" : "false");
+}
+
+function setSaveStatus(ok, msg) {
+  const status = document.getElementById("jsonStatus");
+  status.textContent = msg;
+  status.dataset.ok = ok ? "1" : "0";
+}
+
+function bakeDeckIntoHtml(sourceHtml, d) {
+  if (sourceHtml.search(DECK_RE) < 0) throw new Error("DEFAULT_DECK block not found in that file — pick the existing " + HTML_SAVE_NAME);
+  return sourceHtml.replace(DECK_RE, "const DEFAULT_DECK = " + JSON.stringify(d, null, 2) + ";");
+}
+
+async function ensureWritePermission(handle) {
+  if (!handle) return false;
+  const opts = { mode: "readwrite" };
+  if ((await handle.queryPermission(opts)) === "granted") return true;
+  return (await handle.requestPermission(opts)) === "granted";
+}
+
+async function readHandleText(handle) {
+  const file = await handle.getFile();
+  return file.text();
+}
+
+function downloadHtml(text, name) {
+  const blob = new Blob([text], { type: "text/html;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function pickHtmlFileText() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".html,text/html";
+    input.addEventListener("change", () => {
+      const f = input.files && input.files[0];
+      if (!f) {
+        reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+        return;
+      }
+      f.text().then(resolve, reject);
+    });
+    input.addEventListener("cancel", () => {
+      reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+    });
+    input.click();
+  });
+}
+
+async function tryFetchSource() {
+  try {
+    const res = await fetch(location.href);
+    if (res.ok) return await res.text();
+  } catch (_) { /* file:// */ }
+  return null;
+}
+
+async function saveHtml() {
+  try {
+    // Reuse prior handle (same tab)
+    if (htmlFileHandle && (await ensureWritePermission(htmlFileHandle))) {
+      const source = await readHandleText(htmlFileHandle);
+      const out = bakeDeckIntoHtml(source, deck);
+      const w = await htmlFileHandle.createWritable();
+      await w.write(out);
+      await w.close();
+      setSaveStatus(true, "Saved HTML · " + (htmlFileHandle.name || HTML_SAVE_NAME));
+      return;
+    }
+
+    // Chromium: one Save picker — read that file, bake, write back (works on file://)
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: HTML_SAVE_NAME,
+        types: [{ description: "HTML deck", accept: { "text/html": [".html"] } }],
+      });
+      htmlFileHandle = handle;
+      let source = await readHandleText(handle);
+      if (source.search(DECK_RE) < 0) {
+        source = (await tryFetchSource()) || source;
+      }
+      const out = bakeDeckIntoHtml(source, deck);
+      const w = await handle.createWritable();
+      await w.write(out);
+      await w.close();
+      setSaveStatus(true, "Saved HTML · " + (handle.name || HTML_SAVE_NAME));
+      return;
+    }
+
+    // No FS Access API: pick existing HTML to read, then download baked copy
+    let source = await tryFetchSource();
+    if (!source || source.search(DECK_RE) < 0) {
+      setSaveStatus(true, "Choose the existing " + HTML_SAVE_NAME + "…");
+      source = await pickHtmlFileText();
+    }
+    const out = bakeDeckIntoHtml(source, deck);
+    downloadHtml(out, HTML_SAVE_NAME);
+    setSaveStatus(true, "Downloaded " + HTML_SAVE_NAME + " · replace the file on disk with this download");
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      setSaveStatus(false, "Save cancelled");
+      return;
+    }
+    setSaveStatus(false, "Save error: " + (err && err.message ? err.message : err));
+  }
+}
+
+function boot() {
+  deck = JSON.parse(JSON.stringify(DEFAULT_DECK));
+  writeEditorFromDeck();
+  paint();
+  document.getElementById("json").addEventListener("input", applyJSON);
+  document.getElementById("btnPrev").onclick = () => { idx -= 1; paint(); };
+  document.getElementById("btnNext").onclick = () => { idx += 1; paint(); };
+  document.getElementById("btnEditor").onclick = () => setEditorVisible(!editorVisible);
+  document.getElementById("btnExport").onclick = () => { saveHtml(); };
+  document.getElementById("layoutSlide").onchange = (e) => {
+    deck.slides[idx].layout = e.target.value;
+    writeEditorFromDeck();
+    paint();
+  };
+  document.getElementById("layoutDefault").onchange = (e) => {
+    deck.defaultLayout = e.target.value;
+    writeEditorFromDeck();
+    paint();
+  };
+  window.addEventListener("keydown", (e) => {
+    if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) return;
+    if (e.key === "ArrowRight" || e.key === "PageDown") { idx += 1; paint(); }
+    if (e.key === "ArrowLeft" || e.key === "PageUp") { idx -= 1; paint(); }
+  });
+  // KaTeX may load after DOM; repaint equations once ready
+  const wait = setInterval(() => {
+    if (window.katex) { clearInterval(wait); paint(); }
+  }, 50);
+  setTimeout(() => clearInterval(wait), 3000);
+}
+
+boot();
+</script>
+</body>
+</html>

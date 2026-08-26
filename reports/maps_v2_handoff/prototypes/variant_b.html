@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Variant B · Slide theater</title>
+  <style>
+    :root {
+      --encoder: #0B6E4F; --uncertainty: #C81D25; --heave: #3D348B; --da: #E09F3E;
+      --ink: #141414; --mute: #66707a; --paper: #f4f1ea; --line: #ddd6c8; --stage: #0f1419;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Source Sans 3", "Helvetica Neue", sans-serif; background: #cfc8bc; color: var(--ink); }
+    .chrome {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: .55rem 1rem; background: var(--stage); color: #f4f1ea; font-size: .84rem;
+    }
+    .chrome a { color: #f0c14b; }
+    .label { opacity: .65; text-transform: uppercase; letter-spacing: .06em; font-size: .7rem; margin-right: .5rem; }
+    .shell { max-width: 1080px; margin: 1rem auto; padding: 0 1rem 2rem; }
+    .stage {
+      aspect-ratio: 16 / 9; background: #fff; border: 1px solid var(--line);
+      box-shadow: 0 18px 50px rgba(15,20,25,.18); display: grid;
+      grid-template-rows: auto 1fr auto; padding: 1.4rem 1.7rem 1.2rem; position: relative;
+      overflow: hidden;
+    }
+    .stage::before {
+      content: ""; position: absolute; inset: 0 auto 0 0; width: 10px; background: var(--accent, var(--encoder));
+    }
+    .kicker { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent, var(--encoder)); font-weight: 700; }
+    h1 { margin: .15rem 0 .35rem; font-size: clamp(1.6rem, 3vw, 2.3rem); font-family: "Source Serif 4", Georgia, serif; font-weight: 650; }
+    .sub { color: var(--mute); margin-bottom: .8rem; }
+    .mid { display: grid; grid-template-columns: 1.15fr .95fr; gap: 1.2rem; align-items: start; min-height: 0; }
+    .body { font-size: 1.02rem; line-height: 1.42; }
+    .eq {
+      margin-top: .9rem; padding: .7rem .85rem; background: var(--paper);
+      border: 1px solid var(--line); border-left: 4px solid var(--accent, var(--encoder));
+      font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .9rem;
+    }
+    .footer { display: flex; justify-content: space-between; align-items: center; margin-top: .6rem; color: var(--mute); font-size: .8rem; }
+    .dots span { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ccc; margin-left: 4px; }
+    .dots span.on { background: var(--accent, var(--encoder)); }
+    .controls { display: flex; gap: .5rem; margin: .85rem 0; }
+    button {
+      border: 1px solid #b9b1a3; background: #fff; padding: .45rem .85rem; border-radius: 999px; cursor: pointer; font: inherit;
+    }
+    details.editor {
+      background: #171a1f; color: #ece8e1; border-radius: 10px; overflow: hidden;
+    }
+    details.editor summary {
+      cursor: pointer; padding: .65rem .9rem; background: #101318; list-style: none; font-size: .85rem;
+    }
+    details.editor summary::-webkit-details-marker { display: none; }
+    #status[data-ok="1"] { color: #82d3a4; }
+    #status[data-ok="0"] { color: #f0a090; }
+    textarea {
+      width: 100%; min-height: 200px; border: 0; padding: .85rem; resize: vertical;
+      background: #171a1f; color: #f3efe8; font: 12.5px/1.45 ui-monospace, monospace;
+    }
+    .contrast-strip {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: .4rem; margin-top: .5rem;
+    }
+    .contrast-strip div { height: 6px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div class="chrome">
+    <div><span class="label">Variant B</span> Slide theater · 16:9 stage first</div>
+    <div><a href="notes_stub.md" target="_blank" rel="noopener">Companion notes (separate file)</a> · <a href="index.html">Switcher</a></div>
+  </div>
+  <div class="shell">
+    <div class="stage" id="stage" style="--accent: var(--encoder)">
+      <div>
+        <div class="kicker" id="kicker">NeSPReSO v2</div>
+        <h1 id="title"></h1>
+        <div class="sub" id="subtitle"></div>
+      </div>
+      <div class="mid">
+        <div>
+          <div class="body" id="body"></div>
+          <div class="eq" id="eq"></div>
+        </div>
+        <div id="diagram"></div>
+      </div>
+      <div class="footer">
+        <div id="deckTitle"></div>
+        <div class="dots" id="dots"></div>
+      </div>
+    </div>
+    <div class="contrast-strip" aria-hidden="true">
+      <div style="background:var(--encoder)"></div>
+      <div style="background:var(--uncertainty)"></div>
+      <div style="background:var(--heave)"></div>
+      <div style="background:var(--da)"></div>
+    </div>
+    <div class="controls">
+      <button type="button" id="prev">Previous</button>
+      <button type="button" id="next">Next</button>
+      <a class="btn" href="notes_stub.md" target="_blank" rel="noopener" style="align-self:center;margin-left:.5rem;color:var(--heave)">Open notes file</a>
+    </div>
+    <details class="editor" open>
+      <summary><strong>Editable deck JSON</strong> · live preview on the stage · <span id="status"></span></summary>
+      <textarea id="json" spellcheck="false"></textarea>
+    </details>
+  </div>
+  <script src="shared.js"></script>
+  <script>
+    let idx = 0, deck = null;
+    const accentVar = { encoder: "var(--encoder)", uncertainty: "var(--uncertainty)", heave: "var(--heave)", da: "var(--da)" };
+    function paint() {
+      const s = deck.slides[idx];
+      document.getElementById("stage").style.setProperty("--accent", accentVar[s.accent] || "var(--encoder)");
+      document.getElementById("title").textContent = s.title;
+      document.getElementById("subtitle").textContent = s.subtitle || "";
+      document.getElementById("body").textContent = s.body || "";
+      document.getElementById("eq").textContent = s.equation || "";
+      document.getElementById("deckTitle").textContent = deck.title || "";
+      document.getElementById("kicker").textContent = (deck.title || "NeSPReSO v2") + " · " + (s.accent || "");
+      MAPS_PROTO.renderDiagram(s.diagram || s.accent, document.getElementById("diagram"));
+      document.getElementById("dots").innerHTML = deck.slides.map((_, i) => `<span class="${i===idx?"on":""}"></span>`).join("");
+    }
+    MAPS_PROTO.bindEditor({
+      textarea: document.getElementById("json"),
+      statusEl: document.getElementById("status"),
+      onDeck: (d) => { deck = d; idx = Math.min(idx, d.slides.length - 1); paint(); },
+    });
+    document.getElementById("prev").onclick = () => { idx = (idx - 1 + deck.slides.length) % deck.slides.length; paint(); };
+    document.getElementById("next").onclick = () => { idx = (idx + 1) % deck.slides.length; paint(); };
+  </script>
+</body>
+</html>

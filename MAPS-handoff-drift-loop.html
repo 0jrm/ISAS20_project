@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MAPS handoff: drifted NeSPReSO DA loop</title>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
+      securityLevel: "loose",
+      flowchart: { htmlLabels: true, curve: "basis" },
+      sequence: { mirrorActors: false }
+    });
+  </script>
+  <style>
+    :root {
+      --bg: #f7f7f5; --fg: #1a1a1a; --muted: #5c5c5c; --border: #d9d9d4;
+      --card: #ffffff; --accent: #1f4e79; --success: #1b6b3a;
+      --warning: #8a6d1d; --danger: #9b2c2c; --info: #1f5f8a;
+      --fact: #1b6b3a; --infer: #8a6d1d;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141414; --fg: #ececec; --muted: #a0a0a0; --border: #333;
+        --card: #1c1c1c; --accent: #7eb6e8; --success: #6fbf86;
+        --warning: #d4b45a; --danger: #e07a7a; --info: #7eb6e8;
+        --fact: #6fbf86; --infer: #d4b45a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg); color: var(--fg); line-height: 1.55;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 72px; display: flex; flex-direction: column; gap: 28px; }
+    h1 { font-size: 1.65rem; font-weight: 650; margin: 0 0 6px; }
+    h2 { font-size: 1.28rem; font-weight: 650; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 1.02rem; font-weight: 600; margin: 14px 0 6px; }
+    p { margin: 0 0 8px; }
+    ul, ol { margin: 0 0 8px; padding-left: 1.25rem; }
+    .muted { color: var(--muted); font-size: 0.875rem; }
+    .lede { font-size: 1.02rem; max-width: 70ch; }
+    nav.jump {
+      position: sticky; top: 0; z-index: 5;
+      background: color-mix(in srgb, var(--bg) 92%, transparent);
+      backdrop-filter: blur(6px); border-bottom: 1px solid var(--border);
+      margin: -8px -4px 0; padding: 8px 4px; display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    nav.jump a {
+      font-size: 0.72rem; color: var(--muted); text-decoration: none;
+      border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; background: var(--card);
+    }
+    .callout { border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px; padding: 12px 14px; background: var(--card); }
+    .callout.warning { border-left-color: var(--warning); }
+    .callout strong.block { display: block; margin-bottom: 4px; }
+    code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.84rem; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+    pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8rem; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; margin: 0 0 8px; }
+    pre.cmd { background: #1a2330; color: #e8eef5; border-color: #243041; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; background: var(--card); }
+    th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    .mermaid { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; }
+    .tag { display: inline-block; font-size: 0.7rem; font-weight: 650; border-radius: 4px; padding: 1px 6px; margin-right: 4px; }
+    .tag.fact { background: color-mix(in srgb, var(--fact) 18%, var(--card)); color: var(--fact); border: 1px solid color-mix(in srgb, var(--fact) 35%, var(--border)); }
+    .tag.infer { background: color-mix(in srgb, var(--infer) 18%, var(--card)); color: var(--infer); border: 1px solid color-mix(in srgb, var(--infer) 35%, var(--border)); }
+    .q { border-left: 3px solid var(--accent); padding: 8px 12px; margin: 8px 0; background: var(--card); border-radius: 0 6px 6px 0; }
+    .q .n { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    .q .ask { font-weight: 600; margin: 2px 0 4px; }
+    .stack-sm { display: flex; flex-direction: column; gap: 8px; }
+    .stack-md { display: flex; flex-direction: column; gap: 12px; }
+    section { scroll-margin-top: 48px; }
+    figure { margin: 12px 0; }
+    figure img, figure video { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: var(--card); }
+    figcaption { font-size: 0.84rem; color: var(--muted); margin-top: 6px; }
+    .mod { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--card); margin: 0 0 8px; }
+    .mod h4 { margin: 0 0 4px; font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+<main>
+  <header class="stack-sm">
+    <h1>MAPS handoff: drifted NeSPReSO DA loop (2024-01-06)</h1>
+    <p class="muted">18 Aug 2026 · scripts in <code>science/tsis_gom_da/drift_loop/</code> · campaign on scratch <code>da_loop_20240106</code> · four forecast members including traditional <code>ops</code></p>
+  </header>
+
+  <nav class="jump">
+    <a href="#mission">Mission</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#pathways">Pathways</a>
+    <a href="#safe">Safe change</a>
+    <a href="#verification">Verification</a>
+  </nav>
+
+  <section id="mission" class="stack-md">
+    <h2>1. Mission</h2>
+    <p class="lede">This campaign asks whether NeSPReSO temperature and salinity, written into TSIS as profiles, can improve a Gulf of Mexico HYCOM forecast after the model has run four days away from a reanalysis restart, and it scores that answer against a traditional Argo-plus-satellite analysis on the same drifted background.</p>
+    <p>Start from the 1 Jan 2024 18Z reanalysis restart. Integrate four days with no assimilation. At 6 Jan 00Z, run TSIS once for each DA member against that drifted state. Apply the increment over the next 24 hours and forecast through 12 Jan 18Z. Four twins share the restart. <code>null</code> gets no increment. <code>ops</code> is cargo Argo plus L3/L4 SLA plus L4 SST, the operational-style benchmark. <code>nespreso_argo</code> is nine NeSPReSO columns at the 6 Jan GDAC sites. <code>nespreso_tracks</code> is NeSPReSO sampled on a 0.25° thinning of cargo L3 SLA along-track points from 4 Jan and 5 Jan, the two days before analysis. Score all four against GDAC Argo on each calendar day. The older sibling <code>da_loop_20240102</code> assimilated six hours after the restart. This one lets the background drift first, then puts traditional DA on that same drifted ocean.</p>
+
+    <h3>One real input → processing → output</h3>
+    <p><strong>Input.</strong> Restart <code>restart_2024010118</code> from abozec expt_35.0, cargo Argo / AVISO / OISST under <code>TSISv2.0/src_gmrf/ocn_obs</code>, and nine GDAC Argo locations on 6 Jan 2024.</p>
+    <p><strong>Processing.</strong> Slurm job 13042189 ran four 1-day HYCOM segments to <code>restart_day04</code> at dtime 44930.75. Job 13044150 ran <code>xprep</code> then <code>xgmrf</code> then <code>xa2inc</code> on that restart (58 cargo profiles, 9226 binned L3 SLA). Forecast job 13044169 applied <code>incupd.2024_005_18</code> with <code>incflg=-1</code> (97 <code>finished incupdate</code> lines).</p>
+    <p><strong>Output.</strong> Hourly surface archives through 12 Jan 18Z. GDAC Argo T RMSE for <code>ops</code> is 0.496 °C at analysis time versus 0.912 °C for <code>null</code>. The same day, <code>nespreso_argo</code> is 1.414 °C and <code>nespreso_tracks</code> is 1.815 °C. Traditional DA beat the free run. Profile-only NeSPReSO did not.</p>
+
+    <h3>What this explicitly does not do</h3>
+    <ul>
+      <li>It does not use a pre-built <code>qcobs_tsisv2/tsis_obs_gomb4_2024010600.nc</code>. That directory only has 2–4 Jan. <code>ops</code> is built by <code>xprep</code> from raw <code>ocn_obs</code>.</li>
+      <li>It does not assimilate L3 SST. xprep printed <code>no L3 SST observations</code>. Gates are Profile T, L3 SLA T, L4 SLA T, L3 SST F, L4 SST T.</li>
+      <li>It does not write velocity increments. <code>uvl</code> and <code>vvl</code> are zero in every member increment, including <code>ops</code>.</li>
+      <li>It does not use the 0.25° dense Gulf grid as a member. Tracks are NeSPReSO along SLA geometry, not a full grid.</li>
+      <li>It does not score L4 SST or SSH skill. Eval is GDAC Argo plus twin-minus-null maps.</li>
+      <li>It does not overwrite <code>da_loop_20240102</code>.</li>
+    </ul>
+  </section>
+
+  <section id="architecture" class="stack-md">
+    <h2>2. Architecture</h2>
+    <div class="mermaid">flowchart TD
+      IC["expt_35.0 restart_2024010118"] --> StageFR["stage_hycom.sh freerun"]
+      StageFR --> LoopFR["forecast_loop.py phase=freerun"]
+      LoopFR --> Drifted["restart_day04 + archv.2024_005_18"]
+      GDAC["Ifremer GDAC geo daily"] --> Fetch["fetch_argo.py"]
+      Fetch --> Sites["argo_sites_20240106.json"]
+      Sites --> Build["build_obs.py"]
+      Drifted --> Build
+      API["NeSPReSO profile and grid APIs"] --> Build
+      SLA["qcobs tsis_obs 2024010400 L3 SSH"] --> Build
+      Build --> NesObs["tsis_obs masked satellites"]
+      OCN["ocn_obs cargo Argo, AVISO, OISST"] --> Xprep["run_tsis.sh ops: xprep"]
+      Drifted --> Xprep
+      Drifted --> TSIS["xgmrf then xa2inc"]
+      Xprep --> TSIS
+      NesObs --> TSIS
+      TSIS --> Inc["incupd.2024_005_18 per member"]
+      Drifted --> StageM["stage_hycom.sh null / ops / argo / tracks"]
+      Inc --> StageM
+      StageM --> LoopFC["forecast_loop.py phase=forecast"]
+      LoopFC --> Arch["hourly archs and daily archv"]
+      Arch --> Eval["eval_loop.py"]
+      Fetch --> Eval
+      Arch --> Anim["animate_forecast.py"]
+      Eval --> Report["eval/REPORT.md"]
+      Anim --> Movie["drift_vs_null.mp4"]
+    </div>
+
+    <h3>Glossary</h3>
+    <table>
+      <thead><tr><th>Term</th><th>Meaning here</th></tr></thead>
+      <tbody>
+        <tr><td>Free run</td><td>Four days of HYCOM from the reanalysis restart with <code>incflg=0</code>. Ends 5 Jan 18Z, dtime 44930.75.</td></tr>
+        <tr><td>Drifted background</td><td>That 5 Jan 18Z archive and restart. Every TSIS cycle and every NeSPReSO innovation uses this state, not a golden 2 Jan archive.</td></tr>
+        <tr><td>Member</td><td>One forecast twin. <code>null</code> has no increment. <code>ops</code> is cargo Argo + L3/L4 SLA + L4 SST. <code>nespreso_argo</code> has nine profile columns. <code>nespreso_tracks</code> has 119 columns along 4–5 Jan L3 SLA tracks thinned to 0.25°.</td></tr>
+        <tr><td>incflg=-1</td><td>HYCOM reads an xa2inc difference archive and applies it over 44930.75–44931.75. Day 2 onward is <code>incflg=0</code>.</td></tr>
+        <tr><td>xprep / xgmrf</td><td><code>xprep</code> bins raw <code>ocn_obs</code> onto the model grid and writes <code>tsis_obs</code>. <code>xgmrf</code> is 3DVAR. <code>xa2inc</code> turns <code>inc.*.nc</code> into <code>incupd.*.[ab]</code>. NeSPReSO members skip xprep and feed a pre-built obs file.</td></tr>
+        <tr><td>Cargo window</td><td>nlist <code>p_twin_start=-4</code>, <code>p_twin_end=4</code>. Profiles from 2 Jan through 10 Jan can enter the 6 Jan ops analysis. SLA uses the same ±4 d. L4 SST uses 0/0, analysis day only.</td></tr>
+        <tr><td>Profile-only write-out</td><td>NeSPReSO members write T, S, and layer thickness. Their increment <code>uvl</code>, <code>vvl</code>, and <code>ssh</code> are identically zero. <code>ops</code> writes a nonzero SSH increment. Velocity is still zero.</td></tr>
+        <tr><td>GDAC eval</td><td>Calendar-day Atlantic geo files, Gulf subset, pooled RMSE at native Argo pressures against the nearest HYCOM column.</td></tr>
+        <tr><td>srfhgt</td><td>HYCOM surface-height record. The movie plots it native, same as <code>animate_month1.py</code>. <code>eval_loop.py</code> divides by <code>ONEM=9806</code> when it reports SSH in meters.</td></tr>
+        <tr><td>NPES 92</td><td>HYCOM rank count on <code>coaps_q</code>, OpenMPI <code>pml=ob1</code>, <code>btl=self,vader,tcp</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Modules</h3>
+    <div class="mod"><h4>paths.py / paths.sh</h4>
+      <p><strong>Responsibility.</strong> Campaign dates, members, machine paths, TSIS and HYCOM binaries, including <code>XPREP</code> and <code>OCN_OBS</code>.</p>
+      <p><strong>Inputs.</strong> None at runtime. Constants only.</p>
+      <p><strong>Outputs.</strong> Imported by every other script. Shell scripts <code>source paths.sh</code>.</p>
+      <p><strong>Why.</strong> <code>MEMBERS</code> and <code>APPLY_MEMBERS</code> are the one place that says <code>ops</code> is a DA twin. The 2 Jan loop used different dtimes.</p>
+    </div>
+    <div class="mod"><h4>stage_hycom.sh</h4>
+      <p><strong>Responsibility.</strong> Writable run directory, forcing, nest days 001–013, owned <code>hycom</code> binary, restart, optional incup files.</p>
+      <p><strong>Inputs.</strong> Member name. For forecast members, <code>freerun/restarts/restart_day04</code> and TSIS <code>incupd.2024_005_18</code>.</p>
+      <p><strong>Outputs.</strong> <code>$CAMPAIGN/hycom/$MEMBER/</code>.</p>
+      <p><strong>Why.</strong> Nest files must be three-digit <code>001</code>…<code>013</code>. A <code>seq -w 1 13</code> mistake would silently skip them.</p>
+    </div>
+    <div class="mod"><h4>forecast_loop.py</h4>
+      <p><strong>Responsibility.</strong> One-day HYCOM segments. Sets <code>limits</code> and <code>incflg</code>, launches <code>srun -n 92</code>, rotates restart, moves archives to <code>arch_dayNN</code>.</p>
+      <p><strong>Inputs.</strong> <code>--member --phase freerun|forecast --days --start-day</code>.</p>
+      <p><strong>Outputs.</strong> Daily restarts, hourly <code>archs</code>/<code>archv</code>, log under <code>logs/hycom_$MEMBER.log</code>.</p>
+      <p><strong>Why.</strong> Apply only on forecast day 1 of members in <code>APPLY_MEMBERS</code>. Free run and null stay at <code>incflg=0</code>.</p>
+    </div>
+    <div class="mod"><h4>fetch_argo.py / build_obs.py</h4>
+      <p><strong>Responsibility.</strong> GDAC sites and 6–12 Jan eval profiles. NeSPReSO T/S packed into TSIS obs/inov NetCDFs with satellites filled to <code>SPVAL</code> and <code>obsgrp</code> profiles-only. Does not build the ops obs file.</p>
+      <p><strong>Inputs.</strong> Drifted archive, GDAC geo files, NeSPReSO APIs, 4 Jan qcobs L3 SSH mask, <code>obs_error_profiles.nc</code>.</p>
+      <p><strong>Outputs.</strong> <code>obs/tsis_obs_gomb4_2024010600_nespreso_*.nc</code>, sanity JSON, site lists.</p>
+      <p><strong>Why.</strong> Innovations must be NeSPReSO minus the drifted HYCOM column, not minus a reanalysis snapshot from four days earlier.</p>
+    </div>
+    <div class="mod"><h4>run_tsis.sh</h4>
+      <p><strong>Responsibility.</strong> Stage an xgmrf rundir from the drifted restart. For <code>ops</code>, rewrite nlist paths, run <code>xprep</code>, then <code>xgmrf</code> and <code>xa2inc</code>. For NeSPReSO, copy the pre-built masked obs and skip xprep.</p>
+      <p><strong>Inputs.</strong> Member name. Requires <code>restart_day04</code>. NeSPReSO also needs obs NetCDFs. Ops needs <code>OCN_OBS</code>.</p>
+      <p><strong>Outputs.</strong> <code>inc.2024_005_18.nc</code>, <code>incup/incupd.2024_005_18.[ab]</code>, copies under <code>obs/</code> for ops, gate snippets in <code>logs/gates_$MEMBER.txt</code>.</p>
+      <p><strong>Why.</strong> qcobs_tsisv2 has no 6 Jan file. xprep is how traditional DA exists on this date. Nested <code>srun</code> from a login shell has died inside Cooper-Haines. Use the Slurm file in <code>logs/submit_tsis_ops.slurm</code>. Do not <code>rm -rf</code> the rundir if you only need to re-run xgmrf.</p>
+    </div>
+    <div class="mod"><h4>eval_loop.py / animate_forecast.py</h4>
+      <p><strong>Responsibility.</strong> Score Argo RMSE, increment stats, twin-minus-null, TSIS gates, HYCOM log readiness. Render the 3×7 hourly movie (differences vs ops).</p>
+      <p><strong>Inputs.</strong> Forecast <code>archv</code>/<code>archs</code>, GDAC JSON, increment NetCDFs, ops L3 SSH overlay.</p>
+      <p><strong>Outputs.</strong> <code>eval/REPORT.md</code>, <code>eval/report.json</code>, <code>eval/figures/drift_vs_null.mp4</code>, copies under <code>maps_media/</code>.</p>
+      <p><strong>Why.</strong> Numbers without maps hide the track-geometry increment. Maps without Argo RMSE hide that NeSPReSO hurt the floats while ops helped them.</p>
+    </div>
+  </section>
+
+  <section id="pathways" class="stack-md">
+    <h2>3. Pathways</h2>
+
+    <h3>Workflow 1. Primary DA cycle</h3>
+    <p><strong>Entry.</strong> <code>README.md</code> command block, or <code>after_freerun.sh</code> after the free run exists.</p>
+    <p><strong>Transformations.</strong> Stage free run from <code>restart_2024010118</code>. Four daily segments, dtime 44926.75 → 44930.75. Build two NeSPReSO obs files from the drifted archive. Run TSIS three times (ops via xprep, plus both NeSPReSO members). Stage four forecast dirs from <code>restart_day04</code>. Seven daily segments, dtime 44930.75 → 44937.75. DA members set <code>incflg=-1</code> only on day 1.</p>
+    <p><strong>External calls.</strong> Owned HYCOM via <code>srun -n 92</code>. NeSPReSO HTTPS APIs. abozec <code>xprep</code>, <code>xgmrf</code>, and <code>xa2inc</code>.</p>
+    <p><strong>State.</strong> <code>$CAMPAIGN/hycom/{freerun,null,ops,nespreso_argo,nespreso_tracks}</code>, <code>tsis/*/run_2024010600</code>, <code>obs/</code>.</p>
+    <p><strong>Output.</strong> <code>restart_day07</code> and <code>archv.2024_012_18</code> for each forecast member. Jobs 13042189, 13042299, 13042300, 13042301, 13044150, 13044169 all COMPLETED.</p>
+    <p><strong>Failure.</strong> <code>forecast_loop.py</code> exits if <code>restart_out</code> is missing or HYCOM rc ≠ 0. <code>run_tsis.sh</code> exits if obs or drifted restart is missing, or if nlist string replace misses the expt_35.0 paths. <code>stage_hycom.sh</code> warns on missing copies but keeps going, which is the nest-day footgun.</p>
+
+    <div class="mermaid">sequenceDiagram
+      participant U as Operator
+      participant S as stage_hycom.sh
+      participant F as forecast_loop.py
+      participant H as hycom NPES=92
+      participant B as build_obs.py
+      participant N as NeSPReSO API
+      participant P as xprep
+      participant T as xgmrf / xa2inc
+      U->>S: stage_hycom.sh freerun
+      S->>H: copy restart_2024010118
+      U->>F: submit.sh freerun freerun 4
+      F->>H: 4 days incflg=0
+      H-->>F: restart_day04
+      U->>B: build_obs.py both
+      B->>H: read archv.2024_005_18
+      B->>N: profile API 9 sites, grid API tracks
+      N-->>B: T/S columns
+      B-->>U: tsis_obs masked satellites
+      U->>P: run_tsis.sh ops
+      P-->>T: 58 profiles, 9226 binned L3 SLA
+      U->>T: run_tsis.sh nespreso_argo then tracks
+      T-->>U: incupd.2024_005_18 per member
+      U->>S: stage null / ops / argo / tracks
+      U->>F: submit.sh forecast 7
+      F->>H: day1 incflg=-1 on DA members
+      H-->>U: archs through 2024_012_18
+    </div>
+
+    <h3>Workflow 2. Build observations on the drifted state</h3>
+    <p><strong>Entry.</strong> NeSPReSO: <code>build_obs.py</code> <code>main()</code>, argument <code>argo</code>, <code>tracks</code>, or <code>both</code>. Ops: <code>run_tsis.sh ops</code> xprep branch.</p>
+    <p><strong>Transformations.</strong> NeSPReSO loads drifted 3D T/S/thk, fetches the profile or grid API, layer-averages onto HYCOM interfaces, masks every satellite obs/inov variable, sets <code>obsgrp[0]=1</code>. Ops rewrites <code>tsis.nlist</code> so <code>ocn_obs</code> and <code>tsis_obs_location</code> point at this rundir, then xprep reads cargo Argo (±4 d), bins L3 SLA, fills L4 SLA and L4 SST.</p>
+    <p><strong>External calls.</strong> <code>https://ozavala.coaps.fsu.edu/nespreso_profile</code> and <code>/nespreso_grid</code>. Ops reads <code>OCN_OBS</code> on disk, no HTTPS.</p>
+    <p><strong>State.</strong> <code>obs/sanity_*.json</code>, <code>casts/*.nc</code>, <code>obs/tsis_obs_gomb4_2024010600_ops.nc</code>.</p>
+    <p><strong>Output.</strong> Argo, 9 profiles, 290 T and 290 S flags. Tracks, 2660 cargo L3 SLA points from 4–5 Jan, 392 sites after 0.25° thinning, 119 kept columns, 3799 T and S flags. Ops xprep, 58 profiles, 9226 binned L3 SLA, no L3 SST.</p>
+    <p><strong>Failure.</strong> <code>build_obs.py</code> exits if the drifted archive is missing, the API returns nothing, or every column is land/empty. <code>run_tsis.sh</code> exits if xprep does not write obs/inov, or if any of the three nlist replace strings is absent from expt_35.0 <code>tsis.nlist</code>.</p>
+
+    <h3>Workflow 3. Score and animate</h3>
+    <p><strong>Entry.</strong> <code>eval_loop.py:main</code> and <code>animate_forecast.py:main</code>.</p>
+    <p><strong>Transformations.</strong> Eval loads each 3D archive once, interpolates HYCOM T/S to Argo pressures, pools RMSE. Twin-minus-null uses layer-1 T and SSH. Animation loads hourly <code>archs</code> SST/SSS/SSH for four members, plots absolute fields and null−ops / Argo−ops / tracks−ops, overlays Argo, ops L3 SLA, and track sites, encodes 6 fps H.264. Hours at or before 5 Jan 18Z come from <code>hycom/freerun</code> and the difference columns are identically zero.</p>
+    <p><strong>External calls.</strong> Static ffmpeg at <code>scratch/tools/ffmpeg-7.0.2-amd64-static/ffmpeg</code>.</p>
+    <p><strong>State.</strong> Read-only on archives. Writes <code>eval/</code> and <code>eval/frames_forecast/</code>.</p>
+    <p><strong>Output.</strong> <code>REPORT.md</code>, 264-frame movie 2024_001_19 … 2024_012_18 (96 h shared free run, then 24 h apply, then 6 d forecast), stills at 5 Jan 18Z, 6 Jan 00Z, 6 Jan 18Z, 12 Jan 18Z. Anim job 13044452 COMPLETED in 00:00:44.</p>
+    <p><strong>Failure.</strong> Eval records <code>missing</code> if an archive or JSON is absent. Animation exits if the four members do not share a timestamp, or if free-run stamps overlap forecast stamps.</p>
+  </section>
+
+  <section id="safe" class="stack-md">
+    <h2>4. Safe change</h2>
+
+    <h3>Setup, run, eval</h3>
+    <p>Python is <code>/gpfs/research/coaps/jrm22n/scratch/class3_nespreso_probe/.venv/bin/python</code>. There is no package install, lint, or CI in this tree. Deployment is Slurm on <code>coaps_q</code>.</p>
+<pre class="cmd">cd /gpfs/research/coaps/jrm22n/hycom/science/tsis_gom_da/drift_loop
+source paths.sh
+bash stage_hycom.sh freerun
+bash submit.sh freerun freerun 4
+# wait for restart_day04
+$VENV_PY fetch_argo.py
+$VENV_PY build_obs.py both
+bash run_tsis.sh ops
+bash run_tsis.sh nespreso_argo
+bash run_tsis.sh nespreso_tracks
+bash stage_hycom.sh null
+bash stage_hycom.sh ops
+bash stage_hycom.sh nespreso_argo
+bash stage_hycom.sh nespreso_tracks
+bash submit.sh null forecast 7
+bash submit.sh ops forecast 7
+bash submit.sh nespreso_argo forecast 7
+bash submit.sh nespreso_tracks forecast 7
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+$VENV_PY eval_loop.py
+bash submit_anim.sh
+</pre>
+    <p>Or after a successful free run, <code>bash after_freerun.sh</code> covers obs through forecast submit, including ops. That script is for a new campaign. Running it against this scratch tree would wipe completed TSIS rundirs and resubmit forecasts. Re-eval and animation stay manual. Movie submit wrapper is <code>bash submit_anim.sh</code>.</p>
+    <p>If ops xgmrf dies in Cooper-Haines, resubmit <code>logs/submit_tsis_ops.slurm</code> without deleting the rundir. Nested <code>srun</code> from a Cursor or login shell is how the first attempt died after writing <code>issh.nc</code>.</p>
+
+    <h3>Where to change what</h3>
+    <table>
+      <thead><tr><th>If you want to…</th><th>Change</th><th>Do not touch</th></tr></thead>
+      <tbody>
+        <tr><td>Move the analysis date</td><td><code>paths.py</code> <code>DTIME_IC</code>, <code>FREERUN_DAYS</code>, <code>ANALYSIS_DATE</code>, <code>INC_NAME</code>, nest day list in <code>stage_hycom.sh</code></td><td>The 2 Jan <code>nespreso_loop/</code> scripts</td></tr>
+        <tr><td>Add or drop a member</td><td><code>MEMBERS</code> / <code>APPLY_MEMBERS</code> in <code>paths.py</code>, <code>stage_hycom.sh</code> case, <code>animate_forecast.py</code> columns</td><td><code>incflg</code> logic for members that must stay increment-free</td></tr>
+        <tr><td>Change the ops observation mix</td><td>nlist rewrite in <code>run_tsis.sh</code> and the <code>&amp;obs_system</code> flags in expt_35.0 <code>tsis.nlist</code></td><td>NeSPReSO obs files, unless you intend to</td></tr>
+        <tr><td>Change eval times or obs</td><td><code>eval_loop.py</code> <code>times</code> dict and <code>argo_gom_*.json</code></td><td>HYCOM archives. Eval is read-only</td></tr>
+        <tr><td>Change movie colorbars or fps</td><td><code>animate_forecast.py</code> <code>*_LIM</code> and ffmpeg <code>-framerate</code></td><td>Archive contents</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Invariants</h3>
+    <ul>
+      <li>Forecast DA members apply with <code>incflg=-1</code> and an xa2inc difference archive named <code>incupd.2024_005_18</code> for this date.</li>
+      <li>Null and the free run never read incup.</li>
+      <li>TSIS background is the drifted 5 Jan 18Z state, not <code>archv.2024_002_00</code>.</li>
+      <li>NeSPReSO satellite fields in the obs/inov files stay masked. Profile gate T, SLA/SST gates F.</li>
+      <li>Ops gates stay Profile T, L3 SLA T, L4 SLA T, L3 SST F, L4 SST T, and the SSH increment is nonzero.</li>
+      <li>Nest archives copied as <code>archm.2024_00N_12</code> with three-digit day numbers through 013.</li>
+      <li>New experiments go to a new scratch campaign. Do not write into <code>da_loop_20240102</code>.</li>
+    </ul>
+
+    <h3>Assumptions, gaps, risks, unverified</h3>
+    <ul>
+      <li><strong>Assumption.</strong> Cargo L3 SLA along-track points from 4 Jan and 5 Jan are the sampling geometry for the tracks member. That is the two calendar days before the 6 Jan 00Z analysis. 6 Jan tracks are not used.</li>
+      <li><strong>Gap.</strong> No L4 SST/SSH eval. Report is Argo plus twin-minus-null maps.</li>
+      <li><strong>Gap.</strong> 6 Jan Argo RMSE is in-sample for <code>nespreso_argo</code> (those 9 sites) and for <code>ops</code> (cargo ±4 d includes them). +24 h and +48 h are still inside the cargo window. Only +168 h (12 Jan) is outside <code>p_twin_end=4</code> for ops.</li>
+      <li><strong>Risk.</strong> Thickness increment <code>max_abs</code> is ~3.1e6 for ops and ~2.8e6 for NeSPReSO. HYCOM still completed with 0 <code>neg dp</code> on the forecast members. Treat that field as untrusted until someone dumps wet-only stats.</li>
+      <li><strong>Risk.</strong> <code>run_tsis.sh</code> starts with <code>rm -rf $RUN_DIR/*</code>. A second ops attempt that only needed xgmrf would delete the xprep obs. The recover path is the existing Slurm file, not a fresh <code>run_tsis.sh ops</code>.</li>
+      <li><strong>Unverified.</strong> Native NeSPReSO versus those nine GDAC profiles on 6 Jan was not recomputed in this campaign. The previous 2 Jan loop had ~0.86 °C RMSE and a cold bias. That number is not a 6 Jan measurement.</li>
+    </ul>
+
+    <h3>Small safe exercise</h3>
+    <p>From <code>drift_loop/</code>, with <code>OMP_NUM_THREADS=1</code>, run <code>$VENV_PY eval_loop.py</code>.</p>
+    <p><strong>Expected.</strong> It prints <code>wrote .../eval/REPORT.md</code>. The markdown table still has null analysis T RMSE 0.912, ops 0.496, nespreso_argo 1.414, nespreso_tracks 1.420. Nothing in the HYCOM run directories is rewritten.</p>
+  </section>
+
+  <section id="verification" class="stack-md">
+    <h2>5. Verification</h2>
+
+    <h3>Argo T RMSE (°C)</h3>
+    <p>Pooled at native depths. Profile counts 9 / 11 / 8 / 10 at anl / +24 h / +48 h / +168 h. From <code>eval/REPORT.md</code> after <code>eval_loop.py</code> on 18 Aug 2026.</p>
+    <table>
+      <thead><tr><th>Member</th><th>anl</th><th>+24 h</th><th>+48 h</th><th>+168 h</th><th>incupd lines</th></tr></thead>
+      <tbody>
+        <tr><td>null</td><td>0.912</td><td>0.840</td><td>0.783</td><td>0.853</td><td>0</td></tr>
+        <tr><td>ops</td><td>0.496</td><td>0.667</td><td>0.510</td><td>0.748</td><td>97</td></tr>
+        <tr><td>nespreso_argo</td><td>1.414</td><td>0.850</td><td>0.771</td><td>0.849</td><td>97</td></tr>
+        <tr><td>nespreso_tracks</td><td>1.815</td><td>1.784</td><td>1.681</td><td>1.553</td><td>97</td></tr>
+      </tbody>
+    </table>
+    <p>Analysis-time T bias vs Argo is −0.26 (null), −0.18 (ops), −0.44 (argo member), −0.78 (tracks). Ops stays better than null through +168 h. Tracks stay cold through day 7.</p>
+    <p>Increment SSH rms is 0.075 for ops and identically 0 for both NeSPReSO members. Increment T rms is 0.070 (ops), 0.047 (argo), 0.355 (tracks). Layer-1 T vs null at 6 Jan 00Z / 12 Jan 18Z is 0.107 / 0.348 (ops), 0.076 / 0.165 (argo), 0.284 / 0.561 (tracks).</p>
+
+    <h3>Movie</h3>
+    <p>Hourly 3×7 comparison, same idea as <code>val_053free/animate_month1.py</code>. Rows SST, SSS, SSH. Absolute columns null, ops, NeSPReSO Argo, NeSPReSO tracks. Difference columns are member minus ops: null−ops, Argo−ops, tracks−ops. 264 frames, 6 fps, native <code>srfhgt</code>. The first 96 hours are the shared free run (difference columns zero). Incremental apply starts at 5 Jan 19Z. Job 13044466.</p>
+    <figure>
+      <video controls src="maps_media/drift_vs_null.mp4"></video>
+      <figcaption>maps_media/drift_vs_null.mp4. Timeline: 1 Jan 19Z–5 Jan 18Z free run, 5 Jan 19Z–6 Jan 18Z apply, then forecast to 12 Jan 18Z. Differences are versus ops, not versus null.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="maps_media/still_freerun_end.png" alt="5 Jan 18Z, end of 4-day free run" />
+      <figcaption>5 Jan 18Z, last free-run hour. All four absolute columns are the same drifted state. All three difference columns are zero.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="maps_media/still_anl.png" alt="6 Jan 00Z, hour 6 of incremental apply" />
+      <figcaption>6 Jan 00Z, hour 6 of apply. null−ops SST/SSH already shows the ops increment as a sign-flipped mesoscale field. Argo−ops SST is local to the nine floats. tracks−ops SST is track-textured, and tracks−ops SSH is already a broad mismatch.</figcaption>
+    </figure>
+    <figure>
+      <img src="maps_media/still_apply_end.png" alt="6 Jan 18Z, last hour of apply" />
+      <figcaption>6 Jan 18Z, last apply hour. null−ops SSH is a Loop Current dipole. Argo−ops SST is nearly white; Argo−ops SSH is still a large-scale dipole because profile-only TSIS never wrote SSH. tracks−ops SSH is a central-Gulf low versus ops.</figcaption>
+    </figure>
+    <figure>
+      <img src="maps_media/still_day7.png" alt="12 Jan 18Z free forecast" />
+      <figcaption>12 Jan 18Z. Argo−ops SST/SSS is nearly gone; Argo−ops SSH stays high over much of the Gulf. tracks−ops SST is cold along the Loop Current, and tracks−ops SSH is a filled basin low versus ops. null−ops still has eddy-position dipoles.</figcaption>
+    </figure>
+
+    <h3>How to read that</h3>
+    <p>Traditional DA on this drifted ocean works. Ops cut analysis-time Argo T RMSE from 0.91 to 0.50, wrote a real SSH increment (rms 0.075), and was still ahead of null at +168 h (0.75 vs 0.85) after the cargo profile window had closed.</p>
+    <p>Profile-only NeSPReSO on the same background still loses to doing nothing. The nine-float member is worse at the floats it assimilated, then forgets the increment within a day. Domain layer-1 T rms vs null is 0.076 °C. Look at column 3 versus column 1 in the day-7 still. They are the same picture.</p>
+    <p>The track member is the opposite problem. 419 columns is enough to matter. T increment rms 0.35 °C versus 0.047 for Argo. The movie's tracks−ops SSH is the tell. TSIS wrote ssh=0 and u/v=0, then layer thickness and T/S still moved steric height along the sampling pattern. Those streaks are the observation operator showing through, not Loop Current dynamics you would want. Independent Argo T RMSE stays ~1.6–1.8 °C for a week.</p>
+    <p>If you take one sentence away, take this. After four days of drift, cargo Argo plus satellites beat the free run against GDAC Argo. NeSPReSO T/S columns in a profile-only TSIS cycle did not.</p>
+
+    <h3>Facts and inferences</h3>
+    <table>
+      <thead><tr><th>Claim</th><th>Kind</th><th>Evidence</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Free run job 13042189 COMPLETED in 00:28:50. Forecast jobs 13042299 / 13042300 / 13042301 COMPLETED in ~49–51 min. Ops forecast 13044169 COMPLETED in 00:51:34.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>sacct -j 13042189,13042299,13042300,13042301,13044169</code>. Slurm out files under <code>da_loop_20240106/logs/</code>.</td>
+        </tr>
+        <tr>
+          <td>Ops TSIS job 13044150 COMPLETED. xprep 58 profiles, 9226 binned L3 SLA, no L3 SST. xgmrf two PCG 50 lines. xa2inc wrote incupd.2024_005_18.[ab].</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>logs/xprep_ops.log</code>, <code>logs/slurm_tsis_ops_13044150.out</code>, rundir listing 18 Aug 2026.</td>
+        </tr>
+        <tr>
+          <td>Free run used incflg=0, dtime 44926.75–44930.75. Null forecast used incflg=0 for all 7 days. Ops used incflg=-1 on day 1 only, then 0.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>slurm_freerun_13042189.out</code>, <code>slurm_null_13042299.out</code>, <code>slurm_ops_13044169.out</code>.</td>
+        </tr>
+        <tr>
+          <td>DA members set incflg=-1 on day 1, read incupd.2024_005_18, 97 finished incupdate, 0 neg dp, no abort. Ops log has one incupd_read.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>hycom_ops.log</code> / <code>hycom_nespreso_*.log</code> via <code>eval_loop.readiness()</code>.</td>
+        </tr>
+        <tr>
+          <td>Ops gates Profile T, L3 SLA T, L4 SLA T, L3 SST F, L4 SST T. NeSPReSO gates Profile T, all SLA/SST F. Increment ssh rms 0.075 (ops) vs 0 (NeSPReSO). uvl/vvl max_abs 0 on every member. tem rms 0.070 / 0.047 / 0.355 (ops / argo / tracks).</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>logs/gates_ops.txt</code>, <code>eval/report.json</code> <code>tsis_gates</code> and <code>increments</code>.</td>
+        </tr>
+        <tr>
+          <td>Cargo profile window is p_twin_start=-4, p_twin_end=4. SLA the same. L4 SST sst_twin 0/0.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>tsis/ops/run_2024010600/tsis.nlist</code> <code>&amp;profile_params</code>, <code>&amp;sla_params</code>, <code>&amp;sst_params</code>.</td>
+        </tr>
+        <tr>
+          <td>Obs sanity: 9 Argo profiles (290 T/S layers). Tracks 1305 sites, 419 kept (13386 T/S layers). Background archive archv.2024_005_18.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>obs/sanity_nespreso_argo.json</code>, <code>obs/sanity_nespreso_tracks.json</code>.</td>
+        </tr>
+        <tr>
+          <td>Paired hourly archs exist for all four forecast members, 168 times, 2024_005_19 through 2024_012_18, plus 96 free-run hours 2024_001_19 through 2024_005_18. Movie 264 frames.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>find hycom/ops -name 'archs.*.a' | wc -l</code> = 168. <code>hycom/freerun</code> = 96. Anim log <code>frames 264 2024_001_19 .. 2024_012_18</code>.</td>
+        </tr>
+        <tr>
+          <td>Ops beats null on Argo T RMSE at anl / +24 h / +48 h / +168 h. Both NeSPReSO members lose at analysis. Argo member returns to null by +24 h. Tracks stay worse through +168 h.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>eval/REPORT.md</code> table. Same numbers in <code>eval/report.json</code> <code>argo.by_member</code>.</td>
+        </tr>
+        <tr>
+          <td>6 Jan Argo RMSE for nespreso_argo is in-sample. Those nine floats were the assimilated sites. 6 Jan (and +24 h / +48 h) is in-sample for ops cargo. +168 h is outside p_twin_end=4.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td><code>obs/argo_sites_20240106.json</code> n=9. nlist <code>p_twin_*</code>. Eval day filter in <code>eval_loop.argo_scores</code>.</td>
+        </tr>
+        <tr>
+          <td>Track-member SSH vs ops is a basin-scale low in the movie even though increment ssh is zero. Ops increment ssh is not zero, and null−ops SSH is a Loop Current dipole rather than that basin-wide low.</td>
+          <td><span class="tag fact">FACT</span></td>
+          <td>Increment ssh unique 0 for NeSPReSO, rms 0.075 for ops in <code>report.json</code>. Movie stills at 00Z, 18Z, day 7.</td>
+        </tr>
+        <tr>
+          <td>Tracks SSH change is steric / layer-thickness response to T/S/thk increments, not a written SSH increment. Ops SSH change includes a written SSH increment plus whatever T/S/thk do.</td>
+          <td><span class="tag infer">INFER</span></td>
+          <td>ssh increment is identically zero for tracks, thk and tem are not. Difference maps follow track geometry. Direct HYCOM steric budget was not dumped.</td>
+        </tr>
+        <tr>
+          <td>nespreso_argo lost at analysis because NeSPReSO T is biased cold versus real Argo, so TSIS pulled HYCOM off the floats.</td>
+          <td><span class="tag infer">INFER</span></td>
+          <td>In-sample RMSE rose 0.91 → 1.41 and bias −0.26 → −0.44. Native NeSPReSO-vs-Argo for these nine 6 Jan profiles was not recomputed here.</td>
+        </tr>
+        <tr>
+          <td>Track geometry in the increment is an observation-operator footprint, not a successful mesoscale analysis.</td>
+          <td><span class="tag infer">INFER</span></td>
+          <td>Movie tracks−ops SST/SSH show streaks aligned with the pink overlay. Independent Argo RMSE did not drop. Ops on the same SLA geometry did drop RMSE.</td>
+        </tr>
+        <tr>
+          <td>Thickness max_abs ~3e6 is a write artifact and did not wreck the forecast.</td>
+          <td><span class="tag infer">INFER</span></td>
+          <td>Value is in <code>report.json</code>. Forecasts completed with 0 neg dp. Wet-only thk increment was not isolated.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="questions">Ten questions (answer before teaching)</h3>
+    <aside class="callout warning">
+      <strong class="block">Stop here for teaching</strong>
+      <p>Reply in chat with your answers. After that, missed concepts can be taught. Do not skip ahead and ask for explanations first.</p>
+    </aside>
+    <div class="q"><div class="n">Q1</div><div class="ask">Why does this loop free-run four days before TSIS, instead of assimilating on the reanalysis restart?</div></div>
+    <div class="q"><div class="n">Q2</div><div class="ask">What does <code>incflg=-1</code> tell HYCOM to read, and which members/day combination is the only place it is set?</div></div>
+    <div class="q"><div class="n">Q3</div><div class="ask">qcobs_tsisv2 has no 6 Jan file. How does the <code>ops</code> member still assimilate cargo Argo and satellites on this date?</div></div>
+    <div class="q"><div class="n">Q4</div><div class="ask">Which analysis-time Argo T RMSE numbers are in-sample, and why is ops +168 h a cleaner independent score than ops +24 h?</div></div>
+    <div class="q"><div class="n">Q5</div><div class="ask">The NeSPReSO increment NetCDF has ssh identically zero. The ops increment does not. Why can tracks−ops SSH still be large in the movie?</div></div>
+    <div class="q"><div class="n">Q6</div><div class="ask">What HYCOM file is the background for both xprep and the NeSPReSO innovations, and what would be wrong about using <code>archv.2024_002_00</code> instead?</div></div>
+    <div class="q"><div class="n">Q7</div><div class="ask">Why must nest copies in <code>stage_hycom.sh</code> use days <code>001</code> through <code>013</code> rather than <code>seq -w 1 13</code>?</div></div>
+    <div class="q"><div class="n">Q8</div><div class="ask">Where does the tracks member get its horizontal sampling, and why are those dates 4 Jan and 5 Jan rather than 6 Jan?</div></div>
+    <div class="q"><div class="n">Q9</div><div class="ask">If you wanted a fair independent score for <code>nespreso_argo</code>, which eval times in <code>eval_loop.py</code> are valid, and which one is not?</div></div>
+    <div class="q"><div class="n">Q10</div><div class="ask">A first <code>run_tsis.sh ops</code> died in Cooper-Haines after writing <code>issh.nc</code>. What must you not delete if you retry xgmrf, and which increment field is the mechanical proof that ops is not another profile-only member?</div></div>
+  </section>
+</main>
+</body>
+</html>

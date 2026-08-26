@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Variant C · Editor workbench</title>
+  <style>
+    :root {
+      --encoder: #0B6E4F; --uncertainty: #C81D25; --heave: #3D348B; --da: #E09F3E;
+      --ink: #111827; --mute: #6b7280; --panel: #0b1220; --line: #243044;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Inter", "Segoe UI", sans-serif; background: #dfe3ea; color: var(--ink); height: 100vh; display: flex; flex-direction: column; }
+    .chrome {
+      display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+      padding: .55rem .9rem; background: #070b14; color: #e5e7eb; font-size: .82rem;
+    }
+    .chrome a { color: #fbbf24; }
+    .grid {
+      flex: 1; display: grid; grid-template-columns: minmax(280px, 38%) 1fr; min-height: 0;
+    }
+    .left {
+      background: var(--panel); color: #e5e7eb; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid #111827;
+    }
+    .left h2 { margin: 0; padding: .75rem .9rem; font-size: .8rem; letter-spacing: .05em; text-transform: uppercase; color: #93a4bd; border-bottom: 1px solid var(--line); }
+    textarea {
+      flex: 1; width: 100%; border: 0; padding: .85rem; resize: none;
+      background: #0b1220; color: #f8fafc; font: 12.5px/1.45 ui-monospace, monospace;
+    }
+    .status { padding: .45rem .9rem; font-size: .75rem; border-top: 1px solid var(--line); }
+    .status[data-ok="1"] { color: #34d399; }
+    .status[data-ok="0"] { color: #f87171; }
+    .right { padding: 1rem; overflow: auto; }
+    .preview-card {
+      background: #fff; border: 1px solid #cfd6e2; border-radius: 12px; min-height: 460px;
+      padding: 1.25rem 1.4rem; box-shadow: 0 10px 30px rgba(15,23,42,.08);
+      display: flex; flex-direction: column; gap: .8rem; border-top: 6px solid var(--accent, var(--encoder));
+    }
+    .meta { display: flex; justify-content: space-between; align-items: center; color: var(--mute); font-size: .8rem; }
+    h1 { margin: 0; font-size: 1.7rem; }
+    .sub { color: var(--mute); }
+    .body { line-height: 1.45; font-size: .98rem; }
+    .eq {
+      margin-top: auto; padding: .75rem .85rem; background: #f3f4f6; border-radius: 8px;
+      font-family: ui-monospace, monospace; font-size: .88rem; border-left: 4px solid var(--accent, var(--encoder));
+    }
+    .row { display: flex; gap: .5rem; margin-top: .85rem; flex-wrap: wrap; }
+    button {
+      border: 1px solid #9aa6b8; background: #fff; border-radius: 8px; padding: .45rem .8rem; cursor: pointer; font: inherit;
+    }
+    .notes-callout {
+      margin-top: .9rem; padding: .75rem .9rem; background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; font-size: .9rem;
+    }
+    .chip { display: inline-block; padding: .15rem .45rem; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: .72rem; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="chrome">
+    <div><strong>Variant C</strong> · Editor-first workbench (JSON is the source of truth)</div>
+    <div><a href="notes_stub.md" target="_blank" rel="noopener">Open notes_stub.md</a> · <a href="index.html">Switcher</a></div>
+  </div>
+  <div class="grid">
+    <section class="left">
+      <h2>Deck JSON · live preview →</h2>
+      <textarea id="json" spellcheck="false"></textarea>
+      <div class="status" id="status"></div>
+    </section>
+    <section class="right">
+      <div class="preview-card" id="card" style="--accent: var(--encoder)">
+        <div class="meta">
+          <span class="chip" id="chip">slide</span>
+          <span id="pos"></span>
+        </div>
+        <h1 id="title"></h1>
+        <div class="sub" id="subtitle"></div>
+        <div class="body" id="body"></div>
+        <div id="diagram"></div>
+        <div class="eq" id="eq"></div>
+      </div>
+      <div class="row">
+        <button type="button" id="prev">← Prev</button>
+        <button type="button" id="next">Next →</button>
+      </div>
+      <div class="notes-callout">
+        Side notes are <strong>not</strong> a right rail. They live in
+        <a href="notes_stub.md" target="_blank" rel="noopener"><code>notes_stub.md</code></a>
+        so MAPS can edit slides and speaker notes independently.
+      </div>
+    </section>
+  </div>
+  <script src="shared.js"></script>
+  <script>
+    let idx = 0, deck = null;
+    const accentVar = { encoder: "var(--encoder)", uncertainty: "var(--uncertainty)", heave: "var(--heave)", da: "var(--da)" };
+    function paint() {
+      const s = deck.slides[idx];
+      document.getElementById("card").style.setProperty("--accent", accentVar[s.accent] || "var(--encoder)");
+      document.getElementById("title").textContent = s.title;
+      document.getElementById("subtitle").textContent = s.subtitle || "";
+      document.getElementById("body").textContent = s.body || "";
+      document.getElementById("eq").textContent = s.equation || "";
+      document.getElementById("chip").textContent = s.accent || "slide";
+      document.getElementById("pos").textContent = `${idx + 1} / ${deck.slides.length} · ${deck.title || ""}`;
+      MAPS_PROTO.renderDiagram(s.diagram || s.accent, document.getElementById("diagram"));
+    }
+    MAPS_PROTO.bindEditor({
+      textarea: document.getElementById("json"),
+      statusEl: document.getElementById("status"),
+      onDeck: (d) => { deck = d; idx = Math.min(idx, d.slides.length - 1); paint(); },
+    });
+    document.getElementById("prev").onclick = () => { idx = (idx - 1 + deck.slides.length) % deck.slides.length; paint(); };
+    document.getElementById("next").onclick = () => { idx = (idx + 1) % deck.slides.length; paint(); };
+  </script>
+</body>
+</html>
