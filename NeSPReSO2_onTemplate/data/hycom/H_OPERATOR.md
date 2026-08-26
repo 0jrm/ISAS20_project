@@ -39,3 +39,7 @@ io:
 Scorecard should call `h_operator.layer_sample(z, T, p_ifc)` per column. If a cast has its own `p_ifc` in the JSON, use that. Else use `scorecard_reference_p_ifc`. Dai σ_o for TSIS is RMSE of those 41 layer means versus Argo remapped with the same H, floored at 0.05 °C / 0.02 psu.
 
 Do not treat `scorecard_reference_p_ifc` as the DA operator for a Loop Current OSSE. Re-extract `thknss` from the nature-run / background archive at each virtual-cast column.
+
+## Score B ingest
+
+Score B is `layer_sample(..., fill=False)` plus `ingest_column` ids. Empty layers stay NaN, then `id=0`. Live layers still use operator C (interfaces from live background `thknss`). The public API model is A_CRPS PCA-16, not A_CRPS_z32. Gold `h_operator.py` lives on Skynet. RCC copies that file.

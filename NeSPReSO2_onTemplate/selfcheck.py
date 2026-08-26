@@ -2097,6 +2097,56 @@ def test_h_operator_layer_sample():
     assert abs(out[1] - 3.0) < 1e-9
 
 
+def test_h_operator_ingest_no_fill():
+    from preproc.h_operator import layer_sample
+
+    z_empty = np.array([0.0, 5.0, 10.0])
+    t_empty = np.array([0.0, 5.0, 10.0])
+    p_empty = np.array([0.0, 2.0, 4.0, 10.0])
+    out = layer_sample(z_empty, t_empty, p_empty, fill=False)
+    assert np.isnan(out[1])
+
+
+def test_h_operator_ingest_ids():
+    from preproc.h_operator import ingest_column, live_id
+
+    z = np.arange(80.0, 200.0, 1.0)
+    t = np.full_like(z, 20.0)
+    s = np.full_like(z, 36.0)
+    p_ifc = np.array([0.0, 10.0, 20.0, 40.0, 80.0, 120.0, 200.0])
+    col = ingest_column(z, t, s, p_ifc, dpbl_m=60.0)
+    assert np.all(col.id_t[:3] == 0) and np.all(col.id_s[:3] == 0)
+    assert np.isnan(col.val_t[3]) and np.isnan(col.val_s[3])
+    assert col.id_t[3] == 0 and col.id_s[3] == 0
+    assert abs(col.zmid[3] - 60.0) < 1e-12
+    assert col.id_t[4] == 1 and col.id_s[4] == 1
+    assert col.id_t[5] == 1 and col.id_s[5] == 1
+    assert np.isfinite(col.val_t[4]) and np.isfinite(col.val_s[4])
+    assert np.isfinite(col.val_t[5]) and np.isfinite(col.val_s[5])
+    assert not np.any(np.isfinite(col.val_t) & (col.id_t == 0))
+    assert not np.any(np.isfinite(col.val_s) & (col.id_s == 0))
+    try:
+        live_id([1.0, 2.0], [1.0], 50.0)
+    except ValueError as exc:
+        assert "length differ" in str(exc)
+    else:
+        raise AssertionError("live_id must reject length mismatch")
+
+
+def test_h_operator_ingest_fallback50():
+    from preproc.h_operator import ingest_column
+
+    z = np.arange(80.0, 200.0, 1.0)
+    t = np.full_like(z, 20.0)
+    s = np.full_like(z, 36.0)
+    p_ifc = np.array([0.0, 10.0, 20.0, 40.0, 80.0, 120.0, 200.0])
+    col = ingest_column(z, t, s, p_ifc, dpbl_m=None)
+    assert col.mask_kind == "fallback_50m"
+    assert np.all(col.id_t[col.zmid < 50.0] == 0)
+    assert np.all(col.id_s[col.zmid < 50.0] == 0)
+    assert np.all(col.id_t[:3] == 0) and np.all(col.id_s[:3] == 0)
+
+
 def test_h_operator_rejects_blkdat():
     import tempfile
     from copy import deepcopy
@@ -2715,6 +2765,9 @@ TESTS = (
     test_profile_configs_validate,
     test_thermocline_scorecard_synthetic,
     test_h_operator_layer_sample,
+    test_h_operator_ingest_no_fill,
+    test_h_operator_ingest_ids,
+    test_h_operator_ingest_fallback50,
     test_h_operator_rejects_blkdat,
     test_sigma_o_floor,
     test_density_spice_monotone_and_roundtrip,

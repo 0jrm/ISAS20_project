@@ -1,0 +1,42 @@
+{
+  "spec_version": 1,
+  "purpose": "Pins for Score B TSIS ingest H. Gold lives on Skynet. RCC copies one file. Not a Flask change. Do not retrain.",
+  "this_repo_host": "Skynet",
+  "hycom_tsis_host": "RCC",
+  "copy_file": "NeSPReSO2_onTemplate/preproc/h_operator.py",
+  "entry": "ingest_column",
+  "constants": {
+    "KDM": 41,
+    "ONEM": 9806.0,
+    "SPVAL": 1.2676506002282294e+30,
+    "ZMAX": 1800.0,
+    "K0_CH": 4,
+    "FALLBACK_MLD_M": 50.0
+  },
+  "live_layer_predicate": "id[k]==1 iff k >= K0_CH-1 (Cooper-Haines, 0-based), val[k] is finite, and zmid[k] >= dpbl_m. qc equals id. Finite val iff id==1.",
+  "fill_default_true_reason": "Dai σ_o / scorecard",
+  "score_b": {
+    "fill": false,
+    "empty_layer": "NaN then id=0. Do not call np.interp.",
+    "operator": "C (live thknss interfaces). Not a fixed z table."
+  },
+  "api_model": {
+    "name": "A_CRPS",
+    "pca": "PCA-16 (16 T + 16 S PCs). Not A_CRPS_z32.",
+    "cache_hash": "3adcff404b0b",
+    "config_path": "NeSPReSO2_onTemplate/saved/runs/phase5_matrix/configs/p5_A_CRPS_v2_s42.json",
+    "default_seed": 42,
+    "ckpt": "NeSPReSO2_onTemplate/saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s42_s2/p5_A_CRPS_v2_s42_s2/model_best.pth"
+  },
+  "do_not_serve_z32": true,
+  "do_not_apply_H_in_flask": true,
+  "missing_xb": {
+    "sat_net": "still ingest with fallback 50 m and Cooper-Haines k=1-3",
+    "residual_net": "skip (later, not this PR)"
+  },
+  "R": {
+    "kind": "dai_sigma_o_after_H",
+    "floors": {"T_C": 0.05, "S_psu": 0.02},
+    "csv": "reports/sigma_o_hycom.csv"
+  }
+}
