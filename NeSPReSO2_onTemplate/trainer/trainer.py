@@ -248,7 +248,10 @@ class Trainer(BaseTrainer):
                 if want_ence:
                     mu, sigma = self._pred_mu_sigma_for_ence(output, target, indices)
                     if mu is not None:
-                        if hasattr(self.criterion, "physical_targets"):
+                        if hasattr(self.criterion, "physical_targets") and (
+                            getattr(self.criterion, "identity", False)
+                            or getattr(self.criterion, "raw_targets", False)
+                        ):
                             y_ence = self.criterion.physical_targets(indices)
                         elif hasattr(self.criterion, "decode_targets"):
                             y_ence = self.criterion.decode_targets(target)

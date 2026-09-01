@@ -14,6 +14,12 @@ def softplus_sigma(raw: torch.Tensor, sigma_min: float = SIGMA_MIN_DEFAULT) -> t
     return F.softplus(raw) + float(sigma_min)
 
 
+def inv_softplus_sigma(sigma: torch.Tensor, sigma_min: float = SIGMA_MIN_DEFAULT) -> torch.Tensor:
+    """Bias such that softplus_sigma(bias) == sigma. sigma must exceed sigma_min."""
+    gap = torch.clamp(sigma - float(sigma_min), min=1e-6)
+    return torch.log(torch.expm1(gap))
+
+
 def noncrossing_quantiles(raw: torch.Tensor) -> torch.Tensor:
     """raw (B, D, Q) → non-crossing quantiles via cumsoftplus on Q."""
     if raw.ndim != 3:

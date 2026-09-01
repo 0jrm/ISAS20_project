@@ -49,6 +49,47 @@ def validate_config(config):
     assert crps_space in VALID_CRPS_SPACES, (
         f"loss_config.crps_space must be one of {VALID_CRPS_SPACES}, got {crps_space!r}"
     )
+    if crps_space == "z":
+        assert mode in ("combined", "pc_mse_only"), (
+            "crps_space=z requires combined|pc_mse_only"
+        )
+        assert loss_cfg.get("prob_mode") in VALID_PROB_MODES, (
+            f"crps_space=z requires loss_config.prob_mode in {VALID_PROB_MODES}"
+        )
+        assert loss_cfg.get("prob_mode") != "quantile", "crps_space=z does not support quantile"
+        assert arch_args.get("probabilistic"), "crps_space=z requires arch.args.probabilistic=true"
+        assert not arch_args.get("n_quantiles"), "crps_space=z requires n_quantiles=0"
+        assert set(outputs.keys()) == {"temperature", "salinity"}, (
+            "crps_space=z requires outputs {temperature, salinity}"
+        )
+        n_z = int(outputs["temperature"])
+        assert n_z > 1 and int(outputs["salinity"]) == n_z, (
+            "crps_space=z requires equal T/S depth counts"
+        )
+        ve = str(loss_cfg.get("val_ence", "temperature"))
+        assert ve in ("temperature", "salinity", "concat"), (
+            f"loss_config.val_ence must be temperature|salinity|concat, got {ve!r}"
+        )
+    if crps_space == "stoch_eof":
+        assert mode in ("combined", "pc_mse_only"), (
+            "crps_space=stoch_eof requires combined|pc_mse_only"
+        )
+        assert loss_cfg.get("prob_mode") in VALID_PROB_MODES, (
+            f"crps_space=stoch_eof requires loss_config.prob_mode in {VALID_PROB_MODES}"
+        )
+        assert loss_cfg.get("prob_mode") != "quantile", "crps_space=stoch_eof does not support quantile"
+        assert arch_args.get("probabilistic"), "crps_space=stoch_eof requires arch.args.probabilistic=true"
+        assert not arch_args.get("n_quantiles"), "crps_space=stoch_eof requires n_quantiles=0"
+        assert set(outputs.keys()) == {"temperature", "salinity"}, (
+            "crps_space=stoch_eof requires outputs {temperature, salinity}"
+        )
+        assert config.get("io", {}).get("representation") not in ("density_spice", "joint_eof"), (
+            "crps_space=stoch_eof is separate T/S PCA only"
+        )
+        ve = str(loss_cfg.get("val_ence", "temperature"))
+        assert ve in ("temperature", "salinity", "concat"), (
+            f"loss_config.val_ence must be temperature|salinity|concat, got {ve!r}"
+        )
     if crps_space == "physical":
         assert mode in ("combined", "pc_mse_only", "heave_residual", "heave_residual_fast"), (
             "crps_space=physical requires combined|pc_mse_only|heave_residual|heave_residual_fast"

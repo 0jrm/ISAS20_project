@@ -14,7 +14,11 @@ Paths in JSON (`data_path`, `cache_dir`, etc.) are relative to the template root
 |------|---------|----------:|-----------|--------|
 | `config_argo.json` | Point L4 scalars, 16+16 PCA, chronological (matrix **A**) | 9 | `argo_v2` | production |
 | `config_argo_A_CRPS_z32.json` | **A_CRPS_z32** (A×CRPS-z): physical CRPS, PCA 32+32, equal T/S, band means, ENCE(T) stop | 9 | `argo_v2` | research |
+| `config_argo_stoch_eof.json` | Stochastic EOF Emulator: raw-profile CRPS, truncation `r²` floor, whitened PC term | 9 | `argo_v2` | research |
+| `config_argo_A_CRPS_z.json` | A_CRPS recipe in native z (no PCA); classic SST/SSS/SSH | 9 | `argo_v2` | research |
+| `config_argo_A_CRPS_z_roni_ops.json` | Native-z CRPS + RONI (no ONI) + 19 ops | 29 | `argo_v2` | research |
 | `config_argo_A_CRPS_z32_roni.json` | A_CRPS_z32 + CPC ONI/RONI splice (same 32-PC cache) | 11 | `argo_v2` | research |
+| `config_argo_A_CRPS_z32_ops_heave.json` | HeaveResidualFast + 19 ops + ONI/RONI, z32 physical CRPS, 16+16 residual PCs | 30 | `argo_v2` | research |
 | `config_argo_joint_eof.json` | Joint T/S EOF-32 (matrix **B**) | 9 | `argo_v2` | production |
 | `config_argo_densityspice_lowrank_crps.json` | Low-rank δσ₀ + spice CRPS (matrix **C**) | 9 | `argo_v2` | production |
 | `config_argo_chrono_dates.json` | Same as A with explicit date split ranges | 9 | `argo_v2` | ablation |

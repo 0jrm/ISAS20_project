@@ -1989,6 +1989,8 @@ def test_heave_fast_config_validates():
     validate_config(cfg)
     cfg_z = read_json("config/argo/config_argo_A_CRPS_z32_heave.json")
     validate_config(cfg_z)
+    cfg_oh = read_json("config/argo/config_argo_A_CRPS_z32_ops_heave.json")
+    validate_config(cfg_oh)
 
 
 def test_heave_ablation_pin_arch_dims():
@@ -2002,6 +2004,7 @@ def test_heave_ablation_pin_arch_dims():
         ("config_argo_heave_fast_conv3.json", 740, 3, [3, 3, 9, 9]),
         ("config_argo_heave_fast_conv3x3.json", 92, 3, [3, 3, 3, 3]),
         ("config_argo_heave_fast_ops.json", 30, 19, None),
+        ("config_argo_A_CRPS_z32_ops_heave.json", 30, 19, None),
         ("config_argo_heave_fast_bathy.json", 12, 1, None),
         ("config_argo_heave_fast_bathy_wind.json", 15, 4, None),
     ):
@@ -2417,6 +2420,198 @@ def test_pca_hetero_phys_decode_and_grad():
 
     cfg = read_json("config/argo/config_argo_acrps_phys_pca32_b.json")
     validate_config(cfg)
+
+
+def test_pca_hetero_zspace_identity():
+    """crps_space=z: decode is identity; NaN depths do not poison CRPS."""
+    from model.loss import PCAHeteroPhysLoss, make_loss, uses_native_z_profiles
+
+    n, nz = 6, 12
+    T = np.linspace(24.0, 10.0, nz, dtype=np.float32)[None].repeat(n, axis=0)
+    S = np.full((n, nz), 36.0, dtype=np.float32)
+    T[0, 3] = np.nan
+    outputs = OrderedDict([("temperature", nz), ("salinity", nz)])
+    pres = np.linspace(0, 400, nz).astype(np.float32)
+    loss = PCAHeteroPhysLoss(
+        None, outputs, torch.device("cpu"),
+        identity=True, true_profiles={"temperature": T, "salinity": S},
+        equal_var=True, band_equal=True, pc_crps_scale=0.0,
+        pres_levels=pres, prob_mode="crps",
+    )
+    assert loss.identity
+    mu = torch.tensor(np.hstack([np.nan_to_num(T), S]), dtype=torch.float32) + 0.3
+    sig = torch.full((n, 2 * nz), 0.2)
+    raw = torch.cat([mu, sig], dim=1)
+    raw.requires_grad_(True)
+    L = loss(raw, torch.zeros(n, 8), torch.arange(n))
+    assert torch.isfinite(L)
+    L.backward()
+    assert raw.grad is not None and raw.grad[:, : 2 * nz].abs().sum() > 0
+    recon = loss.decode_mu(torch.tensor(np.hstack([np.nan_to_num(T), S]), dtype=torch.float32))
+    assert torch.allclose(recon["temperature"][1:], torch.tensor(T[1:]), atol=1e-5)
+    y = loss.physical_targets(torch.arange(n))
+    assert y.shape == (n, 2 * nz)
+
+    wired = make_loss(
+        pca_models=None,
+        outputs=outputs,
+        weights=np.ones(2 * nz),
+        device=torch.device("cpu"),
+        loss_config={"mode": "combined", "prob_mode": "crps", "crps_space": "z"},
+        true_profiles={"temperature": T, "salinity": S},
+        pres_levels=pres,
+    )
+    assert isinstance(wired, PCAHeteroPhysLoss) and wired.identity
+    assert uses_native_z_profiles({"crps_space": "z", "mode": "combined"})
+    assert not uses_native_z_profiles({"crps_space": "physical", "mode": "combined"})
+    from model.prob_head import softplus_sigma
+    sig_dec = loss.decode_sigma(torch.full((2, 2 * nz), -8.0))["temperature"]
+    assert float(sig_dec.min()) >= loss.sigma_min - 1e-6
+    raw_pos = torch.full((2, 2 * nz), 0.2)
+    got = loss.decode_sigma(raw_pos)["temperature"]
+    want = softplus_sigma(raw_pos[:, :nz], sigma_min=loss.sigma_min)
+    assert torch.allclose(got, want, atol=1e-5)
+
+
+def test_decode_mu_matches_sklearn_inverse():
+    from model.loss import PCAHeteroPhysLoss, sklearn_inverse_transform_pcs
+    from sklearn.decomposition import PCA
+
+    rng = np.random.default_rng(1)
+    n, nz, k = 16, 40, 5
+    X = rng.normal(size=(n, nz)).astype(np.float64)
+    for whiten in (False, True):
+        pca = PCA(n_components=k, whiten=whiten).fit(X)
+        pcs = pca.transform(X).astype(np.float32)
+        outputs = OrderedDict([("temperature", k), ("salinity", k)])
+        cat = np.hstack([pcs, pcs]).astype(np.float32)
+        loss = PCAHeteroPhysLoss(
+            {"temperature": pca, "salinity": pca},
+            outputs,
+            torch.device("cpu"),
+            equal_var=True,
+            band_equal=False,
+            pc_crps_scale=0.0,
+            prob_mode="crps",
+        )
+        got = loss.decode_mu(torch.tensor(cat))["temperature"].detach().numpy()
+        sk = sklearn_inverse_transform_pcs(cat, {"temperature": pca, "salinity": pca}, outputs)
+        assert np.allclose(got, sk["temperature"].T, atol=1e-5), f"whiten={whiten}"
+
+
+def test_stoch_eof_recipe():
+    from model.loss import PCAHeteroPhysLoss, make_loss
+    from parse_config import validate_config
+    from base.util import read_json
+    from sklearn.decomposition import PCA
+
+    rng = np.random.default_rng(2)
+    n, nz, k = 20, 30, 4
+    T = rng.normal(size=(n, nz)).astype(np.float32)
+    S = rng.normal(size=(n, nz)).astype(np.float32) * 0.05
+    T[0, 3] = np.nan
+    pca_t = PCA(n_components=k).fit(np.nan_to_num(T, nan=0.0))
+    pca_s = PCA(n_components=k).fit(S)
+    t_pcs = pca_t.transform(np.nan_to_num(T, nan=0.0)).astype(np.float32)
+    s_pcs = pca_s.transform(S).astype(np.float32)
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    y_z = np.hstack([t_pcs, s_pcs])
+    z = np.linspace(0, 400, nz).astype(np.float32)
+    loss = PCAHeteroPhysLoss(
+        {"temperature": pca_t, "salinity": pca_s},
+        outputs,
+        torch.device("cpu"),
+        profile_scales={"temperature": 2.0, "salinity": 0.05},
+        equal_var=True,
+        band_equal=True,
+        pc_crps_scale=0.1,
+        pres_levels=z,
+        prob_mode="crps",
+        raw_targets=True,
+        truncation_floor=True,
+        pc_whiten=True,
+        var_scale=True,
+        true_profiles={"temperature": T, "salinity": S},
+        targets=y_z,
+        train_idx=np.arange(n),
+    )
+    assert loss.raw_targets and loss.truncation_floor
+    recon_sig = loss.decode_sigma(torch.zeros(n, 2 * k) + 0.2)["temperature"]
+    nofloor = PCAHeteroPhysLoss(
+        {"temperature": pca_t, "salinity": pca_s},
+        outputs,
+        torch.device("cpu"),
+        band_equal=False,
+        pc_crps_scale=0.0,
+        prob_mode="crps",
+    )
+    base_sig = nofloor.decode_sigma(torch.zeros(n, 2 * k) + 0.2)["temperature"]
+    assert float((recon_sig.mean() - base_sig.mean()).item()) > 0
+
+    mu = torch.tensor(y_z, dtype=torch.float32)
+    sig = torch.ones_like(mu) * 0.3
+    raw = torch.cat([mu, sig], dim=1)
+    raw.requires_grad_(True)
+    L = loss(raw, torch.tensor(y_z), torch.arange(n))
+    assert torch.isfinite(L)
+    L.backward()
+    assert loss.last_terms["temperature"] > 0
+    assert loss.last_terms["salinity"] > 0
+    t_scaled = loss.last_terms["temperature"] / 2.0
+    s_scaled = loss.last_terms["salinity"] / 0.05
+    pc_w = 0.1 * loss.last_terms["pc"]
+    assert np.isfinite([t_scaled, s_scaled, pc_w]).all()
+
+    cfg = read_json("config/argo/config_argo_stoch_eof.json")
+    validate_config(cfg)
+    wired = make_loss(
+        pca_models={"temperature": pca_t, "salinity": pca_s},
+        outputs=outputs,
+        weights=np.ones(2 * k),
+        device=torch.device("cpu"),
+        loss_config={"mode": "combined", "prob_mode": "crps", "crps_space": "stoch_eof"},
+        loss_scales={"profile_scales": {"temperature": 2.0, "salinity": 0.05}},
+        true_profiles={"temperature": T, "salinity": S},
+        targets=y_z,
+        train_idx=np.arange(n),
+        pres_levels=z,
+    )
+    assert isinstance(wired, PCAHeteroPhysLoss) and wired.raw_targets
+    from model.prob_head import inv_softplus_sigma, softplus_sigma
+    b = wired.sigma_init_bias()
+    assert b.shape == (2 * k,)
+    rec = softplus_sigma(b, sigma_min=wired.sigma_min)
+    assert torch.allclose(rec, wired.pc_rms_cat, atol=1e-4)
+    _ = inv_softplus_sigma
+
+
+def test_acrps_z_configs_validate():
+    from base.util import read_json
+    from parse_config import validate_config
+    from preproc.l3_input import sync_arch_with_io
+
+    for name, dim, n_enc, n_sat in (
+        ("config_argo_A_CRPS_z.json", 9, 6, 3),
+        ("config_argo_A_CRPS_z_roni_ops.json", 29, 7, 22),
+    ):
+        cfg = read_json(f"config/argo/{name}")
+        validate_config(cfg)
+        assert cfg["loss_config"]["crps_space"] == "z"
+        assert cfg["outputs"]["temperature"] == 1801
+        got = sync_arch_with_io(cfg)
+        assert got == dim
+        assert cfg["arch"]["args"]["n_enc"] == n_enc
+        assert cfg["arch"]["args"]["n_sat"] == n_sat
+        assert cfg["arch"]["args"]["input_dim"] == dim
+        assert not cfg["input_params"].get("oni")
+
+
+def test_resume_monitor_reset_on_run_name_change():
+    from base.base_trainer import should_reset_monitor_best
+
+    assert should_reset_monitor_best({"config": {"name": "cell_s1"}}, "cell_s2")
+    assert not should_reset_monitor_best({"config": {"name": "cell_s2"}}, "cell_s2")
+    assert not should_reset_monitor_best({}, "cell_s2")
 
 
 def test_dacov_psd_and_mc():
@@ -2940,6 +3135,11 @@ TESTS = (
     test_density_spice_monotone_and_roundtrip,
     test_prob_head_hetero_and_quantile,
     test_pca_hetero_phys_decode_and_grad,
+    test_pca_hetero_zspace_identity,
+    test_decode_mu_matches_sklearn_inverse,
+    test_stoch_eof_recipe,
+    test_acrps_z_configs_validate,
+    test_resume_monitor_reset_on_run_name_change,
     test_dacov_psd_and_mc,
     test_dacov_sigma_recalib_scales_export,
     test_dacov_pca_ts_export,

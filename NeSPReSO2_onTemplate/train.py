@@ -10,7 +10,7 @@ import torch
 import data_loader.data_loaders as module_data
 import model.metric as module_metric
 import model.model as module_arch
-from model.loss import HEAVE_LOSS_MODES, make_loss, true_profiles_numpy
+from model.loss import make_loss, true_profiles_numpy, uses_native_z_profiles
 from parse_config import ConfigParser, validate_config
 from base.pairing import assert_dataset_tags
 from base.util import prepare_device
@@ -331,9 +331,9 @@ def main(config):
         loss_config=loss_cfg,
         targets=cache["targets"],
         true_profiles=(
-            true_profiles
-            if loss_cfg.get("mode") not in (*HEAVE_LOSS_MODES, "profile_direct")
-            else heave_profiles
+            heave_profiles
+            if uses_native_z_profiles(loss_cfg) or str(loss_cfg.get("crps_space", "pca")) == "stoch_eof"
+            else true_profiles
         ),
         ae_targets=ae_targets,
         ae_weights=ae_weights,
@@ -347,6 +347,13 @@ def main(config):
         lon=cache["LON"],
         profiles=heave_profiles,
     )
+    if getattr(criterion, "raw_targets", False) and hasattr(criterion, "sigma_init_bias"):
+        core = model.module if hasattr(model, "module") else model
+        if getattr(core, "sigma_out", None) is not None:
+            bias = criterion.sigma_init_bias().to(device=core.sigma_out.bias.device)
+            if bias.shape == core.sigma_out.bias.shape:
+                core.sigma_out.bias.data.copy_(bias)
+                logger.info("stoch_eof sigma bias init from sqrt(explained_variance_)")
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)
         logger.info("torch.compile enabled on loss")

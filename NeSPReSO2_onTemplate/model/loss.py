@@ -33,7 +33,15 @@ VALID_LOSS_MODES = (
 )
 HEAVE_LOSS_MODES = ("heave_residual", "heave_residual_fast")
 VALID_PROB_MODES = ("mse", "crps", "nll", "quantile")
-VALID_CRPS_SPACES = ("pca", "physical")
+VALID_CRPS_SPACES = ("pca", "physical", "z", "stoch_eof")
+
+
+def uses_native_z_profiles(loss_cfg: Mapping[str, Any] | None) -> bool:
+    """True when the loss scores native-z T/S and ignores cache PCA targets."""
+    cfg = loss_cfg or {}
+    if cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct"):
+        return True
+    return str(cfg.get("crps_space", "pca")) == "z"
 
 
 def output_slices(outputs: Mapping[str, int]) -> list[tuple[str, int, int]]:
@@ -558,11 +566,17 @@ class PCAHeteroLoss(nn.Module):
 
 
 class PCAHeteroPhysLoss(nn.Module):
-    """Hetero CRPS/NLL after linear PCA inverse (μ, diag σ in physical T/S).
+    """Hetero CRPS/NLL in physical T/S.
 
-    Head still emits PC μ/σ. Decode uses registered sklearn ``components_``:
-    ``μ_x = μ_z @ V + mean``, ``σ_x = sqrt((σ_z²) @ (V²))``. Targets are
-    reconstructed PCs (v1 PCALoss), not raw Argo profiles.
+    Default: head emits PC μ/σ; decode ``μ_x = μ_z @ V + mean``,
+    ``σ_x = sqrt((σ_z²) @ V²)``. Targets are reconstructed PCs.
+
+    ``identity=True`` (crps_space=z): head emits native-z T/S; no PCA.
+    Targets are raw cache profiles via batch indices.
+
+    ``raw_targets=True`` (crps_space=stoch_eof): same PCA head, CRPS vs raw
+    profiles, optional truncation floor ``r²`` on σ_x, NaN-masked reduce,
+    PC term in units of ``sqrt(λ)``, T/S mixed by ``profile_scales``.
     """
 
     def __init__(
@@ -581,6 +595,14 @@ class PCAHeteroPhysLoss(nn.Module):
         pc_crps_scale: float = 0.1,
         pres_levels: np.ndarray | None = None,
         val_ence: str = "temperature",
+        identity: bool = False,
+        true_profiles: Mapping[str, np.ndarray] | None = None,
+        raw_targets: bool = False,
+        truncation_floor: bool = False,
+        pc_whiten: bool = False,
+        var_scale: bool = False,
+        targets=None,
+        train_idx=None,
     ):
         super().__init__()
         if prob_mode not in VALID_PROB_MODES:
@@ -599,24 +621,89 @@ class PCAHeteroPhysLoss(nn.Module):
         self.freeze_sigma = bool(freeze_sigma)
         self.equal_var = bool(equal_var)
         self.band_equal = bool(band_equal)
-        self.pc_crps_scale = float(pc_crps_scale)
+        self.identity = bool(identity)
+        self.raw_targets = bool(raw_targets) and not self.identity
+        self.truncation_floor = bool(truncation_floor) and not self.identity
+        self.pc_whiten = bool(pc_whiten) and not self.identity
+        self.var_scale = bool(var_scale)
+        self.pc_crps_scale = 0.0 if self.identity else float(pc_crps_scale)
         self.val_ence = str(val_ence)
+        self.last_terms: dict[str, float] = {}
+        self._logged_terms = False
         self.profile_scales = dict(DEFAULT_PROFILE_SCALES)
         if profile_scales:
             self.profile_scales.update(profile_scales)
         dev = device or torch.device("cpu")
-        for name in self.output_order:
-            pca = pca_models[name]
+        if not self.identity:
+            if pca_models is None:
+                raise ValueError("crps_space=physical|stoch_eof requires pca_models")
+            rms_parts = []
+            for name in self.output_order:
+                pca = pca_models[name]
+                self.register_buffer(
+                    f"{name}_components",
+                    torch.tensor(pca.components_, dtype=torch.float32, device=dev),
+                )
+                self.register_buffer(
+                    f"{name}_mean",
+                    torch.tensor(pca.mean_, dtype=torch.float32, device=dev).unsqueeze(0),
+                )
+                v2 = np.asarray(pca.components_, dtype=np.float32) ** 2
+                self.register_buffer(f"{name}_components_sq", torch.tensor(v2, dtype=torch.float32, device=dev))
+                ev = np.asarray(pca.explained_variance_, dtype=np.float32)
+                rms = np.sqrt(np.maximum(ev, 1e-12))
+                rms_parts.append(rms)
+                if bool(getattr(pca, "whiten", False)):
+                    dec = rms
+                else:
+                    dec = np.ones_like(rms)
+                self.register_buffer(
+                    f"{name}_decode_scale",
+                    torch.tensor(dec, dtype=torch.float32, device=dev).unsqueeze(0),
+                )
+                self.register_buffer(
+                    f"{name}_pc_rms",
+                    torch.tensor(rms, dtype=torch.float32, device=dev).unsqueeze(0),
+                )
             self.register_buffer(
-                f"{name}_components",
-                torch.tensor(pca.components_, dtype=torch.float32, device=dev),
+                "pc_rms_cat",
+                torch.tensor(np.concatenate(rms_parts), dtype=torch.float32, device=dev),
             )
-            self.register_buffer(
-                f"{name}_mean",
-                torch.tensor(pca.mean_, dtype=torch.float32, device=dev).unsqueeze(0),
-            )
-            v2 = np.asarray(pca.components_, dtype=np.float32) ** 2
-            self.register_buffer(f"{name}_components_sq", torch.tensor(v2, dtype=torch.float32, device=dev))
+        if self.identity or self.raw_targets:
+            if true_profiles is None:
+                raise ValueError("raw/z CRPS requires true_profiles")
+            n = None
+            for name in self.output_order:
+                arr = np.asarray(true_profiles[name], dtype=np.float32)
+                n_z = int(outputs[name]) if self.identity else int(self._components(name).shape[1])
+                if n is None:
+                    n = arr.shape[0] if arr.shape[-1] == n_z else arr.shape[1]
+                aligned = _station_major(arr, n)
+                if aligned.shape[1] != n_z:
+                    raise ValueError(
+                        f"profile {name} width {aligned.shape[1]} != n_z {n_z}"
+                    )
+                self.register_buffer(f"{name}_true", torch.tensor(aligned, dtype=torch.float32, device=dev))
+        if self.truncation_floor:
+            if true_profiles is None:
+                raise ValueError("truncation_floor requires true_profiles")
+            n_st = int(getattr(self, f"{self.output_order[0]}_true").shape[0])
+            idx = np.arange(n_st) if train_idx is None else np.asarray(train_idx, dtype=int)
+            tgt = None if targets is None else np.asarray(targets)
+            for name, start, end in self.slices:
+                raw = getattr(self, f"{name}_true").detach().cpu().numpy()[idx]
+                pca = pca_models[name]
+                if tgt is not None:
+                    pcs = tgt[idx, start:end]
+                else:
+                    pcs = pca.transform(np.nan_to_num(raw, nan=0.0))
+                recon = pca.inverse_transform(pcs)
+                r2 = np.nanmean((raw - recon) ** 2, axis=0)
+                r2 = np.nan_to_num(np.asarray(r2, dtype=np.float32), nan=0.0)
+                self.register_buffer(
+                    f"{name}_r2",
+                    torch.tensor(r2, dtype=torch.float32, device=dev),
+                )
         if pres_levels is not None:
             self.register_buffer(
                 "pres_levels",
@@ -637,18 +724,56 @@ class PCAHeteroPhysLoss(nn.Module):
     def decode_mu(self, pcs: torch.Tensor) -> dict[str, torch.Tensor]:
         recon = {}
         for name, start, end in self.slices:
-            recon[name] = torch_reconstruct_profile(
-                pcs[:, start:end], self._components(name), self._mean(name)
-            )
+            block = pcs[:, start:end]
+            if self.identity:
+                recon[name] = block
+            else:
+                block = block * getattr(self, f"{name}_decode_scale")
+                recon[name] = torch_reconstruct_profile(
+                    block, self._components(name), self._mean(name)
+                )
         return recon
 
     def decode_sigma(self, sigma_z: torch.Tensor) -> dict[str, torch.Tensor]:
+        from model.prob_head import softplus_sigma
+
+        if self.identity:
+            sigma_z = softplus_sigma(sigma_z, sigma_min=self.sigma_min)
         out = {}
         sz = torch.clamp(sigma_z, min=self.sigma_min)
         for name, start, end in self.slices:
-            var = (sz[:, start:end] ** 2) @ self._components_sq(name)
-            out[name] = torch.sqrt(var.clamp_min(1e-12))
+            block = sz[:, start:end]
+            if self.identity:
+                out[name] = block
+            else:
+                native = block * getattr(self, f"{name}_decode_scale")
+                var = (native ** 2) @ self._components_sq(name)
+                if self.truncation_floor and hasattr(self, f"{name}_r2"):
+                    var = var + getattr(self, f"{name}_r2").unsqueeze(0)
+                out[name] = torch.sqrt(var.clamp_min(1e-12))
         return out
+
+    def sigma_init_bias(self, c: float = 1.0) -> torch.Tensor:
+        from model.prob_head import inv_softplus_sigma
+
+        rms = self.pc_rms_cat * float(c)
+        return inv_softplus_sigma(rms, sigma_min=self.sigma_min)
+
+    def physical_targets(self, indices) -> torch.Tensor:
+        t = getattr(self, "temperature_true")
+        s = getattr(self, "salinity_true")
+        idx = torch.as_tensor(indices, dtype=torch.long, device=t.device)
+        return torch.cat([t[idx], s[idx]], dim=1)
+
+    def phys_mu_sigma(self, output, indices):
+        from model.prob_head import split_mu_sigma, softplus_sigma
+
+        del indices
+        mu, raw = split_mu_sigma(output, self.d)
+        mu_cat = self.decode_targets(mu)
+        if self.prob_mode in (None, "mse") or self.freeze_sigma:
+            return mu_cat, softplus_sigma(raw, sigma_min=self.sigma_min)
+        return mu_cat, self._sigma_target_space(raw)
 
     def decode_targets(self, y_z: torch.Tensor) -> torch.Tensor:
         recon = self.decode_mu(y_z)
@@ -675,10 +800,34 @@ class PCAHeteroPhysLoss(nn.Module):
         sl = slice(i * n_z, (i + 1) * n_z)
         return mu_cat[..., sl], sigma_cat[..., sl], y_cat[..., sl]
 
-    def _reduce_levels(self, level_loss: torch.Tensor) -> torch.Tensor:
+    def _mix_vars(self, terms: dict[str, torch.Tensor]) -> torch.Tensor:
+        if self.var_scale:
+            stacked = torch.stack(
+                [terms[n] / self.profile_scales.get(n, 1.0) for n in self.output_order]
+            )
+            return stacked.mean()
+        if self.equal_var:
+            stacked = torch.stack([terms[n] for n in self.output_order])
+            return stacked.mean()
+        total = terms[self.output_order[0]].new_tensor(0.0)
+        for name in self.output_order:
+            total = total + terms[name] / self.profile_scales.get(name, 1.0)
+        return total
+
+    def _finite_pair(self, mu: torch.Tensor, y: torch.Tensor):
+        valid = torch.isfinite(y)
+        fill = torch.zeros_like(y) if self.raw_targets else mu.detach()
+        y_safe = torch.where(valid, y, fill)
+        return y_safe, valid
+
+    def _reduce_levels(self, level_loss: torch.Tensor, valid: torch.Tensor | None = None) -> torch.Tensor:
         """(B, n_z) → scalar. Band-equal = mean of evalphys band means."""
+        if valid is None:
+            valid = torch.isfinite(level_loss)
+        x = torch.where(valid, level_loss, torch.zeros_like(level_loss))
+        w = valid.to(dtype=level_loss.dtype)
         if (not self.band_equal) or self.pres_levels is None:
-            return level_loss.mean()
+            return x.sum() / w.sum().clamp_min(1.0)
         from evalphys.constants import DEPTH_BANDS
 
         z = self.pres_levels.to(device=level_loss.device, dtype=level_loss.dtype)
@@ -688,75 +837,93 @@ class PCAHeteroPhysLoss(nn.Module):
                 m = (z >= lo) & (z < hi)
             else:
                 m = z >= lo
-            if bool(m.any()):
-                terms.append(level_loss[:, m].mean())
+            ww = w[:, m]
+            if bool(ww.any()):
+                terms.append(x[:, m].sum() / ww.sum().clamp_min(1.0))
         if not terms:
-            return level_loss.mean()
+            return x.sum() / w.sum().clamp_min(1.0)
         return torch.stack(terms).mean()
 
-    def _mix_vars(self, terms: dict[str, torch.Tensor]) -> torch.Tensor:
-        if self.equal_var:
-            stacked = torch.stack([terms[n] for n in self.output_order])
-            return stacked.mean()
-        total = terms[self.output_order[0]].new_tensor(0.0)
-        for name in self.output_order:
-            total = total + terms[name] / self.profile_scales.get(name, 1.0)
-        return total
+    def _whiten_pcs(self, z: torch.Tensor) -> torch.Tensor:
+        return z / self.pc_rms_cat.clamp_min(1e-6)
+
+    def _pc_term(self, mu_z, sigma_lat, target, *, mse: bool):
+        from evalphys.calibration import gaussian_crps_torch
+        from model.prob_head import beta_nll
+
+        if self.pc_whiten:
+            mu_z = self._whiten_pcs(mu_z)
+            target = self._whiten_pcs(target)
+            if sigma_lat is not None:
+                sigma_lat = self._whiten_pcs(sigma_lat)
+        if mse:
+            return torch.mean((mu_z - target) ** 2)
+        sig = torch.clamp(sigma_lat, min=self.sigma_min)
+        if self.prob_mode == "crps":
+            return torch.mean(gaussian_crps_torch(mu_z, sig, target, sigma_min=self.sigma_min))
+        return beta_nll(mu_z, sig, target, beta=self.nll_beta, sigma_min=self.sigma_min)
 
     def forward(self, output, target, indices=None, inputs=None):
         from evalphys.calibration import gaussian_crps_torch
         from model.prob_head import beta_nll, split_mu_sigma
 
+        if (self.identity or self.raw_targets) and indices is None:
+            raise ValueError("raw/z CRPS requires batch indices")
         mu_z, sigma_lat = split_mu_sigma(output, self.d)
         mu_x = self.decode_mu(mu_z)
-        y_x = self.decode_mu(target)
+        if self.identity or self.raw_targets:
+            idx = torch.as_tensor(indices, dtype=torch.long, device=output.device)
+            y_x = {name: getattr(self, f"{name}_true")[idx] for name in self.output_order}
+        else:
+            y_x = self.decode_mu(target)
         if self.prob_mode == "mse" or self.freeze_sigma:
             phys = {}
             for name in self.output_order:
-                phys[name] = self._reduce_levels((mu_x[name] - y_x[name]) ** 2)
+                y_safe, valid = self._finite_pair(mu_x[name], y_x[name])
+                phys[name] = self._reduce_levels((mu_x[name] - y_safe) ** 2, valid)
             total = self._mix_vars(phys)
+            pc = None
             if self.pc_crps_scale:
-                total = total + self.pc_crps_scale * torch.mean((mu_z - target) ** 2)
+                pc = self._pc_term(mu_z, None, target, mse=True)
+                total = total + self.pc_crps_scale * pc
+            self._record_terms(phys, pc, total)
             return total
         sigma_x = self.decode_sigma(sigma_lat)
         phys = {}
         for name in self.output_order:
+            y_safe, valid = self._finite_pair(mu_x[name], y_x[name])
             if self.prob_mode == "crps":
                 lev = gaussian_crps_torch(
-                    mu_x[name], sigma_x[name], y_x[name], sigma_min=self.sigma_min
+                    mu_x[name], sigma_x[name], y_safe, sigma_min=self.sigma_min
                 )
-                phys[name] = self._reduce_levels(lev)
+                phys[name] = self._reduce_levels(lev, valid)
             elif self.prob_mode == "nll":
-                phys[name] = beta_nll(
+                nll = beta_nll(
                     mu_x[name],
                     sigma_x[name],
-                    y_x[name],
+                    y_safe,
                     beta=self.nll_beta,
                     sigma_min=self.sigma_min,
                 )
+                phys[name] = nll if nll.ndim == 0 else self._reduce_levels(nll, valid)
             else:
                 raise ValueError(f"PCAHeteroPhysLoss unsupported prob_mode={self.prob_mode!r}")
         total = self._mix_vars(phys)
+        pc = None
         if self.pc_crps_scale:
-            if self.prob_mode == "crps":
-                pc = torch.mean(
-                    gaussian_crps_torch(
-                        mu_z,
-                        torch.clamp(sigma_lat, min=self.sigma_min),
-                        target,
-                        sigma_min=self.sigma_min,
-                    )
-                )
-            else:
-                pc = beta_nll(
-                    mu_z,
-                    torch.clamp(sigma_lat, min=self.sigma_min),
-                    target,
-                    beta=self.nll_beta,
-                    sigma_min=self.sigma_min,
-                )
+            pc = self._pc_term(mu_z, sigma_lat, target, mse=False)
             total = total + self.pc_crps_scale * pc
+        self._record_terms(phys, pc, total)
         return total
+
+    def _record_terms(self, phys, pc, total):
+        self.last_terms = {n: float(phys[n].detach()) for n in self.output_order}
+        self.last_terms["pc"] = float(pc.detach()) if pc is not None else 0.0
+        self.last_terms["total"] = float(total.detach())
+        if self.raw_targets and not self._logged_terms:
+            parts = " ".join(f"{k}={v:.4g}" for k, v in self.last_terms.items())
+            print(f"STOCH_EOF_TERMS {parts}", flush=True)
+            self._logged_terms = True
 
 
 class CombinedPCALoss(nn.Module):
@@ -1696,6 +1863,57 @@ def make_loss(
                 pc_crps_scale=float(cfg.get("pc_crps_scale", 0.1)),
                 pres_levels=pres_levels,
                 val_ence=str(cfg.get("val_ence", "temperature")),
+            )
+        if crps_space == "stoch_eof":
+            if pca_models is None:
+                raise ValueError("crps_space=stoch_eof requires pca_models")
+            profiles = true_profiles or kwargs.get("profiles")
+            if profiles is None:
+                raise ValueError("crps_space=stoch_eof requires true_profiles (or profiles) in cache")
+            scales = loss_scales or {}
+            return PCAHeteroPhysLoss(
+                pca_models,
+                outputs,
+                device,
+                profile_scales=scales.get("profile_scales"),
+                prob_mode=str(cfg["prob_mode"]),
+                nll_beta=float(cfg.get("nll_beta", 0.5)),
+                sigma_min=float(cfg.get("sigma_min", 1e-3)),
+                freeze_sigma=bool(cfg.get("freeze_sigma", False)),
+                equal_var=bool(cfg.get("equal_var", True)),
+                band_equal=bool(cfg.get("band_equal", True)),
+                pc_crps_scale=float(cfg.get("pc_crps_scale", 0.1)),
+                pres_levels=pres_levels,
+                val_ence=str(cfg.get("val_ence", "temperature")),
+                raw_targets=True,
+                truncation_floor=True,
+                pc_whiten=True,
+                var_scale=True,
+                true_profiles=profiles,
+                targets=targets,
+                train_idx=kwargs.get("train_idx"),
+            )
+        if crps_space == "z":
+            profiles = true_profiles or kwargs.get("profiles")
+            if profiles is None:
+                raise ValueError("crps_space=z requires true_profiles (or profiles) in cache")
+            scales = loss_scales or {}
+            return PCAHeteroPhysLoss(
+                None,
+                outputs,
+                device,
+                profile_scales=scales.get("profile_scales"),
+                prob_mode=str(cfg["prob_mode"]),
+                nll_beta=float(cfg.get("nll_beta", 0.5)),
+                sigma_min=float(cfg.get("sigma_min", 1e-3)),
+                freeze_sigma=bool(cfg.get("freeze_sigma", False)),
+                equal_var=bool(cfg.get("equal_var", True)),
+                band_equal=bool(cfg.get("band_equal", True)),
+                pc_crps_scale=0.0,
+                pres_levels=pres_levels,
+                val_ence=str(cfg.get("val_ence", "temperature")),
+                identity=True,
+                true_profiles=profiles,
             )
         return PCAHeteroLoss(
             prob_mode=str(cfg["prob_mode"]),

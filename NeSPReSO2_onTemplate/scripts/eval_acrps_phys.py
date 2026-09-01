@@ -24,6 +24,9 @@ def _predict(config, model, loss_fn, split: str, device):
     dl_args = dict(config["data_loader"]["args"])
     dl_args["split"] = split
     dl_args["shuffle"] = False
+    ip = config.config.get("input_params")
+    if ip:
+        dl_args["input_params"] = ip
     data_loader = getattr(module_data, config["data_loader"]["type"])(**dl_args)
     mus, sigs, ys = [], [], []
     with torch.no_grad():
@@ -32,7 +35,9 @@ def _predict(config, model, loss_fn, split: str, device):
             target = target.to(device)
             indices = indices.to(device)
             out = model(data)
-            if hasattr(loss_fn, "phys_mu_sigma"):
+            if hasattr(loss_fn, "phys_mu_sigma") and (
+                getattr(loss_fn, "identity", False) or getattr(loss_fn, "raw_targets", False)
+            ):
                 mu, sigma = loss_fn.phys_mu_sigma(out, indices)
                 y = loss_fn.physical_targets(indices)
             else:
@@ -123,7 +128,7 @@ def main() -> int:
     from collections import OrderedDict
 
     import model.model as module_arch
-    from model.loss import HEAVE_LOSS_MODES, make_loss
+    from model.loss import make_loss, uses_native_z_profiles
     from parse_config import ConfigParser, validate_config
     from train import ensure_cache, set_seed
     from base.util import prepare_device, read_json
@@ -150,6 +155,9 @@ def main() -> int:
     dl0 = dict(config["data_loader"]["args"])
     dl0["split"] = "val"
     dl0["shuffle"] = False
+    ip = config.config.get("input_params")
+    if ip:
+        dl0["input_params"] = ip
     data_loader = getattr(module_data, config["data_loader"]["type"])(**dl0)
     cache = data_loader.cache
     outputs = OrderedDict(config["outputs"])
@@ -171,7 +179,12 @@ def main() -> int:
         loss_scales=config.config.get("loss_scales"),
         loss_config=loss_cfg,
         pres_levels=cache.get("PRES"),
-        true_profiles=cache.get("profiles") if loss_cfg.get("mode") in HEAVE_LOSS_MODES else None,
+        true_profiles=(
+            cache.get("profiles")
+            if uses_native_z_profiles(loss_cfg) or str(loss_cfg.get("crps_space", "pca")) == "stoch_eof"
+            else None
+        ),
+        targets=cache.get("targets"),
         train_idx=train_idx,
         lat=cache.get("LAT"),
         lon=cache.get("LON"),
