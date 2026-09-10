@@ -70,7 +70,9 @@ def cell_observables(casts: pd.DataFrame, levels: pd.DataFrame) -> dict[str, flo
     t_xb, ok_xb = _cast_band_stack(levels, casts["cast_id"].to_numpy(), "t_xb")
     t_argo, ok_a = _cast_band_stack(levels, casts["cast_id"].to_numpy(), "t_argo")
     valid = ok & ok_xb & ok_a
-    bias2, amp, patt = murphy_terms(t_nes[valid], t_argo[valid], np.ones(int(valid.sum()), dtype=bool))
+    ones = np.ones(int(valid.sum()), dtype=bool)
+    bias2, amp, patt = murphy_terms(t_nes[valid], t_argo[valid], ones)
+    bias2_xb, amp_xb, patt_xb = murphy_terms(t_xb[valid], t_argo[valid], ones)
     # per-cast means in band for innovation
     def _mean_valid(arr, m):
         out = np.full(arr.shape[0], np.nan)
@@ -100,6 +102,9 @@ def cell_observables(casts: pd.DataFrame, levels: pd.DataFrame) -> dict[str, flo
         "murphy_bias2": bias2,
         "murphy_amp": amp,
         "murphy_pattern": patt,
+        "murphy_xb_bias2": bias2_xb,
+        "murphy_xb_amp": amp_xb,
+        "murphy_xb_pattern": patt_xb,
         "z20_rmse_nes": z20_rmse,
         "z20_rmse_xb": z20_rmse_xb,
         "innov_slope": slope,

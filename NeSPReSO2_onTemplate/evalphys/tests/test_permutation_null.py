@@ -50,5 +50,6 @@ def test_paired_pattern_beats_permutation_mean():
     cache = permutation_cache(casts, levels, n_perm=40, seed=1)
     row = cache[(cache["slice"] == "in_bbox") & (cache["era"] == "2025")].iloc[0]
     assert obs["murphy_pattern"] > 0.7
+    assert obs["murphy_xb_pattern"] > 0.7
     assert row["null_pattern_mean"] < obs["murphy_pattern"] - 0.3
     assert row["z_pattern"] > 2.0
