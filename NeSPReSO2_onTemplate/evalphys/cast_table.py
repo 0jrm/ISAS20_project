@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from netCDF4 import Dataset
 
 from evalphys.constants import LC_LAT_RANGE, LC_LON_RANGE
 from evalphys.profile_features import RULE_VERSION, band_rmse, shape_features
@@ -39,8 +40,6 @@ def _as_str(arr) -> np.ndarray:
 
 
 def load_profile_bundle(xb_path: Path, nes_path: Path) -> ProfileBundle:
-    from netCDF4 import Dataset
-
     xb = Dataset(str(xb_path))
     nes = Dataset(str(nes_path))
     products: dict[str, np.ndarray] = {}
@@ -72,6 +71,36 @@ def load_profile_bundle(xb_path: Path, nes_path: Path) -> ProfileBundle:
     xb.close()
     nes.close()
     return bundle
+
+
+def align_product_by_cast_id(
+    n_cast: int,
+    z: np.ndarray,
+    cast_ids: np.ndarray,
+    temperature: np.ndarray,
+    z_src: np.ndarray,
+) -> np.ndarray:
+    if not np.allclose(np.asarray(z_src, dtype=np.float64), np.asarray(z, dtype=np.float64)):
+        raise ValueError("product z grid does not match the bundle")
+    out = np.full((n_cast, z.size), np.nan, dtype=np.float64)
+    t = np.asarray(temperature, dtype=np.float64)
+    for j, cid in enumerate(np.asarray(cast_ids, dtype=np.int32)):
+        i = int(cid)
+        if 0 <= i < n_cast:
+            out[i] = t[j]
+    return out
+
+
+def attach_noprofile_xb(bundle: ProfileBundle, path: Path) -> ProfileBundle:
+    ds = Dataset(str(path))
+    ids = np.asarray(ds["cast_id"][:], dtype=np.int32)
+    t = np.asarray(ds["T_xb_noprofile"][:], dtype=np.float64)
+    z_src = np.asarray(ds["z"][:], dtype=np.float64)
+    ds.close()
+    aligned = align_product_by_cast_id(bundle.lon.size, bundle.z, ids, t, z_src)
+    products = dict(bundle.products)
+    products["xb_noprofile"] = aligned
+    return replace(bundle, products=products)
 
 
 def region_flags(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

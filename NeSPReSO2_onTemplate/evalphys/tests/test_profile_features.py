@@ -59,3 +59,15 @@ def test_woa_long_table_recovers_step_z20():
     )
     feat = woa_feature_table(long)
     assert abs(float(feat["woa_z20_m"].iloc[0]) - 100.0) < 8.0
+
+
+def test_align_product_by_cast_id_leaves_gaps():
+    from evalphys.cast_table import align_product_by_cast_id
+
+    z = np.arange(3.0)
+    ids = np.array([1, 3])
+    t = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    out = align_product_by_cast_id(5, z, ids, t, z)
+    assert np.isnan(out[0]).all()
+    assert np.allclose(out[1], [1.0, 2.0, 3.0])
+    assert np.allclose(out[3], [4.0, 5.0, 6.0])

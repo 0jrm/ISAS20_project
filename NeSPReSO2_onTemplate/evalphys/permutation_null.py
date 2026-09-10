@@ -22,7 +22,7 @@ def _cell_mask(casts: pd.DataFrame, slice_name: str, era_name: str) -> np.ndarra
 
 
 def murphy_terms(t_pred: np.ndarray, t_true: np.ndarray, valid: np.ndarray) -> tuple[float, float, float]:
-    """bias², amplitude ratio std_pred/std_true, pattern correlation on demeaned valid levels."""
+    """bias² and amplitude on pooled valid levels. Pattern r is the mean of per-level anomaly r."""
     m = valid & np.isfinite(t_pred) & np.isfinite(t_true)
     if int(m.sum()) < 4:
         return float("nan"), float("nan"), float("nan")
@@ -33,11 +33,35 @@ def murphy_terms(t_pred: np.ndarray, t_true: np.ndarray, valid: np.ndarray) -> t
     sp = float(np.std(ap, ddof=0))
     st = float(np.std(at, ddof=0))
     amp = sp / st if st > 0 else float("nan")
-    if sp == 0 or st == 0:
-        patt = float("nan")
+    if t_pred.ndim == 2 and t_true.ndim == 2 and valid.ndim == 2:
+        patt = float(np.nanmean(per_level_anomaly_r(t_pred, t_true, valid)))
     else:
-        patt = float(np.corrcoef(ap, at)[0, 1])
+        if sp == 0 or st == 0:
+            patt = float("nan")
+        else:
+            patt = float(np.corrcoef(ap, at)[0, 1])
     return bias2, amp, patt
+
+
+def per_level_anomaly_r(t_pred: np.ndarray, t_true: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """Correlation across casts at each depth after removing that depth's mean profile."""
+    pred = np.asarray(t_pred, dtype=np.float64)
+    truth = np.asarray(t_true, dtype=np.float64)
+    ok = np.asarray(valid, dtype=bool) & np.isfinite(pred) & np.isfinite(truth)
+    n_z = pred.shape[1]
+    r = np.full(n_z, np.nan, dtype=np.float64)
+    for j in range(n_z):
+        m = ok[:, j]
+        if int(m.sum()) < 4:
+            continue
+        p = pred[m, j] - np.mean(pred[m, j])
+        t = truth[m, j] - np.mean(truth[m, j])
+        sp = float(np.std(p, ddof=0))
+        st = float(np.std(t, ddof=0))
+        if sp == 0.0 or st == 0.0:
+            continue
+        r[j] = float(np.corrcoef(p, t)[0, 1])
+    return r
 
 
 def _cast_band_stack(levels: pd.DataFrame, cast_ids: np.ndarray, col: str) -> tuple[np.ndarray, np.ndarray]:
@@ -49,7 +73,6 @@ def _cast_band_stack(levels: pd.DataFrame, cast_ids: np.ndarray, col: str) -> tu
     valid = sub["valid_t"].to_numpy()
     order = {int(c): i for i, c in enumerate(cast_ids)}
     n = len(cast_ids)
-    # ragged -> pad by unique z in band
     z_band = np.unique(sub["z"].to_numpy())
     nz = z_band.size
     z_index = {float(v): j for j, v in enumerate(z_band)}
@@ -70,10 +93,9 @@ def cell_observables(casts: pd.DataFrame, levels: pd.DataFrame) -> dict[str, flo
     t_xb, ok_xb = _cast_band_stack(levels, casts["cast_id"].to_numpy(), "t_xb")
     t_argo, ok_a = _cast_band_stack(levels, casts["cast_id"].to_numpy(), "t_argo")
     valid = ok & ok_xb & ok_a
-    ones = np.ones(int(valid.sum()), dtype=bool)
-    bias2, amp, patt = murphy_terms(t_nes[valid], t_argo[valid], ones)
-    bias2_xb, amp_xb, patt_xb = murphy_terms(t_xb[valid], t_argo[valid], ones)
-    # per-cast means in band for innovation
+    bias2, amp, patt = murphy_terms(t_nes, t_argo, valid)
+    bias2_xb, amp_xb, patt_xb = murphy_terms(t_xb, t_argo, valid)
+
     def _mean_valid(arr, m):
         out = np.full(arr.shape[0], np.nan)
         for i in range(arr.shape[0]):
@@ -122,6 +144,7 @@ def permutation_cache(
     slices = ("in_bbox", "ood", "lc")
     eras = ("all", "2024", "2025")
     rows = []
+    depth_rows = []
     rng = np.random.default_rng(seed)
     for model, gmodel in casts.groupby("model", sort=False):
         lev_m = levels.loc[levels["model"] == model]
@@ -151,20 +174,22 @@ def permutation_cache(
                     return out
 
                 y = _mean_valid(t_argo - t_xb, valid)
+                r_obs = per_level_anomaly_r(t_nes, t_argo, valid)
+                r_xb = per_level_anomaly_r(t_xb, t_argo, valid)
                 null_patt = []
                 null_z20 = []
                 null_slope = []
                 null_sign = []
+                null_r = []
                 for _ in range(n_perm):
                     perm = rng.permutation(n)
                     t_sh = t_nes[perm]
                     z20_sh = z20_nes[perm]
                     v_sh = valid[perm]
                     v = v_sh & valid
-                    stacked_p = t_sh[v]
-                    stacked_a = t_argo[v]
-                    _, _, patt = murphy_terms(stacked_p, stacked_a, np.ones(stacked_p.size, dtype=bool))
+                    _, _, patt = murphy_terms(t_sh, t_argo, v)
                     null_patt.append(patt)
+                    null_r.append(per_level_anomaly_r(t_sh, t_argo, v))
                     null_z20.append(float(np.sqrt(np.nanmean((z20_sh - z20_argo) ** 2))))
                     x = _mean_valid(t_sh - t_xb, v)
                     both = np.isfinite(x) & np.isfinite(y)
@@ -200,4 +225,24 @@ def permutation_cache(
                         "z_innov_sign": zscore(obs["innov_sign"], null_sign),
                     }
                 )
-    return pd.DataFrame(rows)
+                z_band = np.unique(
+                    lev_c.loc[(lev_c["z"] >= BAND_LO) & (lev_c["z"] < BAND_HI), "z"].to_numpy(
+                        dtype=np.float64
+                    )
+                )
+                null_r_arr = np.vstack(null_r) if null_r else np.empty((0, z_band.size))
+                for j, zj in enumerate(z_band):
+                    depth_rows.append(
+                        {
+                            "model": model,
+                            "slice": slice_name,
+                            "era": era_name,
+                            "z": float(zj),
+                            "r_nes": float(r_obs[j]) if j < r_obs.size else float("nan"),
+                            "r_xb": float(r_xb[j]) if j < r_xb.size else float("nan"),
+                            "r_null_mean": float(np.nanmean(null_r_arr[:, j])) if null_r_arr.size else float("nan"),
+                            "r_null_std": float(np.nanstd(null_r_arr[:, j])) if null_r_arr.size else float("nan"),
+                            "n_perm": n_perm,
+                        }
+                    )
+    return pd.DataFrame(rows), pd.DataFrame(depth_rows)

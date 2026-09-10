@@ -14,6 +14,7 @@ if str(_ROOT) not in sys.path:
 
 from evalphys.cast_table import (
     RULE_VERSION,
+    attach_noprofile_xb,
     build_cast_and_level_tables,
     git_short_hash,
     load_profile_bundle,
@@ -37,10 +38,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--perm-n", type=int, default=PERM_N_DEFAULT)
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--with-mld", action="store_true")
+    p.add_argument("--noprofile", default="")
     args = p.parse_args(argv)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     bundle = load_profile_bundle(Path(args.xb), Path(args.nes))
+    models = list(args.models)
+    if args.noprofile:
+        bundle = attach_noprofile_xb(bundle, Path(args.noprofile))
+        if "xb_noprofile" not in models:
+            models.append("xb_noprofile")
     if args.limit:
         n = int(args.limit)
         bundle = replace(
@@ -58,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             products={k: v[:n] for k, v in bundle.products.items()},
         )
     casts, levels = build_cast_and_level_tables(
-        bundle, models=args.models, with_mld=args.with_mld
+        bundle, models=models, with_mld=args.with_mld
     )
     repo = _ROOT.parent
     stem = parquet_stem(git_short_hash(repo), RULE_VERSION)
@@ -69,11 +76,14 @@ def main(argv: list[str] | None = None) -> int:
     levels.to_parquet(level_path, index=False)
     perm_casts = casts.loc[casts["model"] != "persistence"]
     perm_levels = levels.loc[levels["model"] != "persistence"]
-    perm = permutation_cache(perm_casts, perm_levels, n_perm=int(args.perm_n), seed=0)
+    perm, perm_z = permutation_cache(perm_casts, perm_levels, n_perm=int(args.perm_n), seed=0)
     perm.to_parquet(perm_path, index=False)
+    perm_z_path = out_dir / f"{stem}_perm_z.parquet"
+    perm_z.to_parquet(perm_z_path, index=False)
     print(f"wrote {cast_path}", flush=True)
     print(f"wrote {level_path}", flush=True)
     print(f"wrote {perm_path}  cells={len(perm)}", flush=True)
+    print(f"wrote {perm_z_path}  rows={len(perm_z)}", flush=True)
     return 0
 
 
