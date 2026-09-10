@@ -14,7 +14,14 @@ Paths in JSON (`data_path`, `cache_dir`, etc.) are relative to the template root
 |------|---------|----------:|-----------|--------|
 | `config_argo.json` | Point L4 scalars, 16+16 PCA, chronological (matrix **A**) | 9 | `argo_v2` | production |
 | `config_argo_A_CRPS_z32.json` | **A_CRPS_z32** (A×CRPS-z): physical CRPS, PCA 32+32, equal T/S, band means, ENCE(T) stop | 9 | `argo_v2` | research |
+| `config_argo_geoff.json` | geoff: Stochastic EOF loss on z32 ops inputs (19 operators + ONI/RONI) | 30 | `argo_v2` | research |
+| `config_argo_geoff_res.json` | geoff capacity test: residual 4×1024 head, same ops cache/loss | 30 | `argo_v2` | research |
+| `config_argo_geoff_wd.json` | geoff + Adam weight_decay 1e-4 | 30 | `argo_v2` | research |
+| `config_argo_geoff_attn.json` | geoff + residual input self-attention (token per scalar) | 30 | `argo_v2` | research |
 | `config_argo_stoch_eof.json` | Stochastic EOF Emulator: raw-profile CRPS, truncation `r²` floor, whitened PC term | 9 | `argo_v2` | research |
+| `config_argo_stoch_eof_pair.json` | stoch_eof + causal earlier-cast pair inputs (source PCs + Δlat/lon/t) | 76 | `argo_v2` | research |
+| `config_argo_stoch_eof_pair_synth.json` | same pairs, source = frozen 9-d stoch_eof μ PCs, labels still Argo | 76 | `argo_v2` | research |
+| `config_argo_stoch_eof_sfc.json` | stoch_eof with 0–50 m band weight 4× | 9 | `argo_v2` | research |
 | `config_argo_A_CRPS_z.json` | A_CRPS recipe in native z (no PCA); classic SST/SSS/SSH | 9 | `argo_v2` | research |
 | `config_argo_A_CRPS_z_roni_ops.json` | Native-z CRPS + RONI (no ONI) + 19 ops | 29 | `argo_v2` | research |
 | `config_argo_A_CRPS_z32_roni.json` | A_CRPS_z32 + CPC ONI/RONI splice (same 32-PC cache) | 11 | `argo_v2` | research |

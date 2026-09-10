@@ -26,6 +26,21 @@ class NeSPReSODataset(Dataset):
         return self.inputs[idx], self.targets[idx], idx
 
 
+class PairDataset(Dataset):
+    """Rows are pairs; the index tensor is cache ``target_i``, not the pair row."""
+
+    def __init__(self, inputs, targets, target_i):
+        self.inputs = inputs
+        self.targets = targets
+        self.target_i = np.asarray(target_i, dtype=np.int64)
+
+    def __len__(self):
+        return self.inputs.shape[0]
+
+    def __getitem__(self, idx):
+        return self.inputs[idx], self.targets[idx], int(self.target_i[idx])
+
+
 def _split_lengths(n: int, train_frac: float, val_frac: float, test_frac: float):
     if abs(train_frac + val_frac + test_frac - 1.0) > 1e-6:
         raise ValueError("train_frac + val_frac + test_frac must equal 1")
@@ -104,6 +119,15 @@ class NeSPReSODataLoader(DataLoader):
                 miss = np.zeros_like(self.cache["inputs_err"], dtype=np.float32)
             miss_t = torch.tensor(miss, dtype=torch.float32)
             inputs = torch.cat([inputs, err, miss_t], dim=-1)
+        pair = bool(kwargs.pop("pair", False))
+        k_train = int(kwargs.pop("k_train", 4))
+        k_eval = int(kwargs.pop("k_eval", 1))
+        pair_max_km = float(kwargs.pop("max_km", 250))
+        pair_min_dt = float(kwargs.pop("min_dt", 3))
+        pair_max_dt = float(kwargs.pop("max_dt", 45))
+        pair_source = str(kwargs.pop("pair_source", "argo"))
+        synth_pcs_path = kwargs.pop("synth_pcs_path", None)
+        sample_train = str(kwargs.pop("sample_train", "nearest"))
         targets = torch.tensor(self.cache[target_key], dtype=torch.float32)
         full_ds = NeSPReSODataset(inputs, targets)
 
@@ -125,8 +149,72 @@ class NeSPReSODataLoader(DataLoader):
             dataset_tag=dataset_tag,
             v2_src=v2_src or self.cache.get("v2_src"),
         )
-        subsets = subsets_from_indices(full_ds, split_indices)
-        train_sub, val_sub, test_sub = subsets["train"], subsets["val"], subsets["test"]
+        if pair:
+            from preproc.pair_table import build_pair_table, pack_pair_inputs
+
+            self.pair_table = build_pair_table(
+                self.cache,
+                split_indices,
+                max_km=pair_max_km,
+                min_dt=pair_min_dt,
+                max_dt=pair_max_dt,
+                k_train=k_train,
+                k_eval=k_eval,
+                sample_train=sample_train,
+            )
+            base_np = np.asarray(inputs.numpy() if torch.is_tensor(inputs) else inputs, dtype=np.float32)
+            tgt_np = np.asarray(self.cache[target_key], dtype=np.float32)
+            src_np = tgt_np
+            if pair_source == "synth":
+                if not synth_pcs_path:
+                    raise ValueError("pair_source=synth requires data_loader.args.synth_pcs_path")
+                src_np = np.load(synth_pcs_path).astype(np.float32)
+                if src_np.shape != tgt_np.shape:
+                    raise ValueError(
+                        f"synth pcs {src_np.shape} != cache targets {tgt_np.shape}"
+                    )
+            elif pair_source == "mix":
+                if not synth_pcs_path:
+                    raise ValueError("pair_source=mix requires data_loader.args.synth_pcs_path")
+                mix_syn = np.load(synth_pcs_path).astype(np.float32)
+                if mix_syn.shape != tgt_np.shape:
+                    raise ValueError(
+                        f"synth pcs {mix_syn.shape} != cache targets {tgt_np.shape}"
+                    )
+            elif pair_source == "live":
+                from preproc.pair_table import pack_live_inputs
+
+                src_np = None
+            elif pair_source != "argo":
+                raise ValueError(f"pair_source must be argo|synth|live|mix, got {pair_source!r}")
+            self.pair_source = pair_source
+            self.sample_train = sample_train
+
+            def _pair_ds(name):
+                pairs = self.pair_table[name]
+                if pair_source == "live":
+                    x = pack_live_inputs(base_np, pairs)
+                    y = tgt_np[pairs["target_i"]] if pairs.shape[0] else np.zeros((0, tgt_np.shape[1]), dtype=np.float32)
+                    idx = pairs["target_i"] if pairs.shape[0] else np.zeros(0, dtype=np.int64)
+                elif pair_source == "mix":
+                    from preproc.pair_table import pack_mix_inputs
+
+                    x, y, idx = pack_mix_inputs(base_np, tgt_np, mix_syn, pairs)
+                else:
+                    x = pack_pair_inputs(base_np, src_np, pairs)
+                    y = tgt_np[pairs["target_i"]] if pairs.shape[0] else np.zeros((0, tgt_np.shape[1]), dtype=np.float32)
+                    idx = pairs["target_i"] if pairs.shape[0] else np.zeros(0, dtype=np.int64)
+                return PairDataset(
+                    torch.tensor(x, dtype=torch.float32),
+                    torch.tensor(y, dtype=torch.float32),
+                    idx,
+                )
+
+            train_sub, val_sub, test_sub = _pair_ds("train"), _pair_ds("val"), _pair_ds("test")
+        else:
+            self.pair_table = None
+            subsets = subsets_from_indices(full_ds, split_indices)
+            train_sub, val_sub, test_sub = subsets["train"], subsets["val"], subsets["test"]
         self.train_subset = train_sub
         self.val_subset = val_sub
         self.test_subset = test_sub

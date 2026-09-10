@@ -7,14 +7,18 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from evalphys.constants import (
+    CP_J_KGK,
     DEPTH_BAND_LABELS,
     DEPTH_BANDS,
+    ISOPYCNALS_SIGMA0,
     MLD_DSIGMA_THRESHOLD,
     MLD_Z_REF_M,
     N2_TOL,
     N2_TOL_SWEEP,
+    OHC_ZMAX_M,
     RHO0_KGM3,
     SIGMA0_TOL,
+    SPATIAL_SIGMA_MIN_N,
 )
 from evalphys.gsw_backend import get_gsw
 
@@ -476,6 +480,255 @@ def steric_vs_adt(
     }
 
 
+def ocean_heat_content(
+    T: np.ndarray,
+    depth: np.ndarray,
+    *,
+    valid: np.ndarray | None = None,
+    z_max: float = 300.0,
+) -> np.ndarray:
+    """Column OHC [GJ m⁻²] = ρ₀ Cp ∫ T dz / 1e9 on [0, z_max] with trapezoids."""
+    T = _as_profiles_levels(T)
+    z = np.asarray(depth, dtype=np.float64).reshape(-1)
+    if valid is None:
+        m = np.isfinite(T)
+    else:
+        m = np.asarray(valid, dtype=bool) & np.isfinite(T)
+    m &= (z[None, :] >= 0.0) & (z[None, :] <= float(z_max))
+    n_prof = T.shape[0]
+    out = np.full(n_prof, np.nan, dtype=np.float64)
+    scale = float(RHO0_KGM3) * float(CP_J_KGK) * 1e-9
+    for i in range(n_prof):
+        ok = m[i]
+        if int(ok.sum()) < 2:
+            continue
+        zi, ti = z[ok], T[i, ok]
+        order = np.argsort(zi)
+        zi, ti = zi[order], ti[order]
+        trap = getattr(np, "trapezoid", np.trapz)
+        out[i] = scale * float(trap(ti, zi))
+    return out
+
+
+def ohc_rmse_by_layer(
+    T_pred: np.ndarray,
+    T_true: np.ndarray,
+    depth: np.ndarray,
+    *,
+    valid: np.ndarray | None = None,
+    zmax_list: Sequence[float] = OHC_ZMAX_M,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for zmax in zmax_list:
+        key = f"0-{int(zmax)}"
+        qp = ocean_heat_content(T_pred, depth, valid=valid, z_max=float(zmax))
+        qt = ocean_heat_content(T_true, depth, valid=valid, z_max=float(zmax))
+        out[key] = _rmse_bias(qp, qt)
+    return out
+
+
+def _values_at_sigma(sig: np.ndarray, values: np.ndarray, target: float) -> np.ndarray:
+    """Linear interp of ``values`` onto the first σ₀ = target crossing (depth increasing)."""
+    n = sig.shape[0]
+    out = np.full(n, np.nan, dtype=np.float64)
+    for i in range(n):
+        si, vi = sig[i], values[i]
+        ok = np.isfinite(si) & np.isfinite(vi)
+        if int(ok.sum()) < 2:
+            continue
+        s, v = si[ok], vi[ok]
+        d = s - float(target)
+        for k in range(s.size - 1):
+            da, db = d[k], d[k + 1]
+            if da == 0.0:
+                out[i] = v[k]
+                break
+            if da * db < 0.0:
+                frac = -da / (db - da)
+                out[i] = v[k] + frac * (v[k + 1] - v[k])
+                break
+    return out
+
+
+def isopycnal_ts(
+    T: np.ndarray,
+    S: np.ndarray,
+    depth: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    *,
+    valid: np.ndarray | None = None,
+    isopycnals: Sequence[float] = ISOPYCNALS_SIGMA0,
+) -> dict[str, dict[str, np.ndarray]]:
+    """T and S on named σ₀ surfaces."""
+    T = _as_profiles_levels(T)
+    S = _as_profiles_levels(S)
+    if valid is not None:
+        m = np.asarray(valid, dtype=bool)
+        T = np.where(m, T, np.nan)
+        S = np.where(m, S, np.nan)
+    sig = sigma0_profiles(T, S, depth, lat, lon)
+    out: dict[str, dict[str, np.ndarray]] = {}
+    for s0 in isopycnals:
+        key = f"{s0:.1f}"
+        out[key] = {
+            "T": _values_at_sigma(sig, T, float(s0)),
+            "S": _values_at_sigma(sig, S, float(s0)),
+        }
+    return out
+
+
+def water_mass_rmse(
+    T_pred: np.ndarray,
+    S_pred: np.ndarray,
+    T_true: np.ndarray,
+    S_true: np.ndarray,
+    depth: np.ndarray,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    *,
+    valid: np.ndarray | None = None,
+    isopycnals: Sequence[float] = ISOPYCNALS_SIGMA0,
+) -> dict[str, Any]:
+    """RMSE of σ₀ and spiciness0, plus T/S on GoM SUW/GCW isopycnals."""
+    T_pred = _as_profiles_levels(T_pred)
+    S_pred = _as_profiles_levels(S_pred)
+    T_true = _as_profiles_levels(T_true)
+    S_true = _as_profiles_levels(S_true)
+    if valid is not None:
+        m = np.asarray(valid, dtype=bool)
+        T_pred = np.where(m, T_pred, np.nan)
+        S_pred = np.where(m, S_pred, np.nan)
+        T_true = np.where(m, T_true, np.nan)
+        S_true = np.where(m, S_true, np.nan)
+    sa_p, ct_p, _ = to_teos10(T_pred, S_pred, depth, lat, lon)
+    sa_t, ct_t, _ = to_teos10(T_true, S_true, depth, lat, lon)
+    gsw = get_gsw()
+    sig_p, tau_p = gsw.sigma0(sa_p, ct_p), gsw.spiciness0(sa_p, ct_p)
+    sig_t, tau_t = gsw.sigma0(sa_t, ct_t), gsw.spiciness0(sa_t, ct_t)
+    iso_p = isopycnal_ts(T_pred, S_pred, depth, lat, lon, isopycnals=isopycnals)
+    iso_t = isopycnal_ts(T_true, S_true, depth, lat, lon, isopycnals=isopycnals)
+    iso_out = {}
+    for key in iso_p:
+        iso_out[key] = {
+            "T": _rmse_bias(iso_p[key]["T"], iso_t[key]["T"]),
+            "S": _rmse_bias(iso_p[key]["S"], iso_t[key]["S"]),
+        }
+    return {
+        "sigma0": _rmse_bias(sig_p, sig_t),
+        "spice": _rmse_bias(tau_p, tau_t),
+        "isopycnal": iso_out,
+    }
+
+
+def spatial_sigma_consistency(
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    y: np.ndarray,
+    lon: np.ndarray,
+    lat: np.ndarray,
+    *,
+    z: np.ndarray | None = None,
+    valid: np.ndarray | None = None,
+    min_n: int = SPATIAL_SIGMA_MIN_N,
+) -> dict[str, Any]:
+    """Pooled ENCE/CRPS/coverage plus 1° cell RMSE-vs-σ rank (cells with n≥min_n)."""
+    from evalphys.calibration import ence, gaussian_crps, spread_skill
+    from scipy import stats as _stats
+
+    mu = np.asarray(mu, dtype=np.float64)
+    sigma = np.asarray(sigma, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if mu.shape != sigma.shape or mu.shape != y.shape:
+        raise ValueError(f"mu/sigma/y shape mismatch {mu.shape} {sigma.shape} {y.shape}")
+    if valid is None:
+        valid = np.isfinite(mu) & np.isfinite(sigma) & np.isfinite(y)
+    else:
+        valid = np.asarray(valid, dtype=bool) & np.isfinite(mu) & np.isfinite(sigma) & np.isfinite(y)
+    mu_m = np.where(valid, mu, np.nan)
+    sg_m = np.where(valid, sigma, np.nan)
+    y_m = np.where(valid, y, np.nan)
+    with np.errstate(all="ignore"):
+        pooled = {
+            "ence": ence(mu_m, sg_m, y_m).get("ence"),
+            "crps_mean": float(np.nanmean(gaussian_crps(mu_m, sg_m, y_m))),
+            "coverage_68": float(np.nanmean(np.abs(mu_m - y_m) < sg_m)),
+            "spearman": spread_skill(mu_m, sg_m, y_m).get("spearman_sigma_abs_error"),
+            "n": int(np.isfinite(mu_m).sum()),
+        }
+    by_band: dict[str, Any] = {}
+    if z is not None and mu.ndim == 2:
+        zz = np.asarray(z, dtype=np.float64).reshape(-1)
+        for label, (lo, hi) in zip(DEPTH_BAND_LABELS, DEPTH_BANDS):
+            b = _band_mask(zz, lo, hi)
+            mb = valid & b[None, :]
+            if not mb.any():
+                continue
+            mu_b = np.where(mb, mu, np.nan)
+            sg_b = np.where(mb, sigma, np.nan)
+            y_b = np.where(mb, y, np.nan)
+            by_band[label] = {
+                "ence": ence(mu_b, sg_b, y_b).get("ence"),
+                "crps_mean": float(np.nanmean(gaussian_crps(mu_b, sg_b, y_b))),
+                "coverage_68": float(np.nanmean(np.abs(mu_b - y_b) < sg_b)),
+                "n": int(mb.sum()),
+            }
+    lon = np.asarray(lon, dtype=np.float64).reshape(-1)
+    lat = np.asarray(lat, dtype=np.float64).reshape(-1)
+    if mu.ndim == 2:
+        with np.errstate(all="ignore"):
+            err2 = np.nanmean((mu_m - y_m) ** 2, axis=1)
+            mean_s = np.nanmean(sg_m, axis=1)
+        n_lev = np.isfinite(mu_m).sum(axis=1)
+    else:
+        err2 = (mu_m - y_m) ** 2
+        mean_s = sg_m
+        n_lev = np.isfinite(mu_m).astype(np.int32)
+    rmse_p = np.sqrt(err2)
+    okp = np.isfinite(rmse_p) & np.isfinite(mean_s) & np.isfinite(lon) & np.isfinite(lat)
+    cells: list[dict[str, float]] = []
+    spearman_cells = None
+    if okp.any():
+        i0, i1 = int(np.floor(lon[okp].min())), int(np.floor(lon[okp].max()))
+        j0, j1 = int(np.floor(lat[okp].min())), int(np.floor(lat[okp].max()))
+        acc_e = np.zeros((j1 - j0 + 1, i1 - i0 + 1), dtype=np.float64)
+        acc_s = np.zeros_like(acc_e)
+        cnt = np.zeros_like(acc_e, dtype=np.int32)
+        for k in np.where(okp)[0]:
+            ii = int(np.floor(lon[k])) - i0
+            jj = int(np.floor(lat[k])) - j0
+            acc_e[jj, ii] += err2[k]
+            acc_s[jj, ii] += mean_s[k]
+            cnt[jj, ii] += 1
+        keep = cnt >= int(min_n)
+        if keep.any():
+            c_rmse = np.sqrt(acc_e[keep] / cnt[keep])
+            c_sig = acc_s[keep] / cnt[keep]
+            if c_rmse.size >= 2 and np.ptp(c_sig) > 0:
+                spearman_cells = float(_stats.spearmanr(c_sig, c_rmse).statistic)
+            jj, ii = np.where(keep)
+            for a, b in zip(jj, ii):
+                cells.append(
+                    {
+                        "lon0": float(i0 + b),
+                        "lat0": float(j0 + a),
+                        "n": int(cnt[a, b]),
+                        "rmse": float(np.sqrt(acc_e[a, b] / cnt[a, b])),
+                        "mean_sigma": float(acc_s[a, b] / cnt[a, b]),
+                    }
+                )
+    return {
+        "pooled": pooled,
+        "by_depth_band": by_band,
+        "cells": cells,
+        "spearman_cells_rmse_vs_sigma": spearman_cells,
+        "n_cells": len(cells),
+        "min_n": int(min_n),
+        "n_profiles": int(okp.sum()),
+        "mean_levels": float(np.mean(n_lev[okp])) if okp.any() else 0.0,
+    }
+
+
 def _rmse_bias(pred: np.ndarray, true: np.ndarray) -> dict[str, float | None]:
     m = np.isfinite(pred) & np.isfinite(true)
     if not m.any():
@@ -509,6 +762,10 @@ def summarize_physical(
     eta_t = steric_height_cm(T_true, S_true, depth, lat, lon, T_clim=T_clim, S_clim=S_clim)
     eta_m = np.isfinite(eta_p) & np.isfinite(eta_t)
     steric_rms = float(np.sqrt(np.mean((eta_p[eta_m] - eta_t[eta_m]) ** 2))) if eta_m.any() else None
+    d26_p_a, _ = isotherm_depth(T_pred, depth, 26.0)
+    d26_t_a, _ = isotherm_depth(T_true, depth, 26.0)
+    zn2_p = max_n2_depth(T_pred, S_pred, depth, lat, lon)
+    zn2_t = max_n2_depth(T_true, S_true, depth, lat, lon)
 
     return {
         "static_stability_pred": stab,
@@ -527,5 +784,9 @@ def summarize_physical(
             "coverage_true": cov26_t,
             "pred_vs_true": _rmse_bias(d26_p, d26_t),
         },
+        "max_n2_depth": _rmse_bias(zn2_p, zn2_t),
+        "heave_vs_shape": heave_vs_shape_split(T_pred, T_true, depth, d26_p_a, d26_t_a),
+        "ohc": ohc_rmse_by_layer(T_pred, T_true, depth),
+        "water_mass": water_mass_rmse(T_pred, S_pred, T_true, S_true, depth, lat, lon),
         "steric_height_cm_rms": steric_rms,
     }

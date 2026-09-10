@@ -286,6 +286,128 @@ def test_patch_conv_mlp_residual_mode():
     assert out.shape == (2, 64)
 
 
+def test_residual_linear_dropout():
+    from model.model import ResidualLinearBlock
+
+    torch.manual_seed(0)
+    block = ResidualLinearBlock(8, 8, dropout_prob=0.5)
+    x = torch.ones(64, 8)
+    block.train()
+    y1, y2 = block(x), block(x)
+    assert not torch.allclose(y1, y2)
+    block.eval()
+    z1, z2 = block(x), block(x)
+    assert torch.allclose(z1, z2)
+
+
+def test_input_self_attention_residual():
+    from model.model import InputSelfAttention, PatchConvMLP
+
+    torch.manual_seed(0)
+    mix = InputSelfAttention(4, 8, n_heads=2, dropout=0.0)
+    x = torch.randn(3, 4)
+    y = mix(x)
+    assert y.shape == (3, 8)
+    model = PatchConvMLP(
+        input_dim=9,
+        output_dim=8,
+        dropout_prob=0.0,
+        d_model=16,
+        head_layers=[8],
+        n_enc=6,
+        n_sat=3,
+        input_attention=True,
+        attn_heads=4,
+        probabilistic=True,
+    )
+    out = model(torch.randn(2, 9))
+    assert out.shape == (2, 16)
+
+
+def test_input_column_groups():
+    import runpy
+
+    m = runpy.run_path("scripts/ablate_inputs.py")
+    n9 = m["column_names"](6, 3)
+    assert n9 == [
+        "timecos", "timesin", "latcos", "latsin", "loncos", "lonsin", "sss", "sst", "ssh",
+    ]
+    g9 = m["groups_for"](6, 3)
+    assert g9["time"] == [0, 1] and g9["sst"] == [7]
+    n30 = m["column_names"](11, 19)
+    assert len(n30) == 30 and n30[6:11] == ["oni", "roni", "sss", "sst", "ssh"]
+    g30 = m["groups_for"](11, 19)
+    assert g30["ops"] == list(range(11, 30))
+    rng = np.random.default_rng(0)
+    x = np.arange(20, dtype=np.float32).reshape(5, 4)
+    y = m["permute_cols"](x, [1, 2], rng)
+    assert not np.array_equal(x[:, 1:3], y[:, 1:3])
+    assert np.array_equal(x[:, 0], y[:, 0])
+
+
+def test_pc_pred_corr_pearson():
+    import runpy
+
+    m = runpy.run_path("scripts/pc_input_correlation.py")
+    x = np.arange(30, dtype=np.float64).reshape(30, 1)
+    y = 2 * x
+    r, p = m["pearson_mat"](x, y)
+    assert abs(r[0, 0] - 1.0) < 1e-9
+    assert p[0, 0] < 1e-10
+    z = np.zeros_like(y)
+    r0, _ = m["pearson_mat"](x, z)
+    assert np.isnan(r0[0, 0])
+
+
+def test_band_weights_surface():
+    from base.util import read_json
+    from model.loss import PCAHeteroPhysLoss
+    from parse_config import validate_config
+
+    rng = np.random.default_rng(3)
+    n, nz, k = 8, 20, 3
+    z = np.linspace(0, 400, nz).astype(np.float32)
+    T = rng.normal(size=(n, nz)).astype(np.float32)
+    pca = PCA(n_components=k).fit(T)
+    pcs = pca.transform(T).astype(np.float32)
+    outputs = OrderedDict([("temperature", k), ("salinity", k)])
+    cat = np.hstack([pcs, pcs]).astype(np.float32)
+    eq = PCAHeteroPhysLoss(
+        {"temperature": pca, "salinity": pca},
+        outputs,
+        torch.device("cpu"),
+        band_equal=True,
+        pres_levels=z,
+        pc_crps_scale=0.0,
+        prob_mode="mse",
+        freeze_sigma=True,
+        raw_targets=True,
+        true_profiles={"temperature": T, "salinity": T},
+    )
+    sfc = PCAHeteroPhysLoss(
+        {"temperature": pca, "salinity": pca},
+        outputs,
+        torch.device("cpu"),
+        band_equal=True,
+        band_weights=[1.0, 0.0, 0.0, 0.0],
+        pres_levels=z,
+        pc_crps_scale=0.0,
+        prob_mode="mse",
+        freeze_sigma=True,
+        raw_targets=True,
+        true_profiles={"temperature": T, "salinity": T},
+    )
+    raw = torch.cat([torch.tensor(cat), torch.ones_like(torch.tensor(cat))], dim=1)
+    idx = torch.arange(n)
+    target = torch.tensor(cat)
+    L_eq = float(eq(raw, target, idx))
+    L_sfc = float(sfc(raw, target, idx))
+    assert np.isfinite([L_eq, L_sfc]).all()
+    cfg = read_json("config/argo/config_argo_stoch_eof.json")
+    cfg["loss_config"]["band_weights"] = [4, 1, 1, 1]
+    validate_config(cfg)
+
+
 def test_res_autoencoder_round_trip():
     from model.model import ResAutoencoder
 
@@ -1741,7 +1863,7 @@ def test_steric_train_calibration():
 
 
 def test_evalphys_frozen_metrics():
-    """evalphys v1.2.0 synthetic checks (PLAN-v2-recovery Phase 0 + thermocline helpers)."""
+    """evalphys v1.3.0 synthetic checks (PLAN-v2-recovery Phase 0 + thermocline helpers)."""
     from evalphys.calibration import ence, gaussian_crps, spread_skill
     from evalphys.constants import N2_TOL, SIGMA_MIN_DEFAULT, VERSION
     from evalphys.manifest import load_manifest
@@ -1772,7 +1894,8 @@ def test_evalphys_frozen_metrics():
     mae = np.abs(mu - y)
     assert np.mean(np.abs(crps - mae)) / np.mean(mae) < 0.01
 
-    from evalphys.metrics import heave_vs_shape_split, isotherm_depth, max_n2_depth
+    from evalphys.metrics import heave_vs_shape_split, isotherm_depth, max_n2_depth, ocean_heat_content
+    from evalphys.constants import CP_J_KGK, RHO0_KGM3
 
     T2 = np.broadcast_to(28.0 - 0.04 * depth, (2, depth.size)).copy()
     T2h = np.empty_like(T2)
@@ -1784,6 +1907,9 @@ def test_evalphys_frozen_metrics():
     assert split["heave_fraction"] > 0.4
     z_n2 = max_n2_depth(T, S, depth, lat, lon)
     assert np.all(np.isfinite(z_n2))
+    z2 = np.array([0.0, 10.0])
+    q = ocean_heat_content(np.array([[1.0, 1.0]]), z2, z_max=10.0)
+    assert abs(q[0] - RHO0_KGM3 * CP_J_KGK * 10.0 * 1e-9) < 1e-12
 
 
 def test_warp_roundtrip_and_enso():
@@ -2005,6 +2131,8 @@ def test_heave_ablation_pin_arch_dims():
         ("config_argo_heave_fast_conv3x3.json", 92, 3, [3, 3, 3, 3]),
         ("config_argo_heave_fast_ops.json", 30, 19, None),
         ("config_argo_A_CRPS_z32_ops_heave.json", 30, 19, None),
+        ("config_argo_geoff.json", 30, 19, None),
+        ("config_argo_geoff_res.json", 30, 19, None),
         ("config_argo_heave_fast_bathy.json", 12, 1, None),
         ("config_argo_heave_fast_bathy_wind.json", 15, 4, None),
     ):
@@ -2564,6 +2692,24 @@ def test_stoch_eof_recipe():
 
     cfg = read_json("config/argo/config_argo_stoch_eof.json")
     validate_config(cfg)
+    pair_cfg = read_json("config/argo/config_argo_stoch_eof_pair.json")
+    validate_config(pair_cfg)
+    assert pair_cfg["arch"]["args"]["input_dim"] == 76
+    assert pair_cfg["arch"]["args"]["n_enc"] == 6
+    assert pair_cfg["arch"]["args"]["n_sat"] == 70
+    assert pair_cfg["data_loader"]["args"]["pair"] is True
+    assert pair_cfg["io"]["pin_arch_dims"] is True
+    geoff = read_json("config/argo/config_argo_geoff.json")
+    validate_config(geoff)
+    assert geoff["loss_config"]["crps_space"] == "stoch_eof"
+    assert geoff["arch"]["args"]["input_dim"] == 30
+    assert geoff["data_loader"]["args"]["cache_path"].endswith("train_ready_heave_ops_pca32.pkl")
+    for extra in (
+        "config_argo_geoff_wd.json",
+        "config_argo_geoff_attn.json",
+        "config_argo_stoch_eof_sfc.json",
+    ):
+        validate_config(read_json(f"config/argo/{extra}"))
     wired = make_loss(
         pca_models={"temperature": pca_t, "salinity": pca_s},
         outputs=outputs,
@@ -2604,6 +2750,75 @@ def test_acrps_z_configs_validate():
         assert cfg["arch"]["args"]["n_sat"] == n_sat
         assert cfg["arch"]["args"]["input_dim"] == dim
         assert not cfg["input_params"].get("oni")
+
+
+def test_pc_routing_skip_aux_weights():
+    from model.loss import PCAHeteroPhysLoss
+    from model.model import PatchConvMLP
+    from model.pc_routing import weights_from_r
+    from sklearn.decomposition import PCA
+
+    w = weights_from_r(np.array([0.97, 0.0]))
+    assert w[0] < w[1]
+    spec = {
+        "easy_input_names": ["timecos", "timesin", "loncos", "sss", "sst", "ssh"],
+        "easy_pc_idx": [0, 1, 2, 3, 32, 33],
+        "W": np.zeros((6, 6), dtype=np.float32).tolist(),
+        "b": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "w_k": np.linspace(0.05, 4.0, 64).tolist(),
+        "sigma_floor_k": np.full(64, 0.2).tolist(),
+        "pc1_ssh": {"t": [1.0, 0.0], "s": [0.5, 0.0]},
+    }
+    m = PatchConvMLP(
+        input_dim=30,
+        output_dim=64,
+        n_enc=11,
+        n_sat=19,
+        probabilistic=True,
+        skip_easy=True,
+        aux_stem=True,
+        sigma_floor=True,
+        routing_spec=spec,
+    )
+    m.eval()
+    x0 = torch.zeros(2, 30)
+    mu0 = m(x0)[:, :64]
+    assert torch.allclose(mu0[:, 0], torch.ones(2), atol=1e-5)
+    with torch.no_grad():
+        m.aux_out.bias[10] = 3.0
+    x1 = torch.zeros(2, 30)
+    x1[:, 11:] = 1.0
+    mu1 = m(x1)[:, :64]
+    assert torch.allclose(mu1[:, 0], mu0[:, 0], atol=1e-5)
+    assert mu1[0, 10].item() > 2.0
+    with torch.no_grad():
+        m.sigma_out.bias.fill_(-20.0)
+    sig = m(x0)[:, 64:]
+    assert torch.allclose(sig, torch.full_like(sig, 0.2), atol=1e-4)
+    rng = np.random.RandomState(0)
+    depth = np.linspace(0, 100, 8)
+    T = 20 - 0.05 * depth[None] + 0.01 * rng.randn(4, 8)
+    S = 36 + 0.001 * depth[None] + 0.001 * rng.randn(4, 8)
+    pca_t = PCA(n_components=2).fit(T)
+    pca_s = PCA(n_components=2).fit(S)
+    outputs = OrderedDict([("temperature", 2), ("salinity", 2)])
+    y = np.hstack([pca_t.transform(T), pca_s.transform(S)]).astype(np.float32)
+    w4 = np.array([4.0, 0.05, 4.0, 0.05], dtype=np.float32)
+    loss = PCAHeteroPhysLoss(
+        {"temperature": pca_t, "salinity": pca_s},
+        outputs,
+        torch.device("cpu"),
+        pc_crps_scale=1.0,
+        equal_var=True,
+        band_equal=False,
+        prob_mode="mse",
+        freeze_sigma=True,
+        pc_crps_weights=w4,
+    )
+    raw = torch.tensor(np.hstack([y, np.ones_like(y)]), dtype=torch.float32)
+    tgt = torch.tensor(y)
+    L = loss(raw, tgt)
+    assert torch.isfinite(L)
 
 
 def test_resume_monitor_reset_on_run_name_change():
@@ -3075,6 +3290,196 @@ def test_steric_matches_climatology_adt():
     assert corr > 0.5
 
 
+def test_pair_table_causal():
+    from copy import deepcopy
+
+    from parse_config import validate_config
+    from preproc.pair_table import PAIR_DTYPE, build_pair_table, persistence_rmse
+    from base.util import read_json
+
+    lat = np.array([25.00, 25.01, 25.02, 25.03, 25.04], dtype=np.float64)
+    lon = np.array([-90.00, -90.01, -90.02, -90.03, -90.04], dtype=np.float64)
+    juld = np.array([100.0, 110.0, 120.0, 200.0, 210.0], dtype=np.float64)
+    cache = {"LAT": lat, "LON": lon, "JULD": juld}
+    split = {"train": [0, 1, 2, 3], "val": [4], "test": []}
+    pt = build_pair_table(cache, split, max_km=250, min_dt=3, max_dt=45, k_train=4, k_eval=1)
+    chunks = [pt[s] for s in ("train", "val", "test") if pt[s].size]
+    all_pairs = np.concatenate(chunks) if chunks else np.empty(0, dtype=PAIR_DTYPE)
+    for row in all_pairs:
+        i, j = int(row["target_i"]), int(row["source_j"])
+        assert i != j
+        assert juld[j] < juld[i]
+        dt = juld[i] - juld[j]
+        assert 3 - 1e-9 <= dt <= 45 + 1e-9
+        assert abs(dt - row["dt_days"]) < 1e-5
+    from preproc.pair_table import nearest_eval_pairs
+
+    near = nearest_eval_pairs(lat, lon, juld, max_km=250, min_dt=3, max_dt=45)
+    for row in near:
+        i, j = int(row["target_i"]), int(row["source_j"])
+        assert juld[j] < juld[i]
+        assert 3 - 1e-9 <= (juld[i] - juld[j]) <= 45 + 1e-9
+    train_i = set(int(x) for x in pt["train"]["target_i"]) if pt["train"].size else set()
+    assert 0 not in train_i
+    assert 1 in train_i
+    src_for_1 = pt["train"]["source_j"][pt["train"]["target_i"] == 1]
+    assert list(src_for_1) == [0]
+    src_for_2 = set(int(x) for x in pt["train"]["source_j"][pt["train"]["target_i"] == 2])
+    assert src_for_2 <= {0, 1}
+    assert 3 not in src_for_2 and 4 not in src_for_2
+    later0 = build_pair_table(
+        cache, {"train": [0], "val": [], "test": []}, max_km=250, min_dt=3, max_dt=45, k_train=1, later=True
+    )
+    assert list(later0["train"]["target_i"]) == [0]
+    assert list(later0["train"]["source_j"]) == [1]
+    assert float(later0["train"]["dt_days"][0]) < 0
+    z, n = 8, 2
+    T = np.zeros((z, n), dtype=np.float32)
+    T[:, 1] = 2.0
+    S = np.zeros((z, n), dtype=np.float32)
+    S[:, 1] = 0.5
+    one = np.array([(1, 0, 0.0, 0.0, 10.0)], dtype=PAIR_DTYPE)
+    pr = persistence_rmse({"temperature": T, "salinity": S}, one)
+    assert abs(pr["T"]["mean"] - 2.0) < 1e-6
+    assert abs(pr["S"]["mean"] - 0.5) < 1e-6
+    cfg = read_json("config/argo/config_argo_stoch_eof_pair.json")
+    validate_config(cfg)
+    syn = read_json("config/argo/config_argo_stoch_eof_pair_synth.json")
+    validate_config(syn)
+    assert syn["data_loader"]["args"]["pair_source"] == "synth"
+    bad = deepcopy(cfg)
+    bad["io"]["pin_arch_dims"] = False
+    try:
+        validate_config(bad)
+        raise AssertionError("pair without pin_arch_dims should fail")
+    except AssertionError as e:
+        assert "pin_arch_dims" in str(e)
+
+
+def test_pair_dataset_index_is_target():
+    from data_loader.data_loaders import PairDataset, _collate_with_index
+    from preproc.pair_table import pack_pair_inputs, PAIR_DTYPE
+    from torch.utils.data import DataLoader
+
+    base = np.zeros((12, 9), dtype=np.float32)
+    pcs = np.zeros((12, 64), dtype=np.float32)
+    pcs[4] = 1.0
+    pairs = np.array([(7, 4, 0.1, -0.2, 15.0), (2, 0, 0.0, 0.0, 9.0), (9, 1, 0.3, 0.4, 30.0)], dtype=PAIR_DTYPE)
+    x = pack_pair_inputs(base, pcs, pairs)
+    assert x.shape == (3, 76)
+    assert np.allclose(x[0, 9:73], 1.0)
+    assert abs(x[0, 75] - 15.0 / 30.0) < 1e-6
+    y = pcs[pairs["target_i"]]
+    ds = PairDataset(torch.tensor(x), torch.tensor(y), pairs["target_i"])
+    assert ds[0][2] == 7
+    synth = np.zeros_like(pcs)
+    synth[4] = 2.0
+    xs = pack_pair_inputs(base, synth, pairs)
+    assert np.allclose(xs[0, 9:73], 2.0)
+    assert np.allclose(x[0, 9:73], 1.0)
+    assert ds[1][2] == 2
+    assert ds[2][2] == 9
+    for i in range(len(ds)):
+        assert ds[i][2] != i
+    _, _, ind = next(iter(DataLoader(ds, batch_size=3, collate_fn=_collate_with_index)))
+    assert ind.tolist() == [7, 2, 9]
+
+
+def test_pair_joint_live():
+    from parse_config import validate_config
+    from preproc.pair_table import LIVE_IN_DIM, PAIR_DTYPE, pack_live_inputs
+    from model.model import PairJointMLP
+    from model.loss import PairDirectLoss
+    from base.util import read_json
+
+    base = np.zeros((5, 9), dtype=np.float32)
+    base[1] = 1.0
+    pairs = np.array([(3, 1, 0.1, -0.2, 15.0)], dtype=PAIR_DTYPE)
+    x = pack_live_inputs(base, pairs)
+    assert x.shape == (1, LIVE_IN_DIM)
+    assert np.allclose(x[0, 9:18], 1.0)
+    assert abs(x[0, 20] - 0.5) < 1e-6
+    m = PairJointMLP(
+        input_dim=21,
+        output_dim=4,
+        dropout_prob=0.0,
+        d_model=16,
+        head_layers=[8],
+        probabilistic=True,
+        n_enc=6,
+        n_sat=12,
+    )
+    xt = torch.randn(3, 21)
+    out = m(xt)
+    assert out.shape == (3, 8)
+    assert m.last_direct.shape == (3, 8)
+    (out.sum() + m.last_direct.sum()).backward()
+    assert m.enc.enc_proj.weight.grad is not None
+    assert m.pair.enc_proj.weight.grad is not None
+    dummy = lambda o, t, i: o[:, :4].pow(2).mean()  # noqa: E731
+    wrap = PairDirectLoss(dummy, m, scale=1.0)
+    m.last_direct = torch.ones(2, 8, requires_grad=True)
+    pair_out = torch.zeros(2, 8, requires_grad=True)
+    loss = wrap(pair_out, None, None)
+    loss.backward()
+    assert pair_out.grad is not None
+    assert m.last_direct.grad is not None
+    live = read_json("config/argo/config_argo_stoch_eof_pair_live.json")
+    validate_config(live)
+    assert live["arch"]["type"] == "PairJointMLP"
+    assert live["arch"]["args"]["input_dim"] == 21
+    assert live["data_loader"]["args"]["pair_source"] == "live"
+    assert live["loss_config"].get("direct_scale", 1.0) == 1.0
+
+
+def test_pair_mix_and_stratified():
+    from parse_config import validate_config
+    from preproc.pair_table import (
+        MIX_IN_DIM,
+        PAIR_DTYPE,
+        build_pair_table,
+        haversine_km,
+        pack_mix_inputs,
+    )
+    from base.util import read_json
+
+    n = 16
+    lat = 25.0 + np.linspace(0.0, 2.0, n)
+    lon = -90.0 + np.linspace(0.0, 2.0, n)
+    juld = 100.0 + np.arange(n, dtype=np.float64) * 8.0
+    cache = {"LAT": lat, "LON": lon, "JULD": juld}
+    split = {"train": list(range(n)), "val": [], "test": []}
+    near = build_pair_table(cache, split, k_train=4, k_eval=1, sample_train="nearest")["train"]
+    strat = build_pair_table(cache, split, k_train=8, k_eval=1, sample_train="stratified")["train"]
+    assert near.size and strat.size
+    for row in strat:
+        i, j = int(row["target_i"]), int(row["source_j"])
+        assert juld[j] < juld[i]
+        assert 3 - 1e-9 <= (juld[i] - juld[j]) <= 45 + 1e-9
+    km_n = haversine_km(lat[near["target_i"]], lon[near["target_i"]], lat[near["source_j"]], lon[near["source_j"]])
+    km_s = haversine_km(lat[strat["target_i"]], lon[strat["target_i"]], lat[strat["source_j"]], lon[strat["source_j"]])
+    assert float(np.mean(km_s)) > float(np.mean(km_n))
+    base = np.zeros((5, 9), dtype=np.float32)
+    argo = np.zeros((5, 64), dtype=np.float32)
+    syn = np.zeros((5, 64), dtype=np.float32)
+    argo[1] = 1.0
+    syn[1] = 2.0
+    argo[3] = 9.0
+    pairs = np.array([(3, 1, 0.1, -0.2, 15.0)], dtype=PAIR_DTYPE)
+    x, y, idx = pack_mix_inputs(base, argo, syn, pairs)
+    assert x.shape == (2, MIX_IN_DIM)
+    assert idx.tolist() == [3, 3]
+    assert np.allclose(y[0], argo[3]) and np.allclose(y[1], argo[3])
+    assert x[0, MIX_IN_DIM - 1] == 1.0 and x[1, MIX_IN_DIM - 1] == -1.0
+    assert np.allclose(x[0, 9:73], 1.0)
+    assert np.allclose(x[1, 9:73], 2.0)
+    mix = read_json("config/argo/config_argo_stoch_eof_pair_mix.json")
+    validate_config(mix)
+    assert mix["arch"]["args"]["input_dim"] == 77
+    assert mix["data_loader"]["args"]["pair_source"] == "mix"
+    assert mix["data_loader"]["args"]["sample_train"] == "stratified"
+
+
 # One list. Progress + timeout live here. No pytest, no resume (resume skips the test that broke).
 TESTS = (
     test_cap_batch_size,
@@ -3086,6 +3491,11 @@ TESTS = (
     test_patch_conv_mlp_point_mode,
     test_patch_conv_mlp_patch_mode,
     test_patch_conv_mlp_residual_mode,
+    test_residual_linear_dropout,
+    test_input_self_attention_residual,
+    test_input_column_groups,
+    test_pc_pred_corr_pearson,
+    test_band_weights_surface,
     test_res_autoencoder_round_trip,
     test_prediction_model_v2,
     test_combined_pca_loss_v2,
@@ -3138,7 +3548,12 @@ TESTS = (
     test_pca_hetero_zspace_identity,
     test_decode_mu_matches_sklearn_inverse,
     test_stoch_eof_recipe,
+    test_pair_table_causal,
+    test_pair_dataset_index_is_target,
+    test_pair_joint_live,
+    test_pair_mix_and_stratified,
     test_acrps_z_configs_validate,
+    test_pc_routing_skip_aux_weights,
     test_resume_monitor_reset_on_run_name_change,
     test_dacov_psd_and_mc,
     test_dacov_sigma_recalib_scales_export,

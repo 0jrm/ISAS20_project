@@ -5,6 +5,25 @@ from base.base_model import BaseModel
 import math
 
 
+class InputSelfAttention(nn.Module):
+    """Each input scalar is a token. Residual MHA, then mean-pool to d_model."""
+
+    def __init__(self, n_in, d_model, n_heads=4, dropout=0.0):
+        super().__init__()
+        if d_model % int(n_heads) != 0:
+            raise ValueError(f"d_model={d_model} must divide n_heads={n_heads}")
+        self.scale = nn.Parameter(torch.empty(n_in, d_model))
+        self.bias = nn.Parameter(torch.zeros(n_in, d_model))
+        nn.init.normal_(self.scale, std=0.02)
+        self.mha = nn.MultiheadAttention(d_model, int(n_heads), dropout=dropout, batch_first=True)
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        tok = x.unsqueeze(-1) * self.scale + self.bias
+        attn, _ = self.mha(tok, tok, tok, need_weights=False)
+        return self.norm(tok + attn).mean(dim=1)
+
+
 class ResidualLinearBlock(nn.Module):
     """Linear block with a projection shortcut when widths differ."""
 
@@ -15,7 +34,7 @@ class ResidualLinearBlock(nn.Module):
         self.skip = nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
 
     def forward(self, x):
-        return F.relu(self.fc(x)) + self.skip(x)
+        return self.dropout(F.relu(self.fc(x))) + self.skip(x)
 
 
 class ResidualConvBlock(nn.Module):
@@ -118,9 +137,17 @@ class PatchConvMLP(BaseModel):
         sigma_min=1e-3,
         n_quantiles=0,
         spatial_pool=True,
+        input_attention=False,
+        attn_heads=4,
+        skip_easy=False,
+        aux_stem=False,
+        sigma_floor=False,
+        routing_spec=None,
+        sigma_floor_scale=1.0,
         **kwargs,
     ):
         super().__init__()
+        kwargs.pop("warp_from_sat", None)
         if head_layers is None:
             head_layers = [1024, 1024]
         if conv_channels is None:
@@ -140,60 +167,72 @@ class PatchConvMLP(BaseModel):
         if self.n_quantiles and self.n_quantiles < 2:
             raise ValueError("n_quantiles must be >= 2 when set")
 
-        self.enc_proj = nn.Linear(n_enc, d_model)
-
-        if self.patch_shape is None:
-            self.sat_proj = nn.Linear(n_sat, d_model)
+        self.input_attention = bool(input_attention)
+        self.attn_heads = int(attn_heads)
+        if self.input_attention:
+            if self.patch_shape is not None:
+                raise ValueError("input_attention is point-mode only")
+            self.in_attn = InputSelfAttention(
+                input_dim, d_model, n_heads=self.attn_heads, dropout=dropout_prob
+            )
+            self.enc_proj = None
+            self.sat_proj = None
             self.conv = None
         else:
-            c, t, h, w = self.patch_shape
-            per_var = t * h * w
-            expected_sat = c * per_var
-            if input_dim != n_enc + expected_sat:
-                raise ValueError(
-                    f"PatchConvMLP input_dim={input_dim} != n_enc({n_enc}) + sat({expected_sat})"
-                )
-            if self.residual:
-                blocks = []
-                in_ch = c
-                for out_ch in conv_channels:
-                    blocks.append(ResidualConvBlock(in_ch, out_ch))
-                    in_ch = out_ch
-                if self.spatial_pool:
-                    blocks.append(nn.AdaptiveAvgPool2d(1))
+            self.in_attn = None
+            self.enc_proj = nn.Linear(n_enc, d_model)
+            if self.patch_shape is None:
+                self.sat_proj = nn.Linear(n_sat, d_model)
+                self.conv = None
+            else:
+                c, t, h, w = self.patch_shape
+                per_var = t * h * w
+                expected_sat = c * per_var
+                if input_dim != n_enc + expected_sat:
+                    raise ValueError(
+                        f"PatchConvMLP input_dim={input_dim} != n_enc({n_enc}) + sat({expected_sat})"
+                    )
+                if self.residual:
+                    blocks = []
+                    in_ch = c
+                    for out_ch in conv_channels:
+                        blocks.append(ResidualConvBlock(in_ch, out_ch))
+                        in_ch = out_ch
+                    if self.spatial_pool:
+                        blocks.append(nn.AdaptiveAvgPool2d(1))
+                        sat_in = conv_channels[-1]
+                    else:
+                        sat_in = conv_channels[-1] * h * w
+                    self.conv = nn.Sequential(*blocks)
+                elif self.spatial_pool:
+                    layers = []
+                    in_ch = c
+                    for out_ch in conv_channels:
+                        layers.extend(
+                            [
+                                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                                nn.ReLU(inplace=True),
+                            ]
+                        )
+                        in_ch = out_ch
+                    layers.append(nn.AdaptiveAvgPool2d(1))
+                    self.conv = nn.Sequential(*layers)
                     sat_in = conv_channels[-1]
                 else:
-                    sat_in = conv_channels[-1] * h * w
-                self.conv = nn.Sequential(*blocks)
-            elif self.spatial_pool:
-                layers = []
-                in_ch = c
-                for out_ch in conv_channels:
-                    layers.extend(
-                        [
-                            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                            nn.ReLU(inplace=True),
-                        ]
-                    )
-                    in_ch = out_ch
-                layers.append(nn.AdaptiveAvgPool2d(1))
-                self.conv = nn.Sequential(*layers)
-                sat_in = conv_channels[-1]
-            else:
-                kernels, oh, ow = _valid_conv_kernels(h, w, len(conv_channels))
-                layers = []
-                in_ch = c
-                for out_ch, kk in zip(conv_channels, kernels):
-                    layers.extend(
-                        [
-                            nn.Conv2d(in_ch, out_ch, kernel_size=kk, padding=0),
-                            nn.ReLU(inplace=True),
-                        ]
-                    )
-                    in_ch = out_ch
-                self.conv = nn.Sequential(*layers)
-                sat_in = conv_channels[-1] * oh * ow
-            self.sat_proj = nn.Linear(sat_in, d_model)
+                    kernels, oh, ow = _valid_conv_kernels(h, w, len(conv_channels))
+                    layers = []
+                    in_ch = c
+                    for out_ch, kk in zip(conv_channels, kernels):
+                        layers.extend(
+                            [
+                                nn.Conv2d(in_ch, out_ch, kernel_size=kk, padding=0),
+                                nn.ReLU(inplace=True),
+                            ]
+                        )
+                        in_ch = out_ch
+                    self.conv = nn.Sequential(*layers)
+                    sat_in = conv_channels[-1] * oh * ow
+                self.sat_proj = nn.Linear(sat_in, d_model)
 
         if self.residual:
             head_blocks = []
@@ -218,6 +257,58 @@ class PatchConvMLP(BaseModel):
             if not self.probabilistic:
                 self.head = nn.Sequential(self.head_trunk, self.mu_out)
             self.head_out = None
+        self._install_routing(
+            skip_easy=bool(skip_easy),
+            aux_stem=bool(aux_stem),
+            sigma_floor=bool(sigma_floor),
+            routing_spec=routing_spec,
+            sigma_floor_scale=float(sigma_floor_scale),
+        )
+
+    def _install_routing(self, *, skip_easy, aux_stem, sigma_floor, routing_spec, sigma_floor_scale):
+        from model.pc_routing import (
+            EASY_INPUT_NAMES,
+            EASY_PC_IDX,
+            cols_for,
+            load_spec,
+        )
+
+        self.skip_easy = bool(skip_easy)
+        self.aux_stem = bool(aux_stem)
+        self.sigma_floor = bool(sigma_floor)
+        self.aux_out = None
+        if not (self.skip_easy or self.aux_stem or self.sigma_floor):
+            return
+        spec = load_spec(routing_spec) if routing_spec is not None else None
+        easy_pc = list(EASY_PC_IDX)
+        if spec is not None:
+            easy_pc = [int(i) for i in spec.get("easy_pc_idx", easy_pc)]
+        self.register_buffer("easy_pc_idx", torch.tensor(easy_pc, dtype=torch.long))
+        if self.skip_easy:
+            if spec is None:
+                raise ValueError("skip_easy requires routing_spec")
+            names = spec.get("easy_input_names", list(EASY_INPUT_NAMES))
+            self.register_buffer(
+                "easy_col_idx",
+                torch.tensor(cols_for(self.input_dim, names), dtype=torch.long),
+            )
+            self.register_buffer("skip_W", torch.tensor(spec["W"], dtype=torch.float32))
+            self.register_buffer("skip_b", torch.tensor(spec["b"], dtype=torch.float32))
+            with torch.no_grad():
+                self.mu_out.weight.data[easy_pc, :] = 0
+                if self.mu_out.bias is not None:
+                    self.mu_out.bias.data[easy_pc] = 0
+        if self.aux_stem:
+            self.aux_out = nn.Linear(self.n_sat, self.output_dim)
+            nn.init.zeros_(self.aux_out.weight)
+            nn.init.zeros_(self.aux_out.bias)
+        if self.sigma_floor:
+            if spec is None:
+                raise ValueError("sigma_floor requires routing_spec")
+            floor = torch.tensor(spec["sigma_floor_k"], dtype=torch.float32) * float(sigma_floor_scale)
+            if int(floor.numel()) != self.output_dim:
+                raise ValueError(f"sigma_floor_k len {int(floor.numel())} != output_dim {self.output_dim}")
+            self.register_buffer("sigma_floor_k", floor)
 
     def _wire_output_heads(self, prev: int, output_dim: int) -> None:
         if self.n_quantiles:
@@ -254,13 +345,17 @@ class PatchConvMLP(BaseModel):
         return self.sat_proj(sat)
 
     def _trunk(self, x):
-        enc = x[:, : self.n_enc]
-        sat_flat = x[:, self.n_enc :]
-        h = self.enc_proj(enc)
-        if self.patch_shape is None:
-            h = h + self._encode_sat_point(sat_flat)
+        if self.in_attn is not None:
+            h = self.in_attn(x)
         else:
-            h = h + self._encode_sat_patch(sat_flat)
+            enc = x[:, : self.n_enc]
+            sat_flat = x[:, self.n_enc :]
+            h = self.enc_proj(enc)
+            if self.patch_shape is None:
+                if not getattr(self, "aux_stem", False):
+                    h = h + self._encode_sat_point(sat_flat)
+            else:
+                h = h + self._encode_sat_patch(sat_flat)
         if self.head_blocks is not None:
             for block in self.head_blocks:
                 h = block(h)
@@ -272,13 +367,27 @@ class PatchConvMLP(BaseModel):
 
         h = self._trunk(x)
         if not self.probabilistic:
-            return self.mu_out(h)
+            return self._route_mu(x, self.mu_out(h))
         if self.n_quantiles:
             raw = self.mu_out(h).view(h.size(0), self.output_dim, self.n_quantiles)
             return noncrossing_quantiles(raw).reshape(h.size(0), -1)
-        mu = self.mu_out(h)
+        mu = self._route_mu(x, self.mu_out(h))
         sigma = softplus_sigma(self.sigma_out(h), self.sigma_min)
+        if getattr(self, "sigma_floor", False):
+            sigma = torch.maximum(sigma, self.sigma_floor_k)
         return torch.cat([mu, sigma], dim=-1)
+
+    def _route_mu(self, x, mu):
+        if getattr(self, "skip_easy", False):
+            easy = x.index_select(1, self.easy_col_idx)
+            mu = mu.clone()
+            mu[:, self.easy_pc_idx] = mu[:, self.easy_pc_idx] + easy @ self.skip_W + self.skip_b
+        if getattr(self, "aux_stem", False) and self.aux_out is not None:
+            delta = self.aux_out(x[:, self.n_enc :])
+            keep = torch.ones(self.output_dim, device=mu.device, dtype=mu.dtype)
+            keep[self.easy_pc_idx] = 0
+            mu = mu + delta * keep
+        return mu
 
 
 class PatchMaskConvMLP(BaseModel):
@@ -894,6 +1003,42 @@ class FieldUNet(BaseModel):
         if pad_h or pad_w:
             out = out[..., :h, :w]
         return out
+
+
+class PairJointMLP(BaseModel):
+    """Live 9-d encoder + 76-d pair head. Input is target 9-d ‖ source 9-d ‖ Δ."""
+
+    joint_direct = True
+
+    def __init__(self, input_dim=21, output_dim=64, enc_checkpoint=None, **kwargs):
+        super().__init__()
+        kwargs.pop("n_enc", None)
+        kwargs.pop("n_sat", None)
+        self.input_dim = int(input_dim)
+        self.output_dim = int(output_dim)
+        pair_in = 9 + int(output_dim) + 3
+        self.enc = PatchConvMLP(input_dim=9, output_dim=output_dim, n_enc=6, n_sat=3, **kwargs)
+        self.pair = PatchConvMLP(
+            input_dim=pair_in, output_dim=output_dim, n_enc=6, n_sat=pair_in - 6, **kwargs
+        )
+        self.sigma_out = self.pair.sigma_out
+        self.last_direct = None
+        if enc_checkpoint:
+            blob = torch.load(enc_checkpoint, map_location="cpu", weights_only=False)
+            sd = blob.get("model_state_dict", blob.get("state_dict", blob))
+            self.enc.load_state_dict(sd, strict=True)
+
+    def set_sigma_trainable(self, trainable: bool) -> None:
+        self.enc.set_sigma_trainable(trainable)
+        self.pair.set_sigma_trainable(trainable)
+
+    def forward(self, x):
+        tgt, src, dlt = x[:, :9], x[:, 9:18], x[:, 18:21]
+        both = self.enc(torch.cat([tgt, src], dim=0))
+        b = tgt.shape[0]
+        self.last_direct = both[:b]
+        mu_src = both[b:, : self.output_dim]
+        return self.pair(torch.cat([tgt, mu_src, dlt], dim=1))
 
 
 # After FieldUNet: residual.py imports PatchConvMLP from this module.

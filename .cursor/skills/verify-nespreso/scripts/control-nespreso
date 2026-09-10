@@ -6,7 +6,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SKILL_DIR=$(cd "$HERE/.." && pwd)
 REPO=$(cd "$SKILL_DIR/../../.." && pwd)
 APP="$REPO/NeSPReSO2_onTemplate"
-ARTIFACTS="$SKILL_DIR/artifacts"
+ARTIFACTS="${NESPRO_VERIFY_ARTIFACTS:-$SKILL_DIR/artifacts}"
 CPUS="${NESPRO_VERIFY_CPUS:-8}"
 RUN_ID="${NESPRO_VERIFY_ID:-}"
 

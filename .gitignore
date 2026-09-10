@@ -46,3 +46,4 @@ data/*
 
 # Verification transcripts (skill keeps these after cleanup)
 .cursor/skills/verify-nespreso/artifacts/
+.cursor/skills/verify-nespreso-da/artifacts/

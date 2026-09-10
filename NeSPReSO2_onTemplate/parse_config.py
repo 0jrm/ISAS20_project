@@ -90,6 +90,15 @@ def validate_config(config):
         assert ve in ("temperature", "salinity", "concat"), (
             f"loss_config.val_ence must be temperature|salinity|concat, got {ve!r}"
         )
+    bw = loss_cfg.get("band_weights")
+    if bw is not None:
+        assert isinstance(bw, (list, tuple)) and len(bw) == 4, (
+            "loss_config.band_weights must be 4 numbers (0-50, 50-200, 200-800, >800)"
+        )
+        assert all(isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0 for x in bw), (
+            "loss_config.band_weights must be non-negative numbers"
+        )
+        assert sum(bw) > 0, "loss_config.band_weights must sum to > 0"
     if crps_space == "physical":
         assert mode in ("combined", "pc_mse_only", "heave_residual", "heave_residual_fast"), (
             "crps_space=physical requires combined|pc_mse_only|heave_residual|heave_residual_fast"
@@ -115,6 +124,11 @@ def validate_config(config):
         assert ve in ("temperature", "salinity", "concat"), (
             f"loss_config.val_ence must be temperature|salinity|concat, got {ve!r}"
         )
+    if arch_args.get("skip_easy") or arch_args.get("sigma_floor") or loss_cfg.get("pc1_pin_scale"):
+        spec = arch_args.get("routing_spec") or loss_cfg.get("routing_spec")
+        assert spec, "PC-routing flags require arch.args.routing_spec or loss_config.routing_spec"
+    if loss_cfg.get("pc_crps_weights") is True:
+        assert loss_cfg.get("routing_spec"), "pc_crps_weights=true requires loss_config.routing_spec"
     if mode == "density_spice" and loss_cfg.get("prob_mode"):
         assert loss_cfg["prob_mode"] in VALID_PROB_MODES, (
             f"loss_config.prob_mode must be one of {VALID_PROB_MODES}"
@@ -259,6 +273,29 @@ def validate_config(config):
             "io.hycom_interfaces JSON must include scorecard_reference_p_ifc "
             "(blkdat.input is target densities, not interfaces)"
         )
+    pair = bool(dl.get("pair") or (config.get("io") or {}).get("pair"))
+    if pair:
+        assert (config.get("io") or {}).get("pin_arch_dims"), (
+            "pair requires io.pin_arch_dims=true"
+        )
+        dim = int(arch_args["input_dim"])
+        src = str(dl.get("pair_source", "argo"))
+        sample_train = str(dl.get("sample_train", "nearest"))
+        assert src in ("argo", "synth", "live", "mix"), f"pair_source must be argo|synth|live|mix, got {src!r}"
+        assert sample_train in ("nearest", "stratified"), (
+            f"sample_train must be nearest|stratified, got {sample_train!r}"
+        )
+        if src == "synth":
+            assert dl.get("synth_pcs_path"), "pair_source=synth requires synth_pcs_path"
+            assert dim == 9 + 64 + 3, f"pair input_dim must be 76 (9+64+3), got {dim}"
+        elif src == "mix":
+            assert dl.get("synth_pcs_path"), "pair_source=mix requires synth_pcs_path"
+            assert dim == 9 + 64 + 3 + 1, f"mix pair input_dim must be 77 (9+64+3+flag), got {dim}"
+        elif src == "live":
+            assert arch_type == "PairJointMLP", "pair_source=live requires arch.type PairJointMLP"
+            assert dim == 9 + 9 + 3, f"live pair input_dim must be 21, got {dim}"
+        else:
+            assert dim == 9 + 64 + 3, f"pair input_dim must be 76 (9+64+3), got {dim}"
 
 
 class ConfigParser:

@@ -18,6 +18,18 @@ class _ConsoleEpochFilter(logging.Filter):
 _console_filter_attached = False
 
 
+def should_reset_monitor_best(checkpoint: dict, current_name) -> bool:
+    """True when the checkpoint belongs to a different run (e.g. stage-1 → stage-2)."""
+    cfg = checkpoint.get("config")
+    if cfg is None:
+        return False
+    try:
+        ckpt_name = cfg["name"]
+    except Exception:
+        return False
+    return str(ckpt_name) != str(current_name)
+
+
 class BaseTrainer:
     """
     Base class for all trainers
@@ -220,8 +232,16 @@ class BaseTrainer:
         # Trusted local checkpoints may contain ConfigParser; weights_only=False is intentional.
         checkpoint = torch.load(resume_path, weights_only=False)
         self.start_epoch = checkpoint['epoch'] + 1
-        self.mnt_best = checkpoint['monitor_best']
-        self.best_train_loss = checkpoint.get('best_train_loss', inf)
+        try:
+            cur_name = self.config["name"]
+        except Exception:
+            cur_name = None
+        if should_reset_monitor_best(checkpoint, cur_name):
+            self.mnt_best = inf if self.mnt_mode == "min" else -inf
+            self.logger.info("Reset monitor_best (resuming into a different run: %s)", cur_name)
+        else:
+            self.mnt_best = checkpoint["monitor_best"]
+        self.best_train_loss = checkpoint.get("best_train_loss", inf)
 
         # load architecture params from checkpoint.
         if checkpoint['config']['arch'] != self.config['arch']:

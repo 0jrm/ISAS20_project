@@ -1,4 +1,4 @@
-"""Frozen physical + probabilistic evaluation metrics (evalphys v1.2.0)."""
+"""Frozen physical + probabilistic evaluation metrics (evalphys v1.3.0)."""
 
 from evalphys.calibration import (
     apply_strata,
@@ -16,15 +16,19 @@ from evalphys.metrics import (
     drhodz_rmse,
     heave_vs_shape_split,
     isotherm_depth,
+    isopycnal_ts,
     max_n2_depth,
     mixed_layer_depth,
+    ocean_heat_content,
     sigma0_monotonicity_violations,
+    spatial_sigma_consistency,
     static_stability_violations,
     steric_height_cm,
     steric_vs_adt,
     summarize_physical,
     to_teos10,
     ts_rmse_by_band,
+    water_mass_rmse,
 )
 
 __all__ = [
@@ -43,11 +47,14 @@ __all__ = [
     "get_gsw",
     "heave_vs_shape_split",
     "isotherm_depth",
+    "isopycnal_ts",
     "max_n2_depth",
     "load_manifest",
     "mixed_layer_depth",
+    "ocean_heat_content",
     "pit_histogram",
     "sigma0_monotonicity_violations",
+    "spatial_sigma_consistency",
     "spread_skill",
     "static_stability_violations",
     "steric_height_cm",
@@ -56,5 +63,6 @@ __all__ = [
     "summarize_physical",
     "to_teos10",
     "ts_rmse_by_band",
+    "water_mass_rmse",
     "write_manifest",
 ]

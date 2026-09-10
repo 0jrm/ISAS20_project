@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Drive NeSPReSO vs HYCOM xb / DA-candidate CLI. Never kill by process name.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+SKILL_DIR=$(cd "$HERE/.." && pwd)
+REPO=$(cd "$SKILL_DIR/../../.." && pwd)
+APP="$REPO/NeSPReSO2_onTemplate"
+CTRL="$REPO/.cursor/skills/verify-nespreso/scripts/control-nespreso"
+export NESPRO_VERIFY_ARTIFACTS="${NESPRO_VERIFY_ARTIFACTS:-$SKILL_DIR/artifacts}"
+
+usage() {
+  cat <<'EOF'
+control-nespreso-da doctor
+control-nespreso-da cli [--gpu] [--cpus N] -- <command...>
+control-nespreso-da cleanup
+
+Env: NESPRO_VERIFY_ID, NESPRO_VERIFY_CPUS (default 8),
+     NESPRO_VERIFY_SRUN=0, NESPRESO_PY, NESPRO_VERIFY_ARTIFACTS.
+EOF
+}
+
+cmd_doctor() {
+  local fail=0
+  echo "da_skill=$SKILL_DIR"
+  echo "artifacts=$NESPRO_VERIFY_ARTIFACTS"
+  if [[ ! -x "$CTRL" ]]; then
+    if [[ -f "$CTRL" ]]; then
+      chmod +x "$CTRL"
+    else
+      echo "fail control-nespreso missing at $CTRL"
+      return 1
+    fi
+  fi
+  echo "ok control-nespreso=$CTRL"
+  if [[ ! -f "$APP/scripts/compare_xb_argo.py" ]]; then
+    echo "fail compare_xb_argo.py missing"
+    fail=1
+  else
+    echo "ok compare_xb_argo=$APP/scripts/compare_xb_argo.py"
+  fi
+  if [[ ! -f "$APP/scripts/run_osse.py" ]]; then
+    echo "fail run_osse.py missing"
+    fail=1
+  else
+    echo "ok run_osse=$APP/scripts/run_osse.py"
+  fi
+  if [[ ! -f "$HERE/offline_asserts.py" ]]; then
+    echo "fail offline_asserts.py missing"
+    fail=1
+  else
+    echo "ok offline_asserts=$HERE/offline_asserts.py"
+  fi
+  if [[ -f "$REPO/profiles_xb.nc" ]]; then
+    echo "ok profiles_xb=$REPO/profiles_xb.nc"
+  else
+    echo "warn profiles_xb.nc missing (compare-helpers still runnable; xb-rescore and live blend skip)"
+  fi
+  local pred="$REPO/reports/xb_argo_compare/profiles_nes.nc"
+  local stats="$REPO/reports/xb_argo_compare/stats.json"
+  if [[ -f "$pred" ]]; then
+    echo "ok profiles_nes=$pred"
+  else
+    echo "warn profiles_nes.nc missing under reports/xb_argo_compare"
+  fi
+  if [[ -f "$stats" ]]; then
+    echo "ok stats_json=$stats"
+  else
+    echo "warn stats.json missing under reports/xb_argo_compare"
+  fi
+  set +e
+  "$CTRL" doctor
+  local rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    fail=1
+  fi
+  return "$fail"
+}
+
+cmd_cli() {
+  exec "$CTRL" cli "$@"
+}
+
+cmd_cleanup() {
+  exec "$CTRL" cleanup
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 2
+  fi
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    doctor) cmd_doctor "$@" ;;
+    cli) cmd_cli "$@" ;;
+    cleanup) cmd_cleanup "$@" ;;
+    -h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

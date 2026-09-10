@@ -7,7 +7,7 @@ description: Drive NeSPReSO v2 as a user does — HPC CLI (selfcheck, train, eva
 
 Offline PyTorch batch ML. The user-facing surface is the CLI under `NeSPReSO2_onTemplate/`, run on Skynet with conda env `nespreso` and CPU-capped `srun`. There is no app server. TensorBoard (`tensorboard --logdir saved/log --port 6006`) is a log viewer only.
 
-Never mix a checkpoint with a cache it was not trained on. Never headline raw `eval_run.py` RMSE across `isas20` vs `argo_v2`; that path is `eval_matched.py`.
+Never mix a checkpoint with a cache it was not trained on. Never headline raw `eval_run.py` RMSE across `isas20` vs `argo_v2`; that path is `eval_matched.py`. NeSPReSO vs HYCOM xb / DA-candidate scoring is [verify-nespreso-da](../verify-nespreso-da/SKILL.md).
 
 ## Launch
 

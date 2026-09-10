@@ -122,7 +122,8 @@ def ensure_cache(config):
         inj = len(enso_keys_wanted(ip))
         if cache_dim != expected_dim and cache_dim + inj == expected_dim:
             cache_dim = expected_dim  # dataloader splices ONI/RONI
-        if cache_dim != expected_dim:
+        pair = bool(config.config["data_loader"]["args"].get("pair") or io_cfg.get("pair"))
+        if cache_dim != expected_dim and not pair:
             raise ValueError(
                 f"cache input dim {cache['inputs'].shape[1]} != expected {expected_dim} "
                 f"(l3={l3_cfg.get('enabled')}, spatial_pad={io_cfg.get('spatial_pad')}, "
@@ -149,6 +150,8 @@ def ensure_cache(config):
         config.config["data_loader"]["args"]["input_params"] = config.config["input_params"]
     if io_cfg.get("v2_src") and not config.config["data_loader"]["args"].get("v2_src"):
         config.config["data_loader"]["args"]["v2_src"] = io_cfg["v2_src"]
+    if io_cfg.get("pair"):
+        config.config["data_loader"]["args"]["pair"] = True
     return cache_path
 
 
@@ -347,13 +350,20 @@ def main(config):
         lon=cache["LON"],
         profiles=heave_profiles,
     )
+    core = model.module if hasattr(model, "module") else model
     if getattr(criterion, "raw_targets", False) and hasattr(criterion, "sigma_init_bias"):
-        core = model.module if hasattr(model, "module") else model
         if getattr(core, "sigma_out", None) is not None:
             bias = criterion.sigma_init_bias().to(device=core.sigma_out.bias.device)
             if bias.shape == core.sigma_out.bias.shape:
                 core.sigma_out.bias.data.copy_(bias)
                 logger.info("stoch_eof sigma bias init from sqrt(explained_variance_)")
+    if getattr(core, "joint_direct", False):
+        from model.loss import PairDirectLoss
+
+        criterion = PairDirectLoss(
+            criterion, core, scale=float(loss_cfg.get("direct_scale", 1.0))
+        )
+        logger.info("pair joint: L_pair + direct_scale * L_enc(target 9-d)")
     if performance.get("compile_loss"):
         criterion = maybe_compile_module(criterion, True)
         logger.info("torch.compile enabled on loss")

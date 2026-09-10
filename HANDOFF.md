@@ -1,5 +1,7 @@
 # Session handoff — dissertation data foundation
 
+**Yearly 2026 synthesis (objectives + method):** [`HANDOFF-2026.md`](HANDOFF-2026.md)
+
 **Branch:** `residual_cube`  
 **Updated:** 2026-07-20  
 **Code home:** [`NeSPReSO2_onTemplate/`](NeSPReSO2_onTemplate/)  

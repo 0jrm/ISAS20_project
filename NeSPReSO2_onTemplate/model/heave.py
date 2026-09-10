@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn as nn
 
 from base.base_model import BaseModel
 from model.warp import CANON_D26_M, CANON_MLD_M, MIN_LAYER_M
@@ -33,6 +34,7 @@ class HeaveResidual(BaseModel):
         sigma_min=1e-3,
         n_quantiles=0,
         spatial_pool=True,
+        warp_from_sat=False,
         **kwargs,
     ):
         super().__init__()
@@ -42,6 +44,8 @@ class HeaveResidual(BaseModel):
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
         self.probabilistic = bool(probabilistic)
+        self.warp_from_sat = bool(warp_from_sat)
+        kwargs.pop("warp_from_sat", None)
         self.backbone = PatchConvMLP(
             input_dim=input_dim,
             output_dim=output_dim,
@@ -58,6 +62,17 @@ class HeaveResidual(BaseModel):
             **kwargs,
         )
         self._zero_warp_mu()
+        self.warp_sat = None
+        if self.warp_from_sat:
+            from model.pc_routing import cols_for
+
+            self.warp_sat = nn.Linear(2, self.n_warp)
+            nn.init.zeros_(self.warp_sat.weight)
+            nn.init.zeros_(self.warp_sat.bias)
+            self.register_buffer(
+                "warp_sat_idx",
+                torch.tensor(cols_for(self.input_dim, ("sst", "ssh")), dtype=torch.long),
+            )
 
     def _zero_warp_mu(self):
         """Start at canonical MLD/D26 (raw=0). ponytail: tanh floor had vanishing grad."""
@@ -70,7 +85,13 @@ class HeaveResidual(BaseModel):
                 lin.bias[: self.n_warp].zero_()
 
     def forward(self, x):
-        return self.backbone(x)
+        out = self.backbone(x)
+        if self.warp_sat is None:
+            return out
+        w = self.warp_sat(x.index_select(1, self.warp_sat_idx))
+        out = out.clone()
+        out[:, : self.n_warp] = w
+        return out
 
     def set_sigma_trainable(self, trainable: bool) -> None:
         self.backbone.set_sigma_trainable(trainable)

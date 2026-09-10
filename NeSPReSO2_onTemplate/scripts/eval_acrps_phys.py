@@ -225,11 +225,24 @@ def main() -> int:
         "test_recalib": test_cal,
         "test_ence_T_raw": test_raw["temperature"]["ence"],
         "test_ence_T_recalib": test_cal["temperature"]["ence"],
+        "test_ence_T_pass_raw": (
+            test_raw["temperature"]["ence"] is not None
+            and test_raw["temperature"]["ence"] < ENCE_MAX
+        ),
         "test_ence_T_pass_recalib": (
             test_cal["temperature"]["ence"] is not None
             and test_cal["temperature"]["ence"] < ENCE_MAX
         ),
-        "note": "α fitted on val; picker = val ENCE(T). per-level α omitted.",
+        "picker_hurt_test": (
+            test_cal["temperature"]["ence"] is not None
+            and test_raw["temperature"]["ence"] is not None
+            and test_cal["temperature"]["ence"] > test_raw["temperature"]["ence"]
+        ),
+        "note": (
+            "α fitted on val; picker = min val ENCE(T). "
+            "Headline test_ence_T_raw. test_recalib is stretched σ; "
+            "if picker_hurt_test, the picker overfit val."
+        ),
     }
     out = Path(args.out)
     if not out.is_absolute():
@@ -238,7 +251,8 @@ def main() -> int:
     out.write_text(json.dumps(payload, indent=2) + "\n")
     print(json.dumps({k: payload[k] for k in (
         "best_recipe", "test_ence_T_raw", "test_ence_T_recalib",
-        "test_ence_T_pass_recalib", "n_test",
+        "test_ence_T_pass_raw", "test_ence_T_pass_recalib",
+        "picker_hurt_test", "n_test",
     )}, indent=2))
     print(f"wrote {out}")
     return 0

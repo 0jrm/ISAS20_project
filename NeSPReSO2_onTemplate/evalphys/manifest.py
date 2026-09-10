@@ -61,10 +61,18 @@ def default_manifest() -> dict:
             },
             {
                 "version": "1.2.0",
-                "date": date.today().isoformat(),
+                "date": "2026-08-20",
                 "note": (
                     "Additive: max N² depth, heave-vs-shape T split, calibrated steric vs ADT "
                     "(Loop Current 2 cm RMS gate)."
+                ),
+            },
+            {
+                "version": "1.3.0",
+                "date": date.today().isoformat(),
+                "note": (
+                    "Additive: OHC (0–100/300/700 m), σ₀/spice RMSE, isopycnal T/S, "
+                    "spatial σ consistency (1° ENCE/coverage)."
                 ),
             },
         ],

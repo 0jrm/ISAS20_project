@@ -80,6 +80,16 @@ def main() -> int:
     )
     ap.add_argument("--parent-tag", default=None, help="shared run parent id")
     ap.add_argument("--workdir", default=None, help="temp dir for stage configs")
+    ap.add_argument(
+        "--resume",
+        default=None,
+        help="resume stage-1 from this .pth; if path contains {tag}_s2, skip stage-1 and resume stage-2",
+    )
+    ap.add_argument(
+        "--stage2-only",
+        action="store_true",
+        help="skip stage-1 training; run stage-2 from the latest stage-1 checkpoint",
+    )
     args = ap.parse_args()
 
     base = _load_json(Path(args.config))
@@ -104,22 +114,33 @@ def main() -> int:
     if args.stage1_epochs is not None:
         s1.setdefault("trainer", {})["epochs"] = int(args.stage1_epochs)
     s1.setdefault("trainer", {})["save_period"] = 1
+    # Stage-1 is μ MSE; val_loss includes frozen-σ junk. Stop on profile RMSE.
+    s1.setdefault("trainer", {})["monitor"] = "min val_profile_rmse"
     s1_path = work / "stage1.json"
     _write_json(s1_path, s1)
 
     print(f"=== Stage 1 (μ MSE, σ frozen) → {parent}_s1 ===", flush=True)
-    # Use subprocess-style via train.main for cleaner ConfigParser
     import subprocess
 
-    cmd1 = [
-        sys.executable,
-        str(_ROOT / "train.py"),
-        "-c",
-        str(s1_path),
-        "-id",
-        f"{parent}_s1",
-    ]
-    subprocess.check_call(cmd1, cwd=str(_ROOT))
+    resume_s2 = args.resume if args.resume and f"{parent}_s2" in str(args.resume) else None
+    skip_s1 = resume_s2 is not None or bool(args.stage2_only)
+    if not skip_s1:
+        cmd1 = [
+            sys.executable,
+            str(_ROOT / "train.py"),
+            "-c",
+            str(s1_path),
+            "-id",
+            f"{parent}_s1",
+        ]
+        if args.resume:
+            cmd1 += ["-r", args.resume]
+            print(f"resuming stage 1 from {args.resume}", flush=True)
+        subprocess.check_call(cmd1, cwd=str(_ROOT))
+    elif resume_s2 is not None:
+        print(f"skip stage 1 (resume stage 2 from {resume_s2})", flush=True)
+    else:
+        print("skip stage 1 (--stage2-only)", flush=True)
     s1_ckpt = _find_latest_ckpt(_ROOT / "saved", f"{parent}_s1")
     print(f"Stage 1 checkpoint: {s1_ckpt}", flush=True)
 
@@ -160,6 +181,7 @@ def main() -> int:
     _write_json(s2_path, s2)
 
     print(f"=== Stage 2 ({args.prob_mode}, σ unfrozen, lr×0.1) → {parent}_s2 ===", flush=True)
+    s2_start = resume_s2 or str(s1_ckpt)
     cmd2 = [
         sys.executable,
         str(_ROOT / "train.py"),
@@ -168,7 +190,7 @@ def main() -> int:
         "-id",
         f"{parent}_s2",
         "-r",
-        str(s1_ckpt),
+        s2_start,
     ]
     subprocess.check_call(cmd2, cwd=str(_ROOT))
     s2_ckpt = _find_latest_ckpt(_ROOT / "saved", f"{parent}_s2")

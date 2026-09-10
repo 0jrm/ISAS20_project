@@ -592,6 +592,7 @@ class PCAHeteroPhysLoss(nn.Module):
         freeze_sigma: bool = False,
         equal_var: bool = True,
         band_equal: bool = True,
+        band_weights=None,
         pc_crps_scale: float = 0.1,
         pres_levels: np.ndarray | None = None,
         val_ence: str = "temperature",
@@ -603,6 +604,9 @@ class PCAHeteroPhysLoss(nn.Module):
         var_scale: bool = False,
         targets=None,
         train_idx=None,
+        pc_crps_weights=None,
+        pc1_pin_scale: float = 0.0,
+        routing_spec=None,
     ):
         super().__init__()
         if prob_mode not in VALID_PROB_MODES:
@@ -621,6 +625,15 @@ class PCAHeteroPhysLoss(nn.Module):
         self.freeze_sigma = bool(freeze_sigma)
         self.equal_var = bool(equal_var)
         self.band_equal = bool(band_equal)
+        if band_weights is None:
+            self.band_w = None
+        else:
+            bw = [float(x) for x in band_weights]
+            if len(bw) != 4:
+                raise ValueError(f"band_weights must have 4 entries, got {len(bw)}")
+            if any(x < 0 for x in bw) or sum(bw) <= 0:
+                raise ValueError("band_weights must be non-negative with positive sum")
+            self.band_w = bw
         self.identity = bool(identity)
         self.raw_targets = bool(raw_targets) and not self.identity
         self.truncation_floor = bool(truncation_floor) and not self.identity
@@ -711,6 +724,35 @@ class PCAHeteroPhysLoss(nn.Module):
             )
         else:
             self.pres_levels = None
+        self.pc1_pin_scale = float(pc1_pin_scale or 0.0)
+        self.needs_inputs = self.pc1_pin_scale > 0
+        if pc_crps_weights is not None and pc_crps_weights is not False:
+            from model.pc_routing import load_spec
+
+            if isinstance(pc_crps_weights, (list, tuple, np.ndarray)):
+                w = np.asarray(pc_crps_weights, dtype=np.float32)
+            else:
+                src = routing_spec if pc_crps_weights is True else pc_crps_weights
+                if src is None:
+                    raise ValueError("pc_crps_weights=true requires routing_spec")
+                w = np.asarray(load_spec(src)["w_k"], dtype=np.float32)
+            if int(w.shape[0]) != self.d:
+                raise ValueError(f"pc_crps_weights len {w.shape[0]} != d {self.d}")
+            self.register_buffer("pc_w", torch.tensor(w, dtype=torch.float32, device=dev).view(1, -1))
+        if self.pc1_pin_scale:
+            from model.pc_routing import load_spec
+
+            if routing_spec is None:
+                raise ValueError("pc1_pin_scale requires routing_spec")
+            pin = load_spec(routing_spec)["pc1_ssh"]
+            self.register_buffer(
+                "pc1_t_ab",
+                torch.tensor(pin["t"], dtype=torch.float32, device=dev),
+            )
+            self.register_buffer(
+                "pc1_s_ab",
+                torch.tensor(pin["s"], dtype=torch.float32, device=dev),
+            )
 
     def _components(self, name):
         return getattr(self, f"{name}_components")
@@ -832,7 +874,8 @@ class PCAHeteroPhysLoss(nn.Module):
 
         z = self.pres_levels.to(device=level_loss.device, dtype=level_loss.dtype)
         terms = []
-        for lo, hi in DEPTH_BANDS:
+        weights = []
+        for i, (lo, hi) in enumerate(DEPTH_BANDS):
             if np.isfinite(hi):
                 m = (z >= lo) & (z < hi)
             else:
@@ -840,9 +883,12 @@ class PCAHeteroPhysLoss(nn.Module):
             ww = w[:, m]
             if bool(ww.any()):
                 terms.append(x[:, m].sum() / ww.sum().clamp_min(1.0))
+                weights.append(1.0 if self.band_w is None else self.band_w[i])
         if not terms:
             return x.sum() / w.sum().clamp_min(1.0)
-        return torch.stack(terms).mean()
+        stacked = torch.stack(terms)
+        wt = torch.tensor(weights, device=stacked.device, dtype=stacked.dtype)
+        return (stacked * wt).sum() / wt.sum().clamp_min(1e-12)
 
     def _whiten_pcs(self, z: torch.Tensor) -> torch.Tensor:
         return z / self.pc_rms_cat.clamp_min(1e-6)
@@ -857,11 +903,31 @@ class PCAHeteroPhysLoss(nn.Module):
             if sigma_lat is not None:
                 sigma_lat = self._whiten_pcs(sigma_lat)
         if mse:
-            return torch.mean((mu_z - target) ** 2)
+            err = (mu_z - target) ** 2
+            if getattr(self, "pc_w", None) is not None:
+                return torch.mean(err * self.pc_w)
+            return torch.mean(err)
         sig = torch.clamp(sigma_lat, min=self.sigma_min)
         if self.prob_mode == "crps":
-            return torch.mean(gaussian_crps_torch(mu_z, sig, target, sigma_min=self.sigma_min))
+            crps = gaussian_crps_torch(mu_z, sig, target, sigma_min=self.sigma_min)
+            if getattr(self, "pc_w", None) is not None:
+                return torch.mean(crps * self.pc_w)
+            return torch.mean(crps)
         return beta_nll(mu_z, sig, target, beta=self.nll_beta, sigma_min=self.sigma_min)
+
+    def _add_pc1_pin(self, total, mu_z, inputs):
+        if self.pc1_pin_scale <= 0:
+            return total
+        if inputs is None:
+            raise ValueError("pc1_pin requires inputs")
+        from model.pc_routing import cols_for
+
+        ssh = inputs[:, cols_for(int(inputs.shape[1]), ("ssh",))[0]]
+        t_hat = self.pc1_t_ab[0] * ssh + self.pc1_t_ab[1]
+        s_hat = self.pc1_s_ab[0] * ssh + self.pc1_s_ab[1]
+        n_t = int(self.outputs["temperature"])
+        pin = torch.mean((mu_z[:, 0] - t_hat) ** 2) + torch.mean((mu_z[:, n_t] - s_hat) ** 2)
+        return total + self.pc1_pin_scale * pin
 
     def forward(self, output, target, indices=None, inputs=None):
         from evalphys.calibration import gaussian_crps_torch
@@ -886,6 +952,7 @@ class PCAHeteroPhysLoss(nn.Module):
             if self.pc_crps_scale:
                 pc = self._pc_term(mu_z, None, target, mse=True)
                 total = total + self.pc_crps_scale * pc
+            total = self._add_pc1_pin(total, mu_z, inputs)
             self._record_terms(phys, pc, total)
             return total
         sigma_x = self.decode_sigma(sigma_lat)
@@ -913,6 +980,7 @@ class PCAHeteroPhysLoss(nn.Module):
         if self.pc_crps_scale:
             pc = self._pc_term(mu_z, sigma_lat, target, mse=False)
             total = total + self.pc_crps_scale * pc
+        total = self._add_pc1_pin(total, mu_z, inputs)
         self._record_terms(phys, pc, total)
         return total
 
@@ -1723,6 +1791,25 @@ class ProfileDirectLoss(nn.Module):
         return self.mse_scale * mse + self.smooth_scale * smooth
 
 
+class PairDirectLoss:
+    """L_pair(product vs Argo target) + scale * L_direct(9-d encoder vs same target)."""
+
+    def __init__(self, base, model, scale=1.0):
+        self.base = base
+        self._model = model
+        self.scale = float(scale)
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    def __call__(self, output, target, indices, inputs=None):
+        lp = self.base(output, target, indices)
+        direct = getattr(self._model, "last_direct", None)
+        if direct is None or self.scale == 0.0:
+            return lp
+        return lp + self.scale * self.base(direct, target, indices)
+
+
 def make_loss(
     *,
     pca_models,
@@ -1860,9 +1947,13 @@ def make_loss(
                 freeze_sigma=bool(cfg.get("freeze_sigma", False)),
                 equal_var=bool(cfg.get("equal_var", True)),
                 band_equal=bool(cfg.get("band_equal", True)),
+                band_weights=cfg.get("band_weights"),
                 pc_crps_scale=float(cfg.get("pc_crps_scale", 0.1)),
                 pres_levels=pres_levels,
                 val_ence=str(cfg.get("val_ence", "temperature")),
+                pc_crps_weights=cfg.get("pc_crps_weights"),
+                pc1_pin_scale=float(cfg.get("pc1_pin_scale") or 0.0),
+                routing_spec=cfg.get("routing_spec"),
             )
         if crps_space == "stoch_eof":
             if pca_models is None:
@@ -1882,6 +1973,7 @@ def make_loss(
                 freeze_sigma=bool(cfg.get("freeze_sigma", False)),
                 equal_var=bool(cfg.get("equal_var", True)),
                 band_equal=bool(cfg.get("band_equal", True)),
+                band_weights=cfg.get("band_weights"),
                 pc_crps_scale=float(cfg.get("pc_crps_scale", 0.1)),
                 pres_levels=pres_levels,
                 val_ence=str(cfg.get("val_ence", "temperature")),
@@ -1909,6 +2001,7 @@ def make_loss(
                 freeze_sigma=bool(cfg.get("freeze_sigma", False)),
                 equal_var=bool(cfg.get("equal_var", True)),
                 band_equal=bool(cfg.get("band_equal", True)),
+                band_weights=cfg.get("band_weights"),
                 pc_crps_scale=0.0,
                 pres_levels=pres_levels,
                 val_ence=str(cfg.get("val_ence", "temperature")),

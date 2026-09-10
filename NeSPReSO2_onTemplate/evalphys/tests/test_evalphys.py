@@ -1,4 +1,4 @@
-"""evalphys v1.2.0 regression tests."""
+"""evalphys v1.3.0 regression tests."""
 
 from __future__ import annotations
 
@@ -221,12 +221,51 @@ def test_manifest_writes():
     assert "SIGMA0_TOL" in data
 
 
+def test_ohc_trapz_two_level():
+    from evalphys.constants import CP_J_KGK, RHO0_KGM3
+    from evalphys.metrics import ocean_heat_content
+
+    z = np.array([0.0, 10.0])
+    T = np.array([[1.0, 1.0]])
+    q = ocean_heat_content(T, z, z_max=10.0)
+    expect = RHO0_KGM3 * CP_J_KGK * 10.0 * 1e-9
+    assert abs(q[0] - expect) < 1e-12
+
+
+def test_isopycnal_first_crossing():
+    from evalphys.metrics import _values_at_sigma
+
+    sig = np.array([[24.0, 25.0, 26.0]])
+    val = np.array([[10.0, 20.0, 30.0]])
+    out = _values_at_sigma(sig, val, 25.5)
+    assert abs(out[0] - 25.0) < 1e-12
+
+
+def test_spatial_sigma_perfect_coverage():
+    from evalphys.metrics import spatial_sigma_consistency
+
+    rng = np.random.default_rng(0)
+    n, nz = 40, 5
+    mu = rng.normal(size=(n, nz))
+    sigma = np.full((n, nz), 1.0)
+    y = mu.copy()
+    lon = np.repeat(np.linspace(-90, -84, 8), 5)
+    lat = np.tile(np.linspace(24, 27, 5), 8)
+    out = spatial_sigma_consistency(mu, sigma, y, lon, lat, z=np.arange(nz, dtype=float), min_n=3)
+    assert out["pooled"]["coverage_68"] == 1.0
+    assert out["pooled"]["ence"] is not None
+
+
 def test_summarize_physical_smoke():
     T, S, depth, lat, lon = _gom_profile_grid()
     out = summarize_physical(T, S, T, S, depth, lat, lon)
     assert "static_stability_pred" in out
     assert "1e-08" in out["static_stability_pred"]
     assert "sigma0_monotonicity_pred" in out
+    assert "ohc" in out
+    assert "water_mass" in out
+    assert out["ohc"]["0-300"]["rmse"] is not None
+    assert out["water_mass"]["sigma0"]["rmse"] is not None
 
 
 def test_max_n2_and_heave_split():

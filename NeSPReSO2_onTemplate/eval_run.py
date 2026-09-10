@@ -13,7 +13,7 @@ import torch
 
 import data_loader.data_loaders as module_data
 import model.model as module_arch
-from model.loss import HEAVE_LOSS_MODES, decode_latent_profiles, load_decoders_from_dir, make_loss, reconstruct_physical_profiles, sklearn_inverse_transform_pcs
+from model.loss import HEAVE_LOSS_MODES, decode_latent_profiles, load_decoders_from_dir, make_loss, reconstruct_physical_profiles, sklearn_inverse_transform_pcs, uses_native_z_profiles
 from train import surface_residual_layout_from_cache
 from model.metric import per_variable_rmse
 from parse_config import ConfigParser, validate_config
@@ -186,7 +186,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
         # joint_eof scores T/S profiles, not a 'joint' profile array
         profile_names = (
             ("temperature", "salinity")
-            if joint_eof_meta is not None or loss_cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct")
+            if joint_eof_meta is not None or uses_native_z_profiles(loss_cfg)
             else tuple(k for k in outputs if k != "warp")
         )
         true_profiles = {}
@@ -222,9 +222,9 @@ def main(config, checkpoint_path: str, split: str = "test"):
         loss_config=loss_cfg,
         targets=data_loader.cache["targets"],
         true_profiles=(
-            true_profiles
-            if loss_cfg.get("mode") not in (*HEAVE_LOSS_MODES, "profile_direct")
-            else data_loader.profiles
+            data_loader.profiles
+            if uses_native_z_profiles(loss_cfg)
+            else true_profiles
         ),
         ae_targets=data_loader.cache.get(target_key),
         ae_weights=data_loader.cache.get(weight_key),
@@ -269,7 +269,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
     if pca_tgt is not None:
         pca_tgt = pca_tgt[indices].astype(np.float64)
 
-    if loss_cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct"):
+    if uses_native_z_profiles(loss_cfg):
         mu_t = torch.tensor(mu_pcs, dtype=torch.float32, device=device)
         idx_t = torch.tensor(indices, dtype=torch.long, device=device)
         n_all = data_loader.cache["inputs"].shape[0]
@@ -289,7 +289,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
         else:
             n_z = mu_pcs.shape[1] // 2
             T_hat, S_hat = mu_pcs[:, :n_z], mu_pcs[:, n_z:]
-            decode = "profile_direct"
+            decode = "z" if str(loss_cfg.get("crps_space", "")) == "z" else "profile_direct"
             latent_rmse = {"note": "native-z T/S; PCA cache targets unused"}
         raw = {
             "temperature": float(np.sqrt(np.nanmean((T_hat - T_true) ** 2))),
@@ -336,7 +336,7 @@ def main(config, checkpoint_path: str, split: str = "test"):
                 joint_eof_meta=joint_eof_meta,
             ),
         }
-    if loss_cfg.get("mode") in (*HEAVE_LOSS_MODES, "profile_direct"):
+    if uses_native_z_profiles(loss_cfg):
         report["pca_target_rmse"] = None
     elif loss_cfg.get("mode") != "decoder" and pca_tgt is not None:
         pca_outputs = OrderedDict(data_loader.cache["outputs"])

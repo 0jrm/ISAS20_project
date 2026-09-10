@@ -1,0 +1,6 @@
+ts	phase	decision	why	evidence	result
+2026-09-02T14:05:00Z	frame	mix 50/50 Argo and frozen sat model as pair source with flag +1/-1; target always Argo; train distances stratified; val/test keep nearest-1 geography	train on both source kinds without changing the test neighbor map used for 0.531	reports/pair_mix_census.json	open
+2026-09-02T14:06:00Z	census	nearest-k4 mean km 57 vs pool 141; dt 12 vs 24; dlat/dlon already near-symmetric in the pool	forcing a Gaussian on deltas is unnecessary; filling km x dt bins is the real gap	reports/pair_mix_census.json	VERIFIED
+2026-09-02T14:07:00Z	design	k_train=8 stratified then 2x mix	8 cands exist for 87% of train targets; 12 would 6x the old pair set	reports/pair_mix_census.json	open
+2026-09-02T14:35:00Z	train	mix cell finished two-stage train and three-head eval	need numbers not a guess	reports/eval_pair_mix_heads.json	VERIFIED
+2026-09-02T14:36:00Z	call	keep Argo-pair for skill, mix when fakes must be allowed, sat-only for honest bars	fake-only and live joint both lost to maps-only	reports/HANDOFF-2026-09-02-pair.md	VERIFIED
