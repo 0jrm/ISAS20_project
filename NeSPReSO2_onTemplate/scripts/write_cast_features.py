@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         default="/home/jrm22n/ISAS20_project/reports/xb_argo_compare/profiles_nes.nc",
     )
     p.add_argument("--out-dir", default="/home/jrm22n/work/gom-da-workspace/results/da_readiness")
-    p.add_argument("--models", nargs="*", default=["A_CRPS"])
+    p.add_argument("--models", nargs="*", default=["A_CRPS", "persistence"])
     p.add_argument("--perm-n", type=int, default=PERM_N_DEFAULT)
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--with-mld", action="store_true")
@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             s_argo=bundle.s_argo[:n],
             s_xb=bundle.s_xb[:n],
             valid_t=bundle.valid_t[:n],
+            ssh_sat=bundle.ssh_sat[:n],
             products={k: v[:n] for k, v in bundle.products.items()},
         )
     casts, levels = build_cast_and_level_tables(
@@ -66,7 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     perm_path = out_dir / f"{stem}_perm.parquet"
     casts.to_parquet(cast_path, index=False)
     levels.to_parquet(level_path, index=False)
-    perm = permutation_cache(casts, levels, n_perm=int(args.perm_n), seed=0)
+    perm_casts = casts.loc[casts["model"] != "persistence"]
+    perm_levels = levels.loc[levels["model"] != "persistence"]
+    perm = permutation_cache(perm_casts, perm_levels, n_perm=int(args.perm_n), seed=0)
     perm.to_parquet(perm_path, index=False)
     print(f"wrote {cast_path}", flush=True)
     print(f"wrote {level_path}", flush=True)

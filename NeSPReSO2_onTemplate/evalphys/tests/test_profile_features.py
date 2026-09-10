@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
+from evalphys.cast_table import woa_feature_table
 from evalphys.profile_features import peak_dtdz, shape_features, smooth_temperature
 
 
@@ -43,3 +45,17 @@ def test_smoother_name_is_stable():
 
     assert SMOOTHER_NAME == "interp1m_savgol_w11_p2"
     assert RULE_VERSION == "shape-v1"
+
+
+def test_woa_long_table_recovers_step_z20():
+    depth = np.arange(0.0, 201.0, 5.0)
+    t = np.where(depth < 100.0, 25.0, 15.0)
+    long = pd.DataFrame(
+        {
+            "cast_id": np.zeros(depth.size, dtype=np.int32),
+            "z": depth,
+            "t_woa": t,
+        }
+    )
+    feat = woa_feature_table(long)
+    assert abs(float(feat["woa_z20_m"].iloc[0]) - 100.0) < 8.0

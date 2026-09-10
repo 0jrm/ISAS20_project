@@ -30,6 +30,7 @@ class ProfileBundle:
     s_argo: np.ndarray
     s_xb: np.ndarray
     valid_t: np.ndarray
+    ssh_sat: np.ndarray
     products: dict[str, np.ndarray]
 
 
@@ -61,6 +62,11 @@ def load_profile_bundle(xb_path: Path, nes_path: Path) -> ProfileBundle:
         s_argo=np.array(xb["S_argo"][:], dtype=np.float64),
         s_xb=np.array(xb["S_xb"][:], dtype=np.float64),
         valid_t=np.array(xb["valid_T"][:]).astype(bool),
+        ssh_sat=(
+            np.array(nes["ssh_sat"][:], dtype=np.float64)
+            if "ssh_sat" in nes.variables
+            else np.full(np.array(xb["lon"][:]).shape[0], np.nan, dtype=np.float64)
+        ),
         products=products,
     )
     xb.close()
@@ -151,6 +157,7 @@ def build_cast_and_level_tables(
             "era": era,
             "lat": bundle.lat,
             "lon": bundle.lon,
+            "ssh_sat": bundle.ssh_sat,
             "in_bbox": in_bbox,
             "ood": ood,
             "lc": lc,
@@ -177,6 +184,17 @@ def build_cast_and_level_tables(
             )
         )
     return pd.concat(cast_frames, ignore_index=True), pd.concat(level_frames, ignore_index=True)
+
+
+def woa_feature_table(long_df: pd.DataFrame, *, value_col: str = "t_woa") -> pd.DataFrame:
+    wide = long_df.pivot(index="cast_id", columns="z", values=value_col).sort_index(axis=1)
+    z = wide.columns.to_numpy(dtype=np.float64)
+    t = wide.to_numpy(dtype=np.float64)
+    feat = shape_features(z, t, np.isfinite(t))
+    out = pd.DataFrame({"cast_id": wide.index.astype(np.int32)})
+    for key in ("z20_m", "thickness_15_25_m", "peak_dtdz_c_per_m", "peak_dtdz_z_m"):
+        out[f"woa_{key}"] = feat[key]
+    return out
 
 
 def parquet_stem(git_hash: str, rule: str = RULE_VERSION) -> str:
