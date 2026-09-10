@@ -304,3 +304,118 @@ def test_steric_vs_adt_lc_gate():
     assert out["n_lc"] >= 4
     assert out["lc_pass"] is True
     assert out["gate_cm"] == 2.0
+
+
+def test_optimal_blend_recovers_known_sigma_rho():
+    from evalphys.metrics import blended_rmse, optimal_blend_weight, pearson_finite
+
+    rng = np.random.default_rng(0)
+    n = 200_000
+    sig_xb, sig_nes, rho = 1.2, 0.8, 0.3
+    z1 = rng.normal(size=n)
+    z2 = rng.normal(size=n)
+    e_xb = sig_xb * z1
+    e_nes = sig_nes * (rho * z1 + np.sqrt(1.0 - rho * rho) * z2)
+    got_rho = pearson_finite(e_nes, e_xb)
+    assert abs(got_rho - rho) < 5e-3
+    w = optimal_blend_weight(sig_nes, sig_xb, rho)
+    expect_w = (sig_xb**2 - rho * sig_xb * sig_nes) / (
+        sig_xb**2 + sig_nes**2 - 2.0 * rho * sig_xb * sig_nes
+    )
+    assert abs(w - expect_w) < 1e-12
+    expect_rmse = np.sqrt(
+        w * w * sig_nes**2 + (1.0 - w) ** 2 * sig_xb**2 + 2.0 * w * (1.0 - w) * rho * sig_nes * sig_xb
+    )
+    got_rmse = blended_rmse(sig_nes, sig_xb, rho, w)
+    assert abs(got_rmse - expect_rmse) < 1e-12
+    blend = w * e_nes + (1.0 - w) * e_xb
+    assert abs(np.sqrt(np.mean(blend**2)) - expect_rmse) < 5e-3
+
+
+def test_optimal_blend_weight_is_on_nespreso():
+    from evalphys.metrics import optimal_blend_weight
+
+    w = optimal_blend_weight(1.0, 2.0, 0.0)
+    assert abs(w - 0.8) < 1e-12
+    swapped = optimal_blend_weight(2.0, 1.0, 0.0)
+    assert abs(swapped - 0.2) < 1e-12
+
+
+def test_shared_bias_inflates_uncentered_rho():
+    from evalphys.metrics import error_blend_from_series, uncentered_corr
+
+    rng = np.random.default_rng(1)
+    n = 20_000
+    z1 = rng.normal(size=n)
+    z2 = rng.normal(size=n)
+    en = 0.5 * z1 + 2.0
+    ex = 0.5 * (0.2 * z1 + np.sqrt(1.0 - 0.04) * z2) + 2.0
+    row = error_blend_from_series(en, ex)
+    assert abs(row["bias_nes"] - 2.0) < 0.02
+    assert abs(row["bias_xb"] - 2.0) < 0.02
+    assert row["rho_raw"] > row["rho"] + 0.2
+    assert abs(row["rho_raw"] - uncentered_corr(en, ex)) < 1e-12
+
+
+def test_bootstrap_d_resamples_casts():
+    from evalphys.metrics import bootstrap_blend_over_casts
+
+    rng = np.random.default_rng(2)
+    n_cast, nz = 40, 8
+    z = np.linspace(50.0, 199.0, nz)
+    e_xb = rng.normal(size=(n_cast, nz))
+    e_nes = 0.3 * e_xb + 0.7 * rng.normal(size=(n_cast, nz))
+    valid = np.ones((n_cast, nz), dtype=bool)
+    out = bootstrap_blend_over_casts(e_nes, e_xb, valid, z, 50.0, 200.0, n_boot=200, seed=0)
+    assert out["n_cast"] == float(n_cast)
+    assert np.isfinite(out["d"])
+    assert out["d_ci_lo"] <= out["d"] <= out["d_ci_hi"] or abs(out["d"] - out["d_ci_lo"]) < 0.5
+
+
+def test_a1_pass_rule_is_w_star_and_d_ci_hi():
+    from evalphys.metrics import a1_cell_passes
+
+    assert a1_cell_passes("50-200", 0.26, -0.01) is True
+    assert a1_cell_passes("50-200", 0.25, -0.01) is False
+    assert a1_cell_passes("50-200", 0.40, 0.0) is False
+    assert a1_cell_passes("0-50", 0.40, -0.01) is False
+
+
+def test_demean_for_d_removes_xb_bias_credit():
+    from evalphys.metrics import bootstrap_blend_over_casts
+
+    rng = np.random.default_rng(7)
+    n_cast, nz = 120, 8
+    z = np.linspace(50.0, 199.0, nz)
+    z1 = rng.normal(size=(n_cast, nz))
+    z2 = rng.normal(size=(n_cast, nz))
+    e_nes = 0.8 * z1
+    e_xb = 0.8 * (0.4 * z1 + np.sqrt(1.0 - 0.16) * z2) + 2.0
+    valid = np.ones((n_cast, nz), dtype=bool)
+    raw = bootstrap_blend_over_casts(
+        e_nes, e_xb, valid, z, 50.0, 200.0, n_boot=200, seed=0, demean_for_d=False
+    )
+    honest = bootstrap_blend_over_casts(
+        e_nes, e_xb, valid, z, 50.0, 200.0, n_boot=200, seed=0, demean_for_d=True
+    )
+    assert raw["w_star"] > 0.25
+    assert honest["d"] > raw["d"] + 0.5
+
+
+def test_shuffled_casts_collapse_rho():
+    from evalphys.metrics import bootstrap_blend_over_casts, shuffle_nes_casts
+
+    rng = np.random.default_rng(4)
+    n_cast, nz = 80, 10
+    z = np.linspace(50.0, 199.0, nz)
+    e_xb = rng.normal(size=(n_cast, nz))
+    e_nes = 0.8 * e_xb + 0.2 * rng.normal(size=(n_cast, nz))
+    valid = np.ones((n_cast, nz), dtype=bool)
+    paired = bootstrap_blend_over_casts(
+        e_nes, e_xb, valid, z, 50.0, 200.0, n_boot=200, seed=0
+    )
+    shuf = bootstrap_blend_over_casts(
+        shuffle_nes_casts(e_nes, 0), e_xb, valid, z, 50.0, 200.0, n_boot=200, seed=0
+    )
+    assert paired["rho"] > 0.6
+    assert abs(shuf["rho"]) < 0.2

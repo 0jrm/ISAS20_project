@@ -9,6 +9,7 @@ and z<=1800. Satellite path is nespreso_api GOFFISH (SMAP/MUR/AVISO), not the
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import pickle
 import sys
@@ -23,6 +24,13 @@ _REPO = _ROOT.parent
 _API = Path("/unity/g2/jmiranda/nespreso_api")
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+from evalphys.metrics import (
+    a1_cell_passes,
+    bootstrap_blend_over_casts,
+    cell_shuffle_seed,
+    shuffle_nes_casts,
+)
 
 Z_NES_MAX = 1800.0
 Z_NEAR_M = 10.0
@@ -1041,6 +1049,165 @@ def write_md(path: Path, stats: dict) -> None:
     path.write_text("\n".join(lines))
 
 
+A1_BANDS = (("0-50", 0.0, 50.0), ("50-200", 50.0, 200.0), ("200-800", 200.0, 800.0))
+A1_SLICE_NAMES = ("in_bbox", "ood", "lc")
+A1_ERA_NAMES = ("all", "2024", "2025")
+DA_READINESS_SKIP_TRACK = frozenset({"pair"})
+
+
+def _a1_region_masks(xb: dict) -> dict[str, np.ndarray]:
+    from evalphys.constants import LC_LAT_RANGE, LC_LON_RANGE
+
+    return {
+        "in_bbox": ~np.asarray(xb["ood"], dtype=bool),
+        "ood": np.asarray(xb["ood"], dtype=bool),
+        "lc": (
+            (xb["lat"] >= LC_LAT_RANGE[0])
+            & (xb["lat"] <= LC_LAT_RANGE[1])
+            & (xb["lon"] >= LC_LON_RANGE[0])
+            & (xb["lon"] <= LC_LON_RANGE[1])
+        ),
+    }
+
+
+def run_da_readiness_a1(
+    xb: dict,
+    preds: dict,
+    out_dir: Path,
+    *,
+    n_boot: int = 1000,
+    seed: int = 0,
+    demean_for_d: bool = False,
+    shuffle_seed: int | None = None,
+) -> dict:
+    da_dir = out_dir / "da_readiness"
+    da_dir.mkdir(parents=True, exist_ok=True)
+    z = xb["z"]
+    valid = xb["valid_T"]
+    argo = xb["T_argo"]
+    e_xb = xb["T_xb"] - argo
+    eras = _era_masks(xb["analysis_date"])
+    regions = _a1_region_masks(xb)
+    map_models = [m["name"] for m in MODELS if m.get("track", "map") not in DA_READINESS_SKIP_TRACK]
+    names = [n for n in map_models if n in preds]
+    rows = []
+    for name in names:
+        e_nes = preds[name]["T"] - argo
+        for band_name, lo, hi in A1_BANDS:
+            for slice_name in A1_SLICE_NAMES:
+                for era_name in A1_ERA_NAMES:
+                    mask = regions[slice_name] & eras[era_name]
+                    if not mask.any():
+                        continue
+                    e_n = e_nes[mask]
+                    if shuffle_seed is not None:
+                        e_n = shuffle_nes_casts(
+                            e_n,
+                            cell_shuffle_seed(
+                                shuffle_seed, name, band_name, slice_name, era_name
+                            ),
+                        )
+                    cell = bootstrap_blend_over_casts(
+                        e_n,
+                        e_xb[mask],
+                        valid[mask],
+                        z,
+                        lo,
+                        hi,
+                        n_boot=n_boot,
+                        seed=seed,
+                        pool="levels",
+                        demean_for_d=demean_for_d,
+                    )
+                    rows.append(
+                        {
+                            "model": name,
+                            "band": band_name,
+                            "slice": slice_name,
+                            "era": era_name,
+                            "n": int(cell["n"]),
+                            "n_cast": int(cell.get("n_cast", 0)),
+                            "rho": cell["rho"],
+                            "rho_raw": cell["rho_raw"],
+                            "w_star": cell["w_star"],
+                            "bias_nes": cell["bias_nes"],
+                            "bias_xb": cell["bias_xb"],
+                            "rmse_xb": cell["rmse_xb"],
+                            "rmse_nes": cell["rmse_nes"],
+                            "rmse_blend": cell["rmse_blend"],
+                            "d": cell["d"],
+                            "d_ci_lo": cell["d_ci_lo"],
+                            "d_ci_hi": cell["d_ci_hi"],
+                            "d_se": cell.get("d_se", float("nan")),
+                        }
+                    )
+    csv_path = da_dir / "blend.csv"
+    fields = [
+        "model",
+        "band",
+        "slice",
+        "era",
+        "n",
+        "n_cast",
+        "rho",
+        "rho_raw",
+        "w_star",
+        "bias_nes",
+        "bias_xb",
+        "rmse_xb",
+        "rmse_nes",
+        "rmse_blend",
+        "d",
+        "d_ci_lo",
+        "d_ci_hi",
+    ]
+    with csv_path.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for row in rows:
+            w.writerow({k: row[k] for k in fields})
+    therm = [
+        r
+        for r in rows
+        if a1_cell_passes(r["band"], r["w_star"], r["d_ci_hi"])
+    ]
+    band_rows = [r for r in rows if r["band"] == "50-200" and np.isfinite(r.get("d", float("nan")))]
+    best = min(band_rows, key=lambda r: r["d"]) if band_rows else None
+    narrow = False
+    if not therm and best is not None:
+        wstar = best["w_star"]
+        d_hi = best["d_ci_hi"]
+        se = best.get("d_se", float("nan"))
+        w_mid = np.isfinite(wstar) and 0.15 <= wstar <= 0.25
+        near0 = np.isfinite(d_hi) and np.isfinite(se) and 0.0 <= d_hi <= se
+        narrow = bool(w_mid or near0)
+    stats = {
+        "n_casts": int(xb["lon"].size),
+        "n_models": len(names),
+        "n_cells": len(rows),
+        "a1_gate_pass": bool(therm),
+        "a1_narrow_fail": bool(narrow),
+        "a1_pass_cells": therm,
+        "a1_best_50_200": best,
+        "blend_csv": str(csv_path),
+        "bootstrap": "casts",
+        "demean_for_d": bool(demean_for_d),
+        "shuffle_seed": shuffle_seed,
+    }
+    (da_dir / "stats.json").write_text(json.dumps(stats, indent=2, default=str))
+    if therm:
+        gate = "PASS"
+    elif narrow:
+        gate = "NARROW_FAIL"
+    else:
+        gate = "FAIL"
+    print(
+        f"A1 gate {gate}  cells={len(rows)}  pass={len(therm)}  {csv_path}",
+        flush=True,
+    )
+    return stats
+
+
 def selfcheck() -> None:
     src = np.arange(0.0, 11.0, 1.0)
     dst = np.array([0.0, 2.5, 5.0, 12.0, 20.0])
@@ -1158,7 +1325,20 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--no-n2", action="store_true")
     p.add_argument("--selfcheck", action="store_true")
-    p.add_argument("--mode", choices=("all", "predict", "score"), default="all")
+    p.add_argument("--mode", choices=("all", "predict", "score", "da-readiness"), default="all")
+    p.add_argument("--nes-nc", default="", help="profiles_nes.nc for --mode da-readiness or score")
+    p.add_argument("--n-boot", type=int, default=1000)
+    p.add_argument(
+        "--demean-for-d",
+        action="store_true",
+        help="compute d on demeaned errors so the gate does not credit xb bias cancellation",
+    )
+    p.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        help="permute NeSPReSO casts within each cell; omit for the paired run",
+    )
     p.add_argument("--from-stats", default="", help="rewrite markdown from an existing stats.json")
     p.add_argument("--plots-only", action="store_true", help="redraw figures from out/profiles_nes.nc")
     args = p.parse_args(argv)
@@ -1186,8 +1366,22 @@ def main(argv=None) -> int:
 
     n = xb["lon"].size
     print(f"loaded {n} casts from {args.nc} (zip {ZIP_DEFAULT.name})", flush=True)
-    pred_nc = out_dir / "profiles_nes.nc"
+    pred_nc = Path(args.nes_nc) if args.nes_nc else out_dir / "profiles_nes.nc"
     sat_npz = out_dir / "sat_scalars.npz"
+
+    if args.mode == "da-readiness":
+        if not pred_nc.is_file():
+            raise SystemExit(f"da-readiness needs {pred_nc}")
+        preds = load_preds_nc(pred_nc)
+        run_da_readiness_a1(
+            xb,
+            preds,
+            out_dir,
+            n_boot=int(args.n_boot),
+            demean_for_d=bool(args.demean_for_d),
+            shuffle_seed=args.shuffle_seed,
+        )
+        return 0
 
     if args.plots_only or args.mode == "score":
         if not pred_nc.is_file() or not sat_npz.is_file():
