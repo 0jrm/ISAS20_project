@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -790,3 +791,261 @@ def summarize_physical(
         "water_mass": water_mass_rmse(T_pred, S_pred, T_true, S_true, depth, lat, lon),
         "steric_height_cm_rms": steric_rms,
     }
+
+
+def pearson_finite(x: np.ndarray, y: np.ndarray) -> float:
+    """Pearson r on finite pairs. NaN if fewer than 3 pairs or a series is constant."""
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    m = np.isfinite(x) & np.isfinite(y)
+    if int(m.sum()) < 3:
+        return float("nan")
+    xs = x[m]
+    ys = y[m]
+    sx = float(np.std(xs))
+    sy = float(np.std(ys))
+    if sx == 0.0 or sy == 0.0:
+        return float("nan")
+    return float(np.corrcoef(xs, ys)[0, 1])
+
+
+def optimal_blend_weight(sigma_nes: float, sigma_xb: float, rho: float) -> float:
+    """MMSE weight on NeSPReSO in ``w*e_nes + (1-w)*e_xb``, clipped to [0, 1]."""
+    sn = float(sigma_nes)
+    sx = float(sigma_xb)
+    r = float(rho)
+    if not np.isfinite(sn) or not np.isfinite(sx) or not np.isfinite(r):
+        return float("nan")
+    den = sx * sx + sn * sn - 2.0 * r * sx * sn
+    if den <= 0.0:
+        return 0.0 if sx <= sn else 1.0
+    w = (sx * sx - r * sx * sn) / den
+    return float(min(1.0, max(0.0, w)))
+
+
+def blended_rmse(sigma_nes: float, sigma_xb: float, rho: float, w: float) -> float:
+    """RMSE of ``w*e_nes + (1-w)*e_xb`` from error stds and correlation."""
+    sn = float(sigma_nes)
+    sx = float(sigma_xb)
+    r = float(rho)
+    ww = float(w)
+    if not np.isfinite(sn) or not np.isfinite(sx) or not np.isfinite(r) or not np.isfinite(ww):
+        return float("nan")
+    var = ww * ww * sn * sn + (1.0 - ww) ** 2 * sx * sx + 2.0 * ww * (1.0 - ww) * r * sn * sx
+    return float(np.sqrt(max(0.0, var)))
+
+
+def _band_level_mask(z: np.ndarray, z_lo: float, z_hi: float) -> np.ndarray:
+    z = np.asarray(z, dtype=np.float64).reshape(-1)
+    return (z >= z_lo) & (z < z_hi)
+
+
+def pooled_band_errors(
+    e_nes: np.ndarray,
+    e_xb: np.ndarray,
+    valid: np.ndarray,
+    z: np.ndarray,
+    z_lo: float,
+    z_hi: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Flatten ``(cast, level)`` errors in ``[z_lo, z_hi)`` where ``valid`` is true."""
+    e_nes = np.asarray(e_nes, dtype=np.float64)
+    e_xb = np.asarray(e_xb, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    band = _band_level_mask(z, z_lo, z_hi)
+    m = valid & band[None, :] & np.isfinite(e_nes) & np.isfinite(e_xb)
+    return e_nes[m], e_xb[m]
+
+
+def cast_mean_band_errors(
+    e_nes: np.ndarray,
+    e_xb: np.ndarray,
+    valid: np.ndarray,
+    z: np.ndarray,
+    z_lo: float,
+    z_hi: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-cast mean error in the band. Casts with no valid level are omitted."""
+    e_nes = np.asarray(e_nes, dtype=np.float64)
+    e_xb = np.asarray(e_xb, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    band = _band_level_mask(z, z_lo, z_hi)
+    m = valid & band[None, :] & np.isfinite(e_nes) & np.isfinite(e_xb)
+    n = e_nes.shape[0]
+    mn = np.full(n, np.nan)
+    mx = np.full(n, np.nan)
+    for i in range(n):
+        if not m[i].any():
+            continue
+        mn[i] = float(np.mean(e_nes[i, m[i]]))
+        mx[i] = float(np.mean(e_xb[i, m[i]]))
+    keep = np.isfinite(mn) & np.isfinite(mx)
+    return mn[keep], mx[keep]
+
+
+def uncentered_corr(x: np.ndarray, y: np.ndarray) -> float:
+    """E[xy] / (rms_x rms_y). Shared mean bias inflates this versus Pearson."""
+    x = np.asarray(x, dtype=np.float64).reshape(-1)
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    m = np.isfinite(x) & np.isfinite(y)
+    if int(m.sum()) < 3:
+        return float("nan")
+    xs = x[m]
+    ys = y[m]
+    rmsx = float(np.sqrt(np.mean(xs * xs)))
+    rmsy = float(np.sqrt(np.mean(ys * ys)))
+    if rmsx == 0.0 or rmsy == 0.0:
+        return float("nan")
+    return float(np.mean(xs * ys) / (rmsx * rmsy))
+
+
+def error_blend_from_series(e_nes: np.ndarray, e_xb: np.ndarray) -> dict[str, float]:
+    """rho and w* from demeaned errors. rho_raw is uncentered. RMSE is on raw errors."""
+    e_nes = np.asarray(e_nes, dtype=np.float64).reshape(-1)
+    e_xb = np.asarray(e_xb, dtype=np.float64).reshape(-1)
+    m = np.isfinite(e_nes) & np.isfinite(e_xb)
+    n = int(m.sum())
+    nan_row = {
+        "n": float(n),
+        "rho": float("nan"),
+        "rho_raw": float("nan"),
+        "w_star": float("nan"),
+        "bias_nes": float("nan"),
+        "bias_xb": float("nan"),
+        "rmse_xb": float("nan"),
+        "rmse_nes": float("nan"),
+        "rmse_blend": float("nan"),
+    }
+    if n < 3:
+        return nan_row
+    en = e_nes[m]
+    ex = e_xb[m]
+    bias_nes = float(np.mean(en))
+    bias_xb = float(np.mean(ex))
+    en_d = en - bias_nes
+    ex_d = ex - bias_xb
+    rho = pearson_finite(en_d, ex_d)
+    rho_raw = uncentered_corr(en, ex)
+    sig_nes = float(np.std(en_d))
+    sig_xb = float(np.std(ex_d))
+    w = optimal_blend_weight(sig_nes, sig_xb, rho)
+    eb = w * en + (1.0 - w) * ex
+    return {
+        "n": float(n),
+        "rho": rho,
+        "rho_raw": rho_raw,
+        "w_star": w,
+        "bias_nes": bias_nes,
+        "bias_xb": bias_xb,
+        "rmse_xb": float(np.sqrt(np.mean(ex * ex))),
+        "rmse_nes": float(np.sqrt(np.mean(en * en))),
+        "rmse_blend": float(np.sqrt(np.mean(eb * eb))),
+    }
+
+
+A1_THERMOCLINE_BAND = "50-200"
+A1_W_STAR_MIN = 0.25
+
+
+def a1_cell_passes(band: str, w_star: float, d_ci_hi: float) -> bool:
+    """Thermocline gate used by ``--mode da-readiness``."""
+    return (
+        band == A1_THERMOCLINE_BAND
+        and np.isfinite(w_star)
+        and w_star > A1_W_STAR_MIN
+        and np.isfinite(d_ci_hi)
+        and d_ci_hi < 0.0
+    )
+
+
+def cell_shuffle_seed(base: int, model: str, band: str, slice_name: str, era: str) -> int:
+    material = f"{base}|{model}|{band}|{slice_name}|{era}".encode()
+    return int.from_bytes(hashlib.sha256(material).digest()[:8], "little") % (2**32)
+
+
+def shuffle_nes_casts(e_nes: np.ndarray, seed: int) -> np.ndarray:
+    """Permute the cast axis of NeSPReSO errors. xb stays on geography."""
+    rng = np.random.default_rng(int(seed))
+    return np.asarray(e_nes, dtype=np.float64)[rng.permutation(e_nes.shape[0])]
+
+
+def _cast_band_rmse(en: np.ndarray, ex: np.ndarray, w: float) -> tuple[float, float]:
+    if en.size < 1:
+        return float("nan"), float("nan")
+    eb = w * en + (1.0 - w) * ex
+    return float(np.sqrt(np.mean(eb * eb))), float(np.sqrt(np.mean(ex * ex)))
+
+
+def bootstrap_blend_over_casts(
+    e_nes: np.ndarray,
+    e_xb: np.ndarray,
+    valid: np.ndarray,
+    z: np.ndarray,
+    z_lo: float,
+    z_hi: float,
+    *,
+    n_boot: int = 1000,
+    seed: int = 0,
+    pool: str = "levels",
+    demean_for_d: bool = False,
+) -> dict[str, float]:
+    """Cell stats. Bootstrap resamples casts, never (cast, level) pairs.
+
+    ``d`` is the mean over casts of (per-cast blend RMSE − xb RMSE) at the
+    cell ``w*``. ``d_ci_*`` are percentiles of that mean.
+
+    With ``demean_for_d``, those RMSEs use errors minus the cell mean bias, so
+    ``d`` does not credit the blend for cancelling xb's mean bias.
+    """
+    del pool
+    e_nes = np.asarray(e_nes, dtype=np.float64)
+    e_xb = np.asarray(e_xb, dtype=np.float64)
+    valid = np.asarray(valid, dtype=bool)
+    n_cast = e_nes.shape[0]
+    band = _band_level_mask(z, z_lo, z_hi)
+    m = valid & band[None, :] & np.isfinite(e_nes) & np.isfinite(e_xb)
+    per_n = [e_nes[i, m[i]] for i in range(n_cast)]
+    per_x = [e_xb[i, m[i]] for i in range(n_cast)]
+    nonempty = [i for i in range(n_cast) if per_n[i].size]
+    en0 = np.concatenate([per_n[i] for i in nonempty]) if nonempty else np.array([])
+    ex0 = np.concatenate([per_x[i] for i in nonempty]) if nonempty else np.array([])
+    point = error_blend_from_series(en0, ex0)
+    w = point["w_star"]
+    bn = point["bias_nes"]
+    bx = point["bias_xb"]
+    d_i = []
+    for i in nonempty:
+        en_i = per_n[i]
+        ex_i = per_x[i]
+        if demean_for_d and np.isfinite(bn) and np.isfinite(bx):
+            en_i = en_i - bn
+            ex_i = ex_i - bx
+        rb, rx = _cast_band_rmse(en_i, ex_i, w)
+        if np.isfinite(rb) and np.isfinite(rx):
+            d_i.append(rb - rx)
+    d_i = np.asarray(d_i, dtype=np.float64)
+    if d_i.size:
+        point["d"] = float(np.mean(d_i))
+        se = float(np.std(d_i, ddof=1) / np.sqrt(d_i.size)) if d_i.size > 1 else float("nan")
+    else:
+        point["d"] = float("nan")
+        se = float("nan")
+    point["d_se"] = se
+    rng = np.random.default_rng(seed)
+    n_d = int(d_i.size)
+    boots = []
+    for _ in range(int(n_boot)):
+        if n_d < 1:
+            break
+        pick = rng.integers(0, n_d, size=n_d)
+        boots.append(float(np.mean(d_i[pick])))
+    boots = np.asarray(boots, dtype=np.float64)
+    finite = boots[np.isfinite(boots)]
+    if finite.size:
+        point["d_ci_lo"] = float(np.percentile(finite, 2.5))
+        point["d_ci_hi"] = float(np.percentile(finite, 97.5))
+    else:
+        point["d_ci_lo"] = float("nan")
+        point["d_ci_hi"] = float("nan")
+    point["n_cast"] = float(len(nonempty))
+    return point
