@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAPS lab update · NeSPReSO DA loops</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+:root {
+  --encoder: #0B6E4F;      /* NeSPReSO obs path */
+  --uncertainty: #C81D25;  /* scores / RMSE */
+  --heave: #3D348B;        /* HYCOM dynamics / apply / ownership */
+  --da: #E09F3E;           /* TSIS / DA cycle / experiment design */
+  --ink: #1a1a1a;
+  --mute: #5c6570;
+  --paper: #f7f5f0;
+  --line: #d9d3c7;
+  --white: #ffffff;
+  --panel: #0b1220;
+  --accent: var(--da);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: #e8e2d6;
+}
+button, select {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid #b9b1a3;
+  background: #fff;
+  border-radius: 8px;
+  padding: .4rem .7rem;
+}
+button:hover, select:hover { border-color: var(--ink); }
+button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: .45rem; align-items: center;
+  padding: .55rem .8rem; background: #12151a; color: #efeae1; font-size: .82rem;
+}
+.toolbar a { color: #f0c14b; }
+.toolbar .sep { width: 1px; height: 1.1rem; background: #3a414c; margin: 0 .2rem; }
+.toolbar label { opacity: .75; margin-right: .2rem; }
+.toolbar select { background: #1c222c; color: #efeae1; border-color: #3a414c; }
+.toolbar .grow { flex: 1; min-width: .5rem; }
+#app { display: flex; flex-direction: column; height: calc(100% - 0px); min-height: 0; }
+#main { flex: 1; min-height: 0; display: grid; }
+#main.editor-on { grid-template-columns: minmax(280px, 36%) 1fr; }
+#main.editor-off { grid-template-columns: 1fr; }
+#editorPane {
+  display: none; flex-direction: column; min-height: 0; background: var(--panel); color: #e8eef7;
+  border-right: 1px solid #1f2937;
+}
+#main.editor-on #editorPane { display: flex; }
+#editorPane h2 {
+  margin: 0; padding: .65rem .85rem; font-size: .75rem; letter-spacing: .06em;
+  text-transform: uppercase; color: #93a4bd; border-bottom: 1px solid #243044;
+}
+#json {
+  flex: 1; width: 100%; border: 0; resize: none; padding: .8rem;
+  background: #0b1220; color: #f8fafc; font: 12px/1.45 ui-monospace, SFMono-Regular, monospace;
+}
+#jsonStatus {
+  padding: .4rem .85rem; font-size: .75rem; border-top: 1px solid #243044;
+}
+#jsonStatus[data-ok="1"] { color: #34d399; }
+#jsonStatus[data-ok="0"] { color: #f87171; }
+#stageWrap { min-height: 0; overflow: auto; padding: 1rem; }
+.slide-shell { max-width: 1100px; margin: 0 auto; }
+.navrow { display: flex; gap: .5rem; align-items: center; margin-top: .75rem; flex-wrap: wrap; }
+.pos { color: var(--mute); font-size: .85rem; }
+.hint { color: var(--mute); font-size: .78rem; margin-left: auto; }
+
+.layout-a {
+  background: var(--white); border: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 3fr; min-height: 460px;
+  box-shadow: 0 12px 36px rgba(26,26,26,.08);
+}
+.layout-a .code {
+  padding: 1.1rem 1rem 1.1rem 1.25rem; border-right: 1px solid var(--line);
+  background: #fbfaf7; font-family: ui-monospace, monospace; font-size: .78rem; line-height: 1.5;
+  overflow: auto;
+}
+.layout-a .viz { padding: 1.1rem 1.25rem; display: flex; flex-direction: column; gap: .7rem; }
+.bracket { position: relative; padding-left: .85rem; margin: .3rem 0; }
+.bracket::before {
+  content: ""; position: absolute; left: 0; top: .15rem; bottom: .15rem; width: 4px;
+  border-radius: 2px; background: var(--accent);
+}
+/* RIR-style nested color brackets */
+.bkt {
+  position: relative; padding: .35rem .55rem .35rem .75rem; margin: .35rem 0;
+  border-left: 4px solid var(--bkt, var(--accent)); border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--bkt, var(--accent)) 8%, #fff);
+}
+.bkt .bkt { margin: .3rem 0 .15rem; background: color-mix(in srgb, var(--bkt, var(--accent)) 10%, #fff); }
+.bkt-label {
+  display: block; font-size: .62rem; letter-spacing: .07em; text-transform: uppercase;
+  font-weight: 700; color: var(--bkt, var(--accent)); margin-bottom: .15rem;
+}
+.bkt-encoder { --bkt: var(--encoder); }
+.bkt-uncertainty { --bkt: var(--uncertainty); }
+.bkt-heave { --bkt: var(--heave); }
+.bkt-da { --bkt: var(--da); }
+.code-plain { white-space: pre-wrap; }
+
+.layout-b {
+  aspect-ratio: 16 / 9; background: #fff; border: 1px solid var(--line);
+  box-shadow: 0 16px 44px rgba(15,20,25,.14); padding: 1.35rem 1.6rem 1.1rem;
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: .55rem;
+  min-height: 420px;
+}
+.layout-b::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 10px; background: var(--accent);
+}
+.layout-b .mid { display: grid; grid-template-columns: 1.15fr .95fr; gap: 1rem; flex: 1; min-height: 0; }
+
+.layout-c {
+  background: #fff; border: 1px solid #cfd6e2; border-radius: 12px; min-height: 480px;
+  padding: 1.25rem 1.4rem; box-shadow: 0 10px 30px rgba(15,23,42,.08);
+  display: flex; flex-direction: column; gap: .75rem; border-top: 6px solid var(--accent);
+}
+.layout-c .mid { display: grid; grid-template-columns: 1.1fr .95fr; gap: 1rem; }
+.layout-c.inline-diagram .mid,
+.layout-b.inline-diagram .mid { grid-template-columns: 1fr; }
+.diagram-inline { margin: .65rem 0 .85rem; width: clamp(50%, 70%, 75%); }
+.diagram-inline svg { width: 100%; height: auto; min-height: 180px; display: block; }
+
+.kicker {
+  font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700;
+}
+h1 {
+  margin: 0; font-family: "IBM Plex Serif", Georgia, serif; font-weight: 650;
+  font-size: clamp(1.35rem, 2.4vw, 2rem); line-height: 1.15;
+}
+.sub { color: var(--mute); font-size: .92rem; }
+.body { font-size: .96rem; line-height: 1.45; }
+.body p { margin: 0 0 .55rem; }
+.body table { width: 100%; border-collapse: collapse; font-size: .82rem; margin: .4rem 0; }
+.body th, .body td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid var(--line); }
+.body th { color: var(--mute); font-weight: 600; font-size: .72rem; }
+.body tr.hl-ops td { background: color-mix(in srgb, var(--da) 14%, #fff); font-weight: 600; }
+.body tr.hl-bad td { background: color-mix(in srgb, var(--uncertainty) 10%, #fff); }
+.eq {
+  margin-top: auto; padding: .7rem .85rem; background: var(--paper);
+  border: 1px solid var(--line); border-left: 5px solid var(--accent);
+  overflow-x: auto; font-size: .95rem;
+}
+.legend { display: flex; flex-wrap: wrap; gap: .55rem; font-size: .75rem; color: var(--mute); }
+.swatch { display: inline-flex; align-items: center; gap: .3rem; }
+.swatch i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.diagram svg { width: 100%; height: auto; display: block; }
+.media-block { margin: .2rem 0; }
+.media-block img, .media-block video {
+  width: 100%; max-height: 320px; object-fit: contain; display: block;
+  border: 1px solid var(--line); border-radius: 8px; background: #0f141c;
+}
+.media-cap { font-size: .78rem; color: var(--mute); margin-top: .35rem; }
+.media-block.media-top {
+  display: flex; flex-direction: column; align-items: center;
+}
+.media-block.media-top video, .media-block.media-top img {
+  max-height: min(34vh, 300px); width: auto; max-width: 88%;
+  margin: 0 auto;
+}
+.media-block.media-top .media-cap { text-align: center; max-width: 88%; }
+.layout-b.stack-media {
+  display: flex; flex-direction: column; gap: .45rem;
+  aspect-ratio: auto; min-height: 0; overflow: visible; height: auto;
+}
+.layout-b.stack-media .stack-body {
+  flex: 0 1 auto; min-height: 0; overflow: visible;
+}
+.layout-b.stack-media .stack-body .body { font-size: .9rem; }
+.layout-b.stack-media .eq { margin-top: .35rem; }
+.chip {
+  display: inline-block; padding: .12rem .45rem; border-radius: 999px;
+  background: #eef2ff; color: #3730a3; font-size: .72rem; font-weight: 700;
+}
+.meta { display: flex; justify-content: space-between; align-items: center; color: var(--mute); font-size: .8rem; }
+.callout {
+  font-size: .85rem; padding: .55rem .7rem; border-radius: 8px;
+  background: #fff7ed; border: 1px solid #fdba74; color: #7c2d12;
+}
+.hl-encoder { color: var(--encoder); font-weight: 700; }
+.hl-uncertainty { color: var(--uncertainty); font-weight: 700; }
+.hl-heave { color: var(--heave); font-weight: 700; }
+.hl-da { color: var(--da); font-weight: 700; }
+.muted { color: var(--mute); }
+@media (max-width: 900px) {
+  #main.editor-on { grid-template-columns: 1fr; }
+  .layout-a, .layout-b .mid, .layout-c .mid { grid-template-columns: 1fr; }
+  .layout-b { aspect-ratio: auto; min-height: 520px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar" role="toolbar" aria-label="Deck controls">
+    <strong>MAPS · DA lab update</strong>
+    <span class="sep"></span>
+    <label for="layoutSlide">Slide layout</label>
+    <select id="layoutSlide" title="Layout for current slide">
+      <option value="a">A · Bracket map</option>
+      <option value="b">B · Slide theater</option>
+      <option value="c">C · Workbench</option>
+    </select>
+    <label for="layoutDefault">Default</label>
+    <select id="layoutDefault" title="Default when a slide omits layout">
+      <option value="a" selected>A</option>
+      <option value="b">B</option>
+      <option value="c">C</option>
+    </select>
+    <span class="sep"></span>
+    <button type="button" id="btnEditor" aria-pressed="true">JSON editor</button>
+    <button type="button" id="btnExport">Save HTML</button>
+    <span class="sep"></span>
+    <a href="da_update_notes.md" target="_blank" rel="noopener">Companion notes</a>
+    <a href="index.html">ML architecture deck</a>
+    <span class="grow"></span>
+    <span id="deckTitleBar" class="muted"></span>
+  </div>
+  <div id="main" class="editor-on">
+    <aside id="editorPane">
+      <h2>Deck JSON · live preview</h2>
+      <textarea id="json" spellcheck="false" aria-label="Editable deck JSON"></textarea>
+      <div id="jsonStatus" data-ok="1">JSON ok</div>
+    </aside>
+    <div id="stageWrap">
+      <div class="slide-shell">
+        <div id="stage"></div>
+        <div class="navrow">
+          <button type="button" id="btnPrev">← Prev</button>
+          <button type="button" id="btnNext">Next →</button>
+          <span class="pos" id="pos"></span>
+          <span class="hint">← → keys · layouts A/B/C · editor toggle</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ========== Embedded default deck ========== */
+const DEFAULT_DECK = {
+  "title": "MAPS lab update · NeSPReSO DA loops",
+  "defaultLayout": "a",
+  "legend": [
+    {
+      "key": "encoder",
+      "label": "NeSPReSO obs path"
+    },
+    {
+      "key": "da",
+      "label": "TSIS / DA cycle"
+    },
+    {
+      "key": "heave",
+      "label": "HYCOM apply / forecast"
+    },
+    {
+      "key": "uncertainty",
+      "label": "Scores / RMSE"
+    }
+  ],
+  "slides": [
+    {
+      "id": "cover",
+      "accent": "da",
+      "layout": "b",
+      "title": "NeSPReSO into HYCOM / TSIS",
+      "subtitle": "Lab update · ~15 min · Aug 2026",
+      "body": "<p>I own the pipe from a HYCOM restart through TSIS into a forecast. Today: what beats a free run, what lost, and where I want feedback. Not an OSSE.</p>",
+      "equation": "\\text{HYCOM bg} \\xrightarrow{\\text{TSIS}} \\delta x \\xrightarrow{\\texttt{incflg}=-1} \\text{forecast}",
+      "diagram": "cover",
+      "code": "bash stage_hycom.sh freerun\nbash submit.sh freerun freerun 4\n$VENV_PY build_obs.py both\nbash run_tsis.sh ops\nbash submit.sh ops forecast 7"
+    },
+    {
+      "id": "bottom_line",
+      "accent": "da",
+      "layout": "a",
+      "title": "Bottom line",
+      "subtitle": "Pipe · ops · NeSPReSO",
+      "body": "<p>The pipe runs. Ops cuts analysis T RMSE from 0.912 to 0.496 °C and stays ahead at day 7. NeSPReSO profiles on that same ocean do worse than doing nothing.</p>",
+      "equation": "\\mathrm{RMSE}^{\\mathrm{ops}}_{\\mathrm{anl}}=0.496^{\\circ}\\mathrm{C} \\lt 0.912 \\lt \\mathrm{RMSE}^{\\mathrm{Nesp}}",
+      "diagram": "bottom",
+      "code": "bash run_tsis.sh ops\nbash run_tsis.sh nespreso_argo\nbash run_tsis.sh nespreso_tracks\nbash submit.sh ops forecast 7\nbash submit.sh nespreso_argo forecast 7"
+    },
+    {
+      "id": "three_machines",
+      "accent": "da",
+      "layout": "a",
+      "title": "Three machines",
+      "subtitle": "Profiles · analysis · forecast",
+      "body": "<p>NeSPReSO writes T/S profiles. TSIS turns obs minus background into an increment. HYCOM applies that increment and forecasts. A bad increment shows up tomorrow.</p>",
+      "equation": "y^{o}=\\mathcal{H}_{\\mathrm{Nesp}},\\quad \\delta x=\\mathrm{TSIS}(y^{o}-H x^{b})",
+      "diagram": "machines",
+      "code": "def apply_H(z_1m, T_1m, S_1m, p_ifc, zmax=ZMAX, fill=True):\n    return (\n        layer_sample(z_1m, T_1m, p_ifc, zmax, fill=fill),\n        layer_sample(z_1m, S_1m, p_ifc, zmax, fill=fill),\n    )"
+    },
+    {
+      "id": "daily_loop",
+      "accent": "da",
+      "layout": "a",
+      "title": "Daily loop I own",
+      "subtitle": "Background, analysis, apply",
+      "body": "<p>xa2inc writes a difference file. HYCOM must add it (incflg=-1). Treating it as a full state crashed layer thickness. Drifted apply logs: 97 updates, zero crashes.</p>",
+      "equation": "\\texttt{incflg}=-1:\\; x \\leftarrow x + \\Delta",
+      "diagram": "loop",
+      "code": "bash stage_hycom.sh freerun\nbash submit.sh freerun freerun 4\n$VENV_PY build_obs.py both\nbash run_tsis.sh ops\nbash submit.sh ops forecast 7"
+    },
+    {
+      "id": "campaigns",
+      "accent": "da",
+      "layout": "a",
+      "title": "Three campaigns",
+      "subtitle": "2 Jan · 6 Jan · 05.3",
+      "body": "<p>2 Jan is analysis 6 h after restart, too easy. 6 Jan is four free days, then one TSIS, then a week. Same ranking. V08 matching 05.3 is config ownership, not DA skill.</p>",
+      "equation": "t_{0}+6\\mathrm{h}\\;\\|\\;t_{0}+4\\mathrm{d}\\;\\|\\;\\mathrm{archm}_{1}",
+      "diagram": "campaigns",
+      "code": "bash stage_hycom.sh null\nbash stage_hycom.sh ops\nbash stage_hycom.sh nespreso_argo\nbash stage_hycom.sh nespreso_tracks"
+    },
+    {
+      "id": "obs_path",
+      "accent": "encoder",
+      "layout": "a",
+      "title": "NeSPReSO obs on the drifted state",
+      "subtitle": "Profiles only",
+      "body": "<p>NeSPReSO members get profiles only. Satellites are masked. Ops uses cargo Argo, SLA, and SST via xprep. NeSPReSO increment SSH and velocity are zero. Ops SSH rms is 0.075.</p>",
+      "equation": "d = y^{\\mathrm{Nesp}} - H x^{b},\\quad \\mathrm{SSH}^{\\mathrm{inc}}_{\\mathrm{Nesp}}\\equiv 0",
+      "diagram": "obs",
+      "media": {
+        "type": "img",
+        "src": "media/inc_nespreso_argo_tem.png",
+        "caption": "2 Jan · nespreso_argo T increment (SSH blank on purpose)."
+      },
+      "code": "SPVAL = 2.0**100\nval_t, val_s = apply_H(z_1m, T_1m, S_1m, p_ifc, fill=False)\nid_t = live_id(val_t, zmid, dpbl_use, k0=k0)\nval_t = np.where(id_t == 1, val_t, np.nan)"
+    },
+    {
+      "id": "headlines",
+      "accent": "uncertainty",
+      "layout": "b",
+      "title": "Headline scores",
+      "subtitle": "Argo T RMSE at analysis",
+      "body": "<p>Ops 0.496 beats the free run 0.912. nespreso_argo 1.414 and tracks 1.815 both lose. 8–11 floats per day. Same order on 2 Jan, closer to restart.</p>",
+      "equation": "\\mathrm{ops} \\prec \\mathrm{null} \\prec \\mathrm{nesp\\_argo} \\prec \\mathrm{tracks}",
+      "diagram": "headlines",
+      "media": {
+        "type": "img",
+        "src": "media/argo_rmse_T.png",
+        "caption": "2 Jan Argo RMSE bars."
+      },
+      "code": "FLOOR_T = 0.05\nFLOOR_S = 0.02\nsig_t = np.maximum(rt, floor_t)\nsig_s = np.maximum(rs, floor_s)"
+    },
+    {
+      "id": "rmse_table",
+      "accent": "uncertainty",
+      "layout": "c",
+      "title": "Argo T RMSE, drifted",
+      "subtitle": "da_loop_20240106",
+      "body": "<p>Pooled vs Argo. Counts 9 / 11 / 8 / 10.</p><table><thead><tr><th>Member</th><th>anl</th><th>+24 h</th><th>+48 h</th><th>+168 h</th><th>incupd</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.496</td><td>0.667</td><td>0.510</td><td>0.748</td><td>97</td></tr><tr><td>null</td><td>0.912</td><td>0.840</td><td>0.783</td><td>0.853</td><td>0</td></tr><tr class=\"hl-bad\"><td>nespreso_argo</td><td>1.414</td><td>0.850</td><td>0.771</td><td>0.849</td><td>97</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>1.815</td><td>1.784</td><td>1.681</td><td>1.553</td><td>97</td></tr></tbody></table><p>Ops stays ahead through day 7. Tracks stay cold. Bias: null −0.26, ops −0.18, argo −0.44, tracks −0.78 °C.</p>",
+      "equation": "\\mathrm{RMSE}_T\\ (^{\\circ}\\mathrm{C})\\ \\text{vs GDAC Argo}",
+      "diagram": "none",
+      "code": "sig_t = np.maximum(rt, 0.05)\nsig_s = np.maximum(rs, 0.02)"
+    },
+    {
+      "id": "movie",
+      "accent": "heave",
+      "layout": "b",
+      "mediaTop": true,
+      "title": "Movie · drifted members vs ops",
+      "subtitle": "SST / SSS / SSH",
+      "body": "<p>First 96 h are the shared free run. Then apply. Tracks minus ops SSH is not zero even though increment SSH is. That is thickness, not a written SSH patch.</p>",
+      "equation": "\\Delta \\mathrm{SSH}_{\\mathrm{tracks}} \\neq 0 \\quad\\text{while}\\quad \\delta\\mathrm{SSH}^{\\mathrm{inc}}\\equiv 0",
+      "media": {
+        "type": "video",
+        "src": "media/drift_vs_null.mp4",
+        "caption": "264 hourly frames · differences = member − ops."
+      },
+      "code": "ONEM = 9806.0\ndp_m = np.asarray(dp, dtype=np.float64) / ONEM"
+    },
+    {
+      "id": "next",
+      "accent": "da",
+      "layout": "a",
+      "title": "What we learned",
+      "subtitle": "Ask · next",
+      "body": "<p>Traditional DA works here. More NeSPReSO columns made it worse. Fix the obs, bias, error, SSH, before another grid. OSSE waits until we know why we win or lose.</p>",
+      "equation": "\\text{obs quality first}",
+      "diagram": "next",
+      "code": "FLOOR_T = 0.05\nFLOOR_S = 0.02\nsig_t = np.maximum(rt, floor_t)\nsig_s = np.maximum(rs, floor_s)"
+    },
+    {
+      "id": "backup_inc",
+      "accent": "uncertainty",
+      "layout": "c",
+      "title": "Backup · how big was the correction?",
+      "subtitle": "Increment size · apply stayed healthy",
+      "body": "<p>Ops writes SSH (0.075) and T (0.070). NeSPReSO writes T/S only. Apply was clean: 97 steps, no thickness crash.</p><table><thead><tr><th>Member</th><th>SSH rms</th><th>T rms</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.075</td><td>0.070</td></tr><tr><td>nespreso_argo</td><td>0</td><td>0.047</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>0</td><td>0.167</td></tr></tbody></table><p>Thickness in the files uses HYCOM pressure units.</p>",
+      "equation": "\\texttt{onem}\\approx 9806",
+      "diagram": "none",
+      "media": {
+        "type": "img",
+        "src": "media/still_anl.png",
+        "caption": "Drifted movie poster · analysis time."
+      },
+      "code": "ONEM = 9806.0\ndp_m = np.asarray(dp, dtype=np.float64) / ONEM"
+    },
+    {
+      "id": "backup_053",
+      "accent": "heave",
+      "layout": "b",
+      "title": "Backup · 05.3 free-run canary",
+      "subtitle": "V08 · first archive bit-identical",
+      "body": "<p>First 6-hour archive matches 05.3 bit for bit. Later SST/SSH drift is mesoscale wander. If DA shares that ocean, port DA hycom to V08. Do not strip hybthn.</p>",
+      "equation": "\\mathrm{archm}_{1}(\\mathrm{V08}) \\equiv \\mathrm{archm}_{1}(05.3)",
+      "diagram": "canary",
+      "media": {
+        "type": "video",
+        "src": "media/3mo_fromic_owned_vs_053.mp4",
+        "caption": "91 daily frames · SSH in m · Δ ±5 cm · frame 1 should look empty."
+      },
+      "code": "bash stage_hycom.sh freerun\nbash submit.sh freerun freerun 4"
+    }
+  ]
+};
+
+const COLORS = {
+  encoder: "#0B6E4F",
+  uncertainty: "#C81D25",
+  heave: "#3D348B",
+  da: "#E09F3E",
+  ink: "#1A1A1A",
+  mute: "#5C6570",
+  paper: "#F7F5F0",
+  line: "#D9D3C7",
+};
+
+function diagramSVG(kind) {
+  const C = COLORS;
+  const common = `<defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${C.ink}"/></marker>
+    </defs>`;
+  const map = {
+    cover: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="55" width="100" height="60" rx="10" fill="${C.encoder}"/><text x="70" y="90" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">NeSPReSO</text>
+      <path d="M120 85 H150" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="155" y="55" width="100" height="60" rx="10" fill="${C.da}"/><text x="205" y="90" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">TSIS</text>
+      <path d="M255 85 H285" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="290" y="55" width="100" height="60" rx="10" fill="${C.heave}"/><text x="340" y="90" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">HYCOM</text>
+      <path d="M390 85 H420" stroke="${C.uncertainty}" stroke-width="2.5" marker-end="url(#arrow)"/>
+      <rect x="425" y="55" width="75" height="60" rx="10" fill="${C.uncertainty}" opacity=".2" stroke="${C.uncertainty}" stroke-width="2"/><text x="462" y="90" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">RMSE</text>
+    </svg>`,
+    bridge: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="30" y="40" width="200" height="80" rx="10" fill="${C.encoder}" opacity=".15" stroke="${C.encoder}" stroke-width="2"/>
+      <text x="130" y="75" text-anchor="middle" fill="${C.encoder}" font-size="13" font-weight="700">index.html</text>
+      <text x="130" y="98" text-anchor="middle" fill="${C.mute}" font-size="11">ML architecture</text>
+      <path d="M230 80 H280" stroke="${C.da}" stroke-width="3" marker-end="url(#arrow)"/>
+      <rect x="285" y="40" width="200" height="80" rx="10" fill="${C.da}"/>
+      <text x="385" y="75" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">da_update.html</text>
+      <text x="385" y="98" text-anchor="middle" fill="#3a2a00" font-size="11">this lab update</text>
+    </svg>`,
+    bottom: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="30" width="150" height="110" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="95" y="75" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">1 · pipe owned</text>
+      <text x="95" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">apply works</text>
+      <rect x="185" y="30" width="150" height="110" rx="10" fill="${C.da}" opacity=".25" stroke="${C.da}" stroke-width="2"/>
+      <text x="260" y="75" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">2 · ops wins</text>
+      <text x="260" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">0.496 &lt; 0.912</text>
+      <rect x="350" y="30" width="150" height="110" rx="10" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="425" y="75" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">3 · Nesp loses</text>
+      <text x="425" y="100" text-anchor="middle" fill="${C.mute}" font-size="11">1.414 / 1.815</text>
+    </svg>`,
+    machines: `<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="15" y="50" width="140" height="70" rx="10" fill="${C.encoder}"/><text x="85" y="80" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">NeSPReSO</text><text x="85" y="100" text-anchor="middle" fill="#d9ffe9" font-size="10">μ profiles</text>
+      <path d="M155 85 H185" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="190" y="50" width="140" height="70" rx="10" fill="${C.da}"/><text x="260" y="80" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">TSIS</text><text x="260" y="100" text-anchor="middle" fill="#3a2a00" font-size="10">δx increment</text>
+      <path d="M330 85 H360" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="365" y="50" width="140" height="70" rx="10" fill="${C.heave}"/><text x="435" y="80" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">HYCOM</text><text x="435" y="100" text-anchor="middle" fill="#ddd6ff" font-size="10">forecast</text>
+    </svg>`,
+    loop: `<svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="36" width="100" height="52" rx="8" fill="${C.heave}"/><text x="70" y="67" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">bg</text>
+      <path d="M120 62 H148" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="150" y="36" width="100" height="52" rx="8" fill="${C.da}"/><text x="200" y="67" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">xprep</text>
+      <path d="M250 62 H278" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="280" y="36" width="100" height="52" rx="8" fill="${C.da}"/><text x="330" y="67" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">xgmrf</text>
+      <path d="M380 62 H408" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="410" y="36" width="120" height="52" rx="8" fill="${C.da}"/><text x="470" y="67" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">xa2inc</text>
+      <path d="M470 88 V118" stroke="${C.heave}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="150" y="122" width="380" height="44" rx="8" fill="${C.heave}"/><text x="340" y="149" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">apply · incflg=−1 · then forecast</text>
+      <path d="M150 144 H70 V88" stroke="${C.heave}" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+      <text x="20" y="188" fill="${C.mute}" font-size="11">Order: HYCOM background → TSIS (xprep → xgmrf → xa2inc) → HYCOM apply</text>
+    </svg>`,
+    campaigns: `<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="35" width="150" height="110" rx="10" fill="${C.da}" opacity=".2" stroke="${C.da}" stroke-width="2"/>
+      <text x="95" y="70" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">2 Jan twins</text>
+      <text x="95" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">+6 h from IC</text>
+      <text x="95" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">ops ≺ null ≺ nesp</text>
+      <rect x="185" y="35" width="150" height="110" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="260" y="70" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">6 Jan drift</text>
+      <text x="260" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">+4 d freerun</text>
+      <text x="260" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">same ranking</text>
+      <rect x="350" y="35" width="150" height="110" rx="10" fill="${C.heave}" opacity=".2" stroke="${C.heave}" stroke-width="2"/>
+      <text x="425" y="70" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">05.3 canary</text>
+      <text x="425" y="95" text-anchor="middle" fill="${C.mute}" font-size="11">V08 bit-id</text>
+      <text x="425" y="115" text-anchor="middle" fill="${C.mute}" font-size="11">not DA skill</text>
+    </svg>`,
+    obs: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="45" width="110" height="70" rx="10" fill="${C.heave}"/><text x="75" y="85" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">drifted xᵇ</text>
+      <path d="M130 80 H160" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="165" y="45" width="130" height="70" rx="10" fill="${C.encoder}"/><text x="230" y="75" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">build_obs</text><text x="230" y="95" text-anchor="middle" fill="#d9ffe9" font-size="10">mask satellites</text>
+      <path d="M295 80 H325" stroke="${C.ink}" stroke-width="2" marker-end="url(#arrow)"/>
+      <rect x="330" y="45" width="160" height="70" rx="10" fill="${C.da}"/><text x="410" y="75" text-anchor="middle" fill="#1a1200" font-size="12" font-weight="700">tsis_obs</text><text x="410" y="95" text-anchor="middle" fill="#3a2a00" font-size="10">profiles only</text>
+    </svg>`,
+    headlines: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="30" y="36" fill="${C.uncertainty}" font-size="13" font-weight="700">Argo T RMSE at analysis (°C)</text>
+      <rect x="30" y="55" width="90" height="70" rx="8" fill="${C.da}"/><text x="75" y="85" text-anchor="middle" fill="#1a1200" font-size="14" font-weight="700">0.496</text><text x="75" y="105" text-anchor="middle" fill="#3a2a00" font-size="11">ops</text>
+      <rect x="140" y="55" width="90" height="70" rx="8" fill="${C.heave}" opacity=".25" stroke="${C.heave}" stroke-width="2"/><text x="185" y="85" text-anchor="middle" fill="${C.heave}" font-size="14" font-weight="700">0.912</text><text x="185" y="105" text-anchor="middle" fill="${C.mute}" font-size="11">null</text>
+      <rect x="250" y="55" width="100" height="70" rx="8" fill="${C.uncertainty}" opacity=".2" stroke="${C.uncertainty}" stroke-width="2"/><text x="300" y="85" text-anchor="middle" fill="${C.uncertainty}" font-size="14" font-weight="700">1.414</text><text x="300" y="105" text-anchor="middle" fill="${C.mute}" font-size="11">argo</text>
+      <rect x="370" y="55" width="110" height="70" rx="8" fill="${C.uncertainty}"/><text x="425" y="85" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">1.815</text><text x="425" y="105" text-anchor="middle" fill="#ffd0d0" font-size="11">tracks</text>
+    </svg>`,
+    table: `<svg viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="40" y="55" fill="${C.uncertainty}" font-size="14" font-weight="700">Full table lives in the body</text>
+      <text x="40" y="85" fill="${C.mute}" font-size="12">Pinned from drift-loop verification section</text>
+    </svg>`,
+    movie: `<svg viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="40" y="30" width="440" height="60" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="260" y="65" text-anchor="middle" fill="${C.heave}" font-size="14" font-weight="700">drift_vs_null.mp4 · play beside talk</text>
+    </svg>`,
+    next: `<svg viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="20" y="40" width="150" height="80" rx="10" fill="${C.uncertainty}" opacity=".15" stroke="${C.uncertainty}" stroke-width="2"/>
+      <text x="95" y="85" text-anchor="middle" fill="${C.uncertainty}" font-size="12" font-weight="700">fix R / bias</text>
+      <rect x="185" y="40" width="150" height="80" rx="10" fill="${C.da}" opacity=".2" stroke="${C.da}" stroke-width="2"/>
+      <text x="260" y="85" text-anchor="middle" fill="#7a4e00" font-size="12" font-weight="700">SSH? ingest?</text>
+      <rect x="350" y="40" width="150" height="80" rx="10" fill="${C.heave}" opacity=".15" stroke="${C.heave}" stroke-width="2"/>
+      <text x="425" y="85" text-anchor="middle" fill="${C.heave}" font-size="12" font-weight="700">OSSE later</text>
+    </svg>`,
+    backup: `<svg viewBox="0 0 520 100" xmlns="http://www.w3.org/2000/svg">${common}
+      <text x="40" y="55" fill="${C.mute}" font-size="13">Increment diagnostics · backup only</text>
+    </svg>`,
+    canary: `<svg viewBox="0 0 520 120" xmlns="http://www.w3.org/2000/svg">${common}
+      <rect x="60" y="30" width="180" height="60" rx="10" fill="${C.heave}"/><text x="150" y="65" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">V08 owned</text>
+      <text x="260" y="65" fill="${C.ink}" font-size="20" font-weight="700">≡</text>
+      <rect x="290" y="30" width="180" height="60" rx="10" fill="${C.da}"/><text x="380" y="65" text-anchor="middle" fill="#1a1200" font-size="13" font-weight="700">05.3 ref</text>
+    </svg>`,
+  };
+  return map[kind] || map.cover;
+}
+
+let deck = null;
+let htmlFileHandle = null;
+const HTML_SAVE_NAME = "da_update.html";
+const DECK_RE = /const DEFAULT_DECK = \{[\s\S]*?\n\};/;
+let idx = 0;
+let editorVisible = true;
+let syncingEditor = false;
+
+function accentCSS(a) {
+  return ({ encoder: "var(--encoder)", uncertainty: "var(--uncertainty)", heave: "var(--heave)", da: "var(--da)" })[a] || "var(--da)";
+}
+
+function resolveLayout(slide) {
+  const L = (slide && slide.layout) || (deck && deck.defaultLayout) || "a";
+  return ["a", "b", "c"].includes(L) ? L : "a";
+}
+
+function renderKatex(el, tex) {
+  if (!tex) { el.innerHTML = ""; return; }
+  if (window.katex) {
+    try {
+      katex.render(tex, el, { throwOnError: false, displayMode: true });
+      return;
+    } catch (_) { /* fall through */ }
+  }
+  el.textContent = tex;
+}
+
+function legendHTML() {
+  const items = (deck && deck.legend) || [
+    { key: "encoder", label: "NeSPReSO obs path" },
+    { key: "da", label: "TSIS / DA cycle" },
+    { key: "heave", label: "HYCOM apply / forecast" },
+    { key: "uncertainty", label: "Scores / RMSE" },
+  ];
+  return `<div class="legend">${items.map((it) =>
+    `<span class="swatch"><i style="background:var(--${it.key})"></i> ${esc(it.label)}</span>`
+  ).join("")}</div>`;
+}
+
+function mediaRel(src) {
+  const name = String(src || "").split(/[/\\]/).pop();
+  return name ? ("media/" + name) : "";
+}
+
+function mediaHTML(media, top) {
+  const src = mediaRel(media && media.src);
+  if (!src) return "";
+  const cap = media.caption ? `<div class="media-cap">${esc(media.caption)}</div>` : "";
+  const cls = top ? "media-block media-top" : "media-block";
+  if (media.type === "video") {
+    return `<div class="${cls}"><video controls preload="metadata" src="${esc(src)}"><source src="${esc(src)}" type="video/mp4"></video>${cap}</div>`;
+  }
+  return `<div class="${cls}"><img src="${esc(src)}" alt="${esc(media.caption || "")}" />${cap}</div>`;
+}
+
+function codeColumn(s) {
+  if (s.codeHtml) return s.code || "";
+  const code = (s.code || "").replace(/\\n/g, "\n");
+  return `<div class="bracket code-plain">${esc(code).replace(/\n/g, "<br>")}</div>`;
+}
+
+function sidePanel(s, diag, inline) {
+  if (inline || s.mediaTop) return "";
+  const media = mediaHTML(s.media, false);
+  if (media) return media;
+  if (!s.diagram || s.diagram === "none") return "";
+  return `<div class="diagram">${diag}</div>`;
+}
+
+function paint() {
+  if (!deck || !deck.slides || !deck.slides.length) {
+    document.getElementById("stage").innerHTML = `<div class="callout">Deck has no slides.</div>`;
+    return;
+  }
+  idx = ((idx % deck.slides.length) + deck.slides.length) % deck.slides.length;
+  const s = deck.slides[idx];
+  const layout = resolveLayout(s);
+  const accent = s.accent || "da";
+  document.getElementById("stage").style.setProperty("--accent", accentCSS(accent));
+  document.getElementById("layoutSlide").value = layout;
+  document.getElementById("layoutDefault").value = deck.defaultLayout || "a";
+  document.getElementById("deckTitleBar").textContent = deck.title || "";
+  document.getElementById("pos").textContent = `${idx + 1} / ${deck.slides.length} · layout ${layout.toUpperCase()}`;
+
+  const title = s.title || "";
+  const sub = s.subtitle || "";
+  const rawBody = s.body || "";
+  const diag = diagramSVG(s.diagram || accent);
+  const eqId = "eq_" + idx;
+  const inline = rawBody.includes("{{diagram}}");
+  const body = inline
+    ? rawBody.replace("{{diagram}}", `<div class="diagram diagram-inline">${diag}</div>`)
+    : rawBody;
+  const side = sidePanel(s, diag, inline);
+  const inlineClass = inline ? " inline-diagram" : "";
+  const codeCol = codeColumn(s);
+  const topMedia = s.mediaTop ? mediaHTML(s.media, true) : "";
+
+  let html = "";
+  if (layout === "a") {
+    html = `<div class="layout-a${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="code">${codeCol}</div>
+      <div class="viz">
+        <div class="kicker">${esc(deck.title || "DA lab update")}</div>
+        <h1>${esc(title)}</h1>
+        <div class="sub">${esc(sub)}</div>
+        <div class="body">${body}</div>
+        ${side}
+        ${legendHTML()}
+        <div class="eq" id="${eqId}"></div>
+      </div>
+    </div>`;
+  } else if (layout === "b" && topMedia) {
+    html = `<div class="layout-b stack-media" style="--accent:${accentCSS(accent)}">
+      <div class="kicker">${esc(deck.title || "DA lab update")} · ${esc(accent)}</div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      ${topMedia}
+      <div class="stack-body">
+        <div class="body">${body}</div>
+        <div class="eq" id="${eqId}"></div>
+      </div>
+    </div>`;
+  } else if (layout === "b") {
+    html = `<div class="layout-b${inlineClass}" style="--accent:${accentCSS(accent)}">
+      <div class="kicker">${esc(deck.title || "DA lab update")} · ${esc(accent)}</div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      <div class="mid">
+        <div>
+          <div class="body">${body}</div>
+          <div class="eq" id="${eqId}"></div>
+        </div>
+        ${side || (s.diagram && s.diagram !== "none" ? `<div class="diagram">${diag}</div>` : "")}
+      </div>
+      ${legendHTML()}
+    </div>`;
+  } else {
+    const sideOrDiag = side || (s.diagram && s.diagram !== "none" ? `<div class="diagram">${diag}</div>` : "");
+    const cInline = sideOrDiag ? inlineClass : " inline-diagram";
+    html = `<div class="layout-c${cInline}" style="--accent:${accentCSS(accent)}">
+      <div class="meta"><span class="chip">${esc(accent)}</span><span>${esc(s.id || "")}</span></div>
+      <h1>${esc(title)}</h1>
+      <div class="sub">${esc(sub)}</div>
+      <div class="mid">
+        <div class="body">${body}</div>
+        ${sideOrDiag}
+      </div>
+      <div class="eq" id="${eqId}"></div>
+      ${legendHTML()}
+    </div>`;
+  }
+  document.getElementById("stage").innerHTML = html;
+  renderKatex(document.getElementById(eqId), s.equation || "");
+}
+
+function esc(t) {
+  return String(t)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function writeEditorFromDeck() {
+  syncingEditor = true;
+  document.getElementById("json").value = JSON.stringify(deck, null, 2);
+  syncingEditor = false;
+}
+
+function applyJSON() {
+  if (syncingEditor) return;
+  const status = document.getElementById("jsonStatus");
+  try {
+    const parsed = JSON.parse(document.getElementById("json").value);
+    if (!parsed.slides || !Array.isArray(parsed.slides)) throw new Error("deck.slides must be an array");
+    deck = parsed;
+    if (!deck.defaultLayout) deck.defaultLayout = "a";
+    status.textContent = "JSON ok · live preview";
+    status.dataset.ok = "1";
+    paint();
+  } catch (err) {
+    status.textContent = "JSON error: " + err.message;
+    status.dataset.ok = "0";
+  }
+}
+
+function setEditorVisible(on) {
+  editorVisible = !!on;
+  document.getElementById("main").className = editorVisible ? "editor-on" : "editor-off";
+  document.getElementById("btnEditor").setAttribute("aria-pressed", editorVisible ? "true" : "false");
+}
+
+function setSaveStatus(ok, msg) {
+  const status = document.getElementById("jsonStatus");
+  status.textContent = msg;
+  status.dataset.ok = ok ? "1" : "0";
+}
+
+function bakeDeckIntoHtml(sourceHtml, d) {
+  if (sourceHtml.search(DECK_RE) < 0) throw new Error("DEFAULT_DECK block not found in that file — pick the existing " + HTML_SAVE_NAME);
+  return sourceHtml.replace(DECK_RE, "const DEFAULT_DECK = " + JSON.stringify(d, null, 2) + ";");
+}
+
+async function ensureWritePermission(handle) {
+  if (!handle) return false;
+  const opts = { mode: "readwrite" };
+  if ((await handle.queryPermission(opts)) === "granted") return true;
+  return (await handle.requestPermission(opts)) === "granted";
+}
+
+async function readHandleText(handle) {
+  const file = await handle.getFile();
+  return file.text();
+}
+
+function downloadHtml(text, name) {
+  const blob = new Blob([text], { type: "text/html;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function pickHtmlFileText() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".html,text/html";
+    input.addEventListener("change", () => {
+      const f = input.files && input.files[0];
+      if (!f) {
+        reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+        return;
+      }
+      f.text().then(resolve, reject);
+    });
+    input.addEventListener("cancel", () => {
+      reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+    });
+    input.click();
+  });
+}
+
+async function tryFetchSource() {
+  try {
+    const res = await fetch(location.href);
+    if (res.ok) return await res.text();
+  } catch (_) { /* file:// */ }
+  return null;
+}
+
+async function saveHtml() {
+  try {
+    // Reuse prior handle (same tab)
+    if (htmlFileHandle && (await ensureWritePermission(htmlFileHandle))) {
+      const source = await readHandleText(htmlFileHandle);
+      const out = bakeDeckIntoHtml(source, deck);
+      const w = await htmlFileHandle.createWritable();
+      await w.write(out);
+      await w.close();
+      setSaveStatus(true, "Saved HTML · " + (htmlFileHandle.name || HTML_SAVE_NAME));
+      return;
+    }
+
+    // Chromium: one Save picker — read that file, bake, write back (works on file://)
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: HTML_SAVE_NAME,
+        types: [{ description: "HTML deck", accept: { "text/html": [".html"] } }],
+      });
+      htmlFileHandle = handle;
+      let source = await readHandleText(handle);
+      if (source.search(DECK_RE) < 0) {
+        source = (await tryFetchSource()) || source;
+      }
+      const out = bakeDeckIntoHtml(source, deck);
+      const w = await handle.createWritable();
+      await w.write(out);
+      await w.close();
+      setSaveStatus(true, "Saved HTML · " + (handle.name || HTML_SAVE_NAME));
+      return;
+    }
+
+    // No FS Access API: pick existing HTML to read, then download baked copy
+    let source = await tryFetchSource();
+    if (!source || source.search(DECK_RE) < 0) {
+      setSaveStatus(true, "Choose the existing " + HTML_SAVE_NAME + "…");
+      source = await pickHtmlFileText();
+    }
+    const out = bakeDeckIntoHtml(source, deck);
+    downloadHtml(out, HTML_SAVE_NAME);
+    setSaveStatus(true, "Downloaded " + HTML_SAVE_NAME + " · replace the file on disk with this download");
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      setSaveStatus(false, "Save cancelled");
+      return;
+    }
+    setSaveStatus(false, "Save error: " + (err && err.message ? err.message : err));
+  }
+}
+
+function boot() {
+  deck = JSON.parse(JSON.stringify(DEFAULT_DECK));
+  writeEditorFromDeck();
+  paint();
+  document.getElementById("json").addEventListener("input", applyJSON);
+  document.getElementById("btnPrev").onclick = () => { idx -= 1; paint(); };
+  document.getElementById("btnNext").onclick = () => { idx += 1; paint(); };
+  document.getElementById("btnEditor").onclick = () => setEditorVisible(!editorVisible);
+  document.getElementById("btnExport").onclick = () => { saveHtml(); };
+  document.getElementById("layoutSlide").onchange = (e) => {
+    deck.slides[idx].layout = e.target.value;
+    writeEditorFromDeck();
+    paint();
+  };
+  document.getElementById("layoutDefault").onchange = (e) => {
+    deck.defaultLayout = e.target.value;
+    writeEditorFromDeck();
+    paint();
+  };
+  window.addEventListener("keydown", (e) => {
+    if (e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) return;
+    if (e.key === "ArrowRight" || e.key === "PageDown") { idx += 1; paint(); }
+    if (e.key === "ArrowLeft" || e.key === "PageUp") { idx -= 1; paint(); }
+  });
+  const wait = setInterval(() => {
+    if (window.katex) { clearInterval(wait); paint(); }
+  }, 50);
+  setTimeout(() => clearInterval(wait), 3000);
+}
+
+boot();
+</script>
+</body>
+</html>
