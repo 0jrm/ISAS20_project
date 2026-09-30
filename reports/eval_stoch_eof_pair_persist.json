@@ -1,0 +1,18 @@
+{
+  "n_pairs": {
+    "train": 11349,
+    "val": 621,
+    "test": 623
+  },
+  "test_persistence": {
+    "T": {
+      "mean": 0.6853861808776855,
+      "median": 0.4558522403240204
+    },
+    "S": {
+      "mean": 0.10454873740673065,
+      "median": 0.07583945989608765
+    }
+  },
+  "note": "time-causal earlier Argo copy. Compare to eval_stoch_eof_pair_s42.json raw T RMSE."
+}

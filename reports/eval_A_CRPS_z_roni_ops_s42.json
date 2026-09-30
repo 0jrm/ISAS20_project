@@ -1,0 +1,17 @@
+{
+  "checkpoint": "saved/acrps_z_roni_ops/models/NeSPReSO2_ARGO_GoM_A_CRPS_z_roni_ops_acrps_z_roni_ops_s42_s2/acrps_z_roni_ops_s42_s2/model_best.pth",
+  "cache": "../data/cache/train_ready_heave_ops.pkl",
+  "dataset_tag": "argo_v2",
+  "split": "test",
+  "n_samples": 623,
+  "loss": 0.27676629895765936,
+  "latent_target_rmse": {
+    "note": "native-z T/S; PCA cache targets unused"
+  },
+  "raw_profile_rmse": {
+    "temperature": 0.5633082341034342,
+    "salinity": 0.12486655178092618
+  },
+  "decode": "z",
+  "pca_target_rmse": null
+}

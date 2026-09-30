@@ -1,0 +1,20 @@
+{
+  "checkpoint": "saved/stoch_eof_pair_synth/models/NeSPReSO2_ARGO_GoM_stoch_eof_pair_synth_stoch_eof_pair_synth_s42_s2/stoch_eof_pair_synth_s42_s2/model_best.pth",
+  "cache": "../data/cache/train_ready_4ee013852d33.pkl",
+  "dataset_tag": "argo_v2",
+  "split": "test",
+  "n_samples": 623,
+  "loss": 1.2484710870929552,
+  "latent_target_rmse": {
+    "temperature": 0.553164628808552,
+    "salinity": 0.08994421543976616
+  },
+  "raw_profile_rmse": {
+    "temperature": 0.5544977400005461,
+    "salinity": 0.09031673185395322
+  },
+  "pca_target_rmse": {
+    "temperature": 0.553164628808552,
+    "salinity": 0.08994421543976616
+  }
+}

@@ -215,111 +215,111 @@ const DEFAULT_DECK = {
       "accent": "da",
       "layout": "b",
       "title": "NeSPReSO v2 → Data Assimilation",
-      "subtitle": "Uncertainty Head (A×CRPS) and Heave Residual for MAPS",
-      "body": "<p><strong>NeSPReSO</strong> (Neural Sparse Profiling of the Subsurface Ocean) maps surface satellite fields and encodings to subsurface Temperature/Salinity (T/S) profiles.</p><p>Today we walk the shared <span class=\"hl-encoder\">SatEncoder</span>, the operational <span class=\"hl-uncertainty\">Uncertainty Head</span>, the <span class=\"hl-heave\">Heave Residual</span> challenger, and the <span class=\"hl-da\">DA handoff</span> contract.</p>",
-      "equation": "\\text{surface} \\xrightarrow{\\text{SatEncoder}} h \\xrightarrow{\\text{head}} \\mu(z),\\;\\text{(optional }\\sigma\\text{)}",
+      "subtitle": "One trunk, two heads",
+      "body": "<p>NeSPReSO maps surface SST, SSS, and SSH to subsurface T/S. Shared SatEncoder, then the Uncertainty Head or Heave Residual. We serve mean profiles to DA.</p>",
+      "equation": "\\text{surface} \\xrightarrow{\\text{SatEncoder}} h \\xrightarrow{\\text{head}} \\mu(z)",
       "diagram": "cover",
-      "code": "# MAPS spine\\nSatEncoder  →  Uncertainty Head\\nSatEncoder  →  Heave Residual\\n               ↓\\n            DA ingest"
+      "code": "h = self._trunk(x)\nmu = self.mu_out(h)\nsigma = softplus_sigma(self.sigma_out(h), self.sigma_min)\nreturn torch.cat([mu, sigma], dim=-1)"
     },
     {
       "id": "satencoder",
       "accent": "encoder",
-      "title": "Shared trunk: SatEncoder",
-      "subtitle": "Code name: PatchConvMLP",
-      "body": "<p>Now let's focus on the shared backbone. Scalar encodings and satellite Sea Surface Temperature (SST), Sea Surface Salinity (SSS), and Sea Surface Height (SSH) are fused into a latent vector <em>h</em>.</p><p>Point mode: linear satellite embed. Patch mode: reshape the flat satellite block to (B, C, T, H, W), run a small Conv2d trunk, project to <em>d_model</em>, then an Multi-Layer Perceptron (MLP) head.</p>",
+      "title": "Shared trunk",
+      "subtitle": "PatchConvMLP",
+      "body": "<p>Harmonics plus satellite channels become one vector h. Point mode uses a linear satellite embed. Patch mode reshapes to a small conv, then the same MLP.</p>",
       "equation": "h = \\mathrm{EncProj}(e) + \\mathrm{SatProj}(\\mathrm{sat})",
       "diagram": "encoder",
-      "code": "e = EncProj(scalars)\\ns = SatProj(Conv2d(sat))  # or Linear\\nh = e + s\\nh = MLP(h)"
+      "code": "def _trunk(self, x):\n    enc = x[:, : self.n_enc]\n    sat_flat = x[:, self.n_enc :]\n    h = self.enc_proj(enc)\n    if self.patch_shape is None:\n        h = h + self._encode_sat_point(sat_flat)\n    else:\n        h = h + self._encode_sat_patch(sat_flat)\n    if self.head_blocks is not None:\n        for block in self.head_blocks:\n            h = block(h)\n        return h\n    return self.head_trunk(h)"
     },
     {
       "id": "inputs",
       "accent": "encoder",
-      "title": "Inputs & fusion",
-      "subtitle": "9-D A×CRPS vs 11-D Heave (+ ONI/RONI)",
-      "body": "<p><span class=\"hl-uncertainty\">Uncertainty Head (A×CRPS)</span> uses <strong>9</strong> inputs: 6 harmonics (time, lat, lon cos/sin) + SSS, SST, SSH. <code>n_enc=6</code>, <code>n_sat=3</code>.</p><p><span class=\"hl-heave\">Heave Residual</span> uses <strong>11</strong>: the same 6 + <strong>ONI</strong> (Oceanic Niño Index) + <strong>RONI</strong> (Relative Oceanic Niño Index) + SSS, SST, SSH. ENSO columns splice after harmonics, before sat.</p>",
+      "title": "Inputs",
+      "subtitle": "9 vs 11 numbers",
+      "body": "<p>Uncertainty Head: 6 time/lat/lon harmonics plus SSS, SST, SSH. Heave adds ONI and RONI after the harmonics, before the satellites.</p>",
       "equation": "x_{\\mathrm{A}}\\in\\mathbb{R}^{9},\\quad x_{\\mathrm{Heave}}\\in\\mathbb{R}^{11}",
       "diagram": "fusion",
-      "code": "A×CRPS:  [t,lat,lon]×2 + SSS,SST,SSH\\nHeave:   + ONI, RONI  (n_enc=8)"
+      "code": "vals = lookup_enso(juld, dataset_tag=dataset_tag, keys=keys)\nn0 = int(n_enc_base)\nreturn np.concatenate([x[:, :n0], vals, x[:, n0:]], axis=1)"
     },
     {
       "id": "unc_arch",
       "accent": "uncertainty",
-      "title": "Uncertainty Head architecture",
-      "subtitle": "Operational PCA-coeff A×CRPS · dual μ / σ",
-      "body": "<p>After SatEncoder, two linear heads share trunk features. <span class=\"hl-uncertainty\">μ<sub>out</sub></span> predicts Principal Component Analysis (PCA) coefficients for T and S (16+16=32). <span class=\"hl-uncertainty\">σ<sub>out</sub></span> predicts a matching scale; softplus + σ<sub>min</sub> keeps σ positive.</p><p>Forward returns the concatenation <code>[μ, σ]</code> when <code>probabilistic=true</code>.</p>",
-      "equation": "\\sigma = \\mathrm{softplus}(\\mathrm{raw}_\\sigma) + \\sigma_{\\min},\\quad \\mathrm{out}=[\\mu\\,\\|\\,\\sigma]",
+      "title": "Uncertainty Head",
+      "subtitle": "Mean and spread",
+      "body": "<p>Two linear heads share the trunk. μ is 32 PCA scores, 16 T and 16 S. σ is a matching scale, kept positive. Forward returns both.</p>",
+      "equation": "\\sigma = \\mathrm{softplus}(\\mathrm{raw}_\\sigma) + \\sigma_{\\min}",
       "diagram": "mu_sigma",
-      "code": "h = SatEncoder(x)\\nμ = mu_out(h)\\nσ = softplus(sigma_out(h))+σ_min\\nreturn cat(μ, σ)"
+      "code": "h = self._trunk(x)\nmu = self.mu_out(h)\nsigma = softplus_sigma(self.sigma_out(h), self.sigma_min)\nreturn torch.cat([mu, sigma], dim=-1)"
     },
     {
       "id": "crps",
       "accent": "uncertainty",
-      "title": "CRPS: Continuous Ranked Probability Score",
-      "subtitle": "Closed-form Gaussian training loss",
-      "body": "<p>Training minimizes mean Gaussian Continuous Ranked Probability Score (CRPS) over PCA coefficients (matrix A cell). For a Normal forecast N(μ, σ²) and observation y:</p><p>This is a proper scoring rule for the full predictive Cumulative Distribution Function (CDF), not just a point error.</p>",
-      "equation": "\\mathrm{CRPS}(\\mu,\\sigma,y)=\\sigma\\Big[z\\big(2\\Phi(z)-1\\big)+2\\varphi(z)-\\tfrac{1}{\\sqrt{\\pi}}\\Big],\\; z=\\tfrac{y-\\mu}{\\sigma}",
+      "title": "Training loss is CRPS",
+      "subtitle": "Closed-form Gaussian",
+      "body": "<p>We score the full forecast, not just the mean. For a Gaussian, CRPS has a closed form. Training takes the mean over PCA scores.</p>",
+      "equation": "\\mathrm{CRPS}=\\sigma\\Big[z\\big(2\\Phi(z)-1\\big)+2\\varphi(z)-\\tfrac{1}{\\sqrt{\\pi}}\\Big]",
       "diagram": "crps",
-      "code": "loss = mean(gaussian_crps(μ, σ, y_pc))\\n# evalphys.calibration.gaussian_crps_torch"
+      "code": "def gaussian_crps_torch(mu, sigma, y, *, sigma_min=SIGMA_MIN_DEFAULT):\n    s = torch.clamp(sigma, min=float(sigma_min))\n    z = (y - mu) / s\n    phi = torch.exp(-0.5 * z * z) * _INV_SQRT_2PI\n    Phi = 0.5 * (1.0 + torch.erf(z / np.sqrt(2.0)))\n    return s * (z * (2.0 * Phi - 1.0) + 2.0 * phi - _INV_SQRT_PI)"
     },
     {
       "id": "pca_map",
       "accent": "uncertainty",
-      "title": "From PCA σ to T, S, spice, density, DA",
-      "subtitle": "What spread in score space is good for",
-      "body": "<p>PCA scores live in a reduced basis V. A diagonal score covariance induces a physical covariance <span class=\"hl-uncertainty\">Σ = V diag(σ²) Vᵀ</span> (plus mean reconstruction for μ).</p><p><strong>Research.</strong> Marginal CRPS on scores calibrates per-mode spread. You can study depth-band Continuous Ranked Probability Score / Expected Normalized Calibration Error (ENCE) after decoding.</p><p><strong>DA usability today.</strong> Serve <strong>μ profiles only</strong>. Ingest observation-error covariance <strong>R</strong> uses <strong>Dai σ<sub>o</sub></strong> (floored), <em>not</em> CRPS-head σ, until ENCE gates pass. Prefer <strong>diag(R)</strong>; full Σ from shared V is rank-deficient and can hurt column Optimal Interpolation (OI).</p><p><strong>Spice / density.</strong> From this head they are derived from decoded T/S (or from a separate density–spice representation), not as independent A×CRPS outputs.</p>",
-      "equation": "\\Sigma_{TS}=V\\,\\mathrm{diag}(\\sigma^2)\\,V^{\\mathsf T},\\quad R_{\\mathrm{ingest}}\\approx\\mathrm{diag}(\\sigma_o^{\\mathrm{Dai}})^2",
+      "title": "PCA scores to T/S",
+      "subtitle": "What DA actually uses",
+      "body": "<p>Decode μ through V to get profiles. Head σ is research. Today's ingest R is Dai error after layer averaging, diagonal. Do not feed CRPS σ yet.</p>",
+      "equation": "\\mu_x=\\mu_z V+\\mathrm{mean},\\quad R\\approx\\mathrm{diag}(\\sigma_o^{\\mathrm{Dai}})^2",
       "diagram": "pca_map",
-      "code": "μ_z = V @ μ_pc + mean\\nΣ   = V @ diag(σ²) @ V.T\\n# serve μ; R ← Dai σ_o (not CRPS σ)"
+      "code": "FLOOR_T = 0.05\nFLOOR_S = 0.02\n\ndef floor_sigma(rmse_t, rmse_s, floor_t=FLOOR_T, floor_s=FLOOR_S):\n    rt = np.asarray(rmse_t, dtype=np.float64)\n    rs = np.asarray(rmse_s, dtype=np.float64)\n    sig_t = np.maximum(rt, floor_t)\n    sig_s = np.maximum(rs, floor_s)\n    hit_t = np.isfinite(rt) & (rt < floor_t)\n    hit_s = np.isfinite(rs) & (rs < floor_s)\n    return sig_t, sig_s, hit_t, hit_s"
     },
     {
       "id": "heave_head",
       "accent": "heave",
-      "title": "Heave Residual: what the head predicts",
-      "subtitle": "Output layout [warp 3 | T residual PCs | S residual PCs]",
-      "body": "<p>Heave Residual (code: <code>HeaveResidual</code> / <code>HeaveResidualFast</code>) still uses SatEncoder as backbone, but the output is different. Fast is the same weights with a batched warp implementation — not a different science model.</p><p>Width 35 when probabilistic μ-part is: <strong>3 warp logits</strong> + <strong>16 T residual PCs</strong> + <strong>16 S residual PCs</strong>. Residual PCs live on a <em>canonical</em> depth grid, not native-z PCA scores.</p>",
-      "equation": "\\mu = [\\underbrace{w_{0:3}}_{\\mathrm{warp}},\\; \\underbrace{z_T}_{16},\\; \\underbrace{z_S}_{16}]",
+      "title": "Heave Residual",
+      "subtitle": "Landmarks plus residuals",
+      "body": "<p>Same trunk, different output. Three warp numbers, then 16 T and 16 S residual scores on a canonical depth grid.</p>",
+      "equation": "\\mu = [w_{0:3},\\; z_T^{16},\\; z_S^{16}]",
       "diagram": "heave_head",
-      "code": "out = SatEncoder_backbone(x)  # 35 or 70\\nwarp, z_T, z_S = split(μ)\\n# residuals on canonical z"
+      "code": "    def forward(self, x):\n        return self.backbone(x)"
     },
     {
       "id": "warp",
       "accent": "heave",
-      "title": "Warp mechanism: landmarks & decode_warp",
-      "subtitle": "Canonical knots (0, 50, 120, z_bot) vs physical (0, MLD, D26, z_bot)",
-      "body": "<p>Now let's focus on the warp. We register profiles by stretching vertical landmarks — no Residual-in-Residual metaphor, just a knot map.</p>{{diagram}}<p><strong>Canonical knots</strong> (fixed): surface 0, Mixed Layer Depth reference MLD<sub>0</sub> = 50 m, isotherm D26<sub>0</sub> = 120 m (depth of the 26 °C isotherm reference), bottom z<sub>bot</sub>.</p><p><strong>Physical knots</strong> (per profile): 0, MLD, D26, z<sub>bot</sub>. Unbounded logits map to positive depths via exp (raw = 0 → MLD 50 m, D26 120 m). Minimum layer thickness is 5 m.</p><p><strong>Warp</strong>: T<sub>canon</sub>(z) = T<sub>phys</sub>(z<sub>phys</sub>(z)), where z<sub>phys</sub> is piecewise-linear <code>interp</code> from canonical knots → physical knots. <strong>Unwarp</strong> is the inverse map.</p><p><span class=\"hl-heave\">stretch</span> = 1 + 0.3 tanh(w<sub>2</sub>) is predicted but <strong>not used</strong> in reconstruct; only MLD and D26 enter warp/unwarp.</p>",
-      "equation": "\\mathrm{MLD}=50\\,e^{w_0},\\;\\mathrm{D26}=\\mathrm{MLD}+5+65\\,e^{w_1},\\;T_{\\mathrm{c}}(z)=T_{\\mathrm{p}}(\\mathrm{interp}(z;\\mathbf{c}\\!\\to\\!\\mathbf{p}))",
+      "title": "Warp",
+      "subtitle": "Stretch the thermocline",
+      "body": "<p>Canonical knots sit at 0, 50 m, 120 m, and the bottom. Physical knots sit at 0, mixed-layer depth, 26 °C depth, and the bottom.</p>{{diagram}}<p>Stretch is predicted and unused.</p>",
+      "equation": "\\mathrm{MLD}=50\\,e^{w_0},\\;\\mathrm{D26}=\\mathrm{MLD}+5+65\\,e^{w_1}",
       "diagram": "warp_knots",
-      "code": "canon c = (0, 50, 120, z_bot)\\nphys  p = (0, MLD, D26, z_bot)\\nMLD = 50*exp(w0); D26 = MLD+5+65*exp(w1)\\nT_c(z) = T_p( interp(z; c→p) )   # warp\\nT_p(z) = T_c( interp(z; p→c) )   # unwarp\\n# stretch = 1+0.3*tanh(w2)  # predicted, unused"
+      "code": "mld = CANON_MLD_M * torch.exp(raw[..., 0])\nmld = mld.clamp(MIN_LAYER_M, z_bot - 2.0 * MIN_LAYER_M)\nd26 = mld + MIN_LAYER_M + _GAP0 * torch.exp(raw[..., 1])\nd26 = d26.clamp_max(z_bot - MIN_LAYER_M)\nstretch_raw = raw[..., 2] if raw.shape[-1] > 2 else raw.new_zeros(raw.shape[:-1])\nstretch = 1.0 + 0.3 * torch.tanh(stretch_raw)\nreturn mld, d26, stretch"
     },
     {
       "id": "unwarp",
       "accent": "heave",
-      "title": "Residual on canonical → physical T/S",
-      "subtitle": "Warp climatology, add residual, unwarp",
-      "body": "<p>Decode path in <code>physical_ts</code>:</p><ol><li>Decode MLD, D26 from warp logits.</li><li>Build residual profiles on the canonical grid: T<sub>res</sub> = z<sub>T</sub> V<sub>T</sub> + μ<sub>T</sub> (same for S).</li><li><strong>Warp</strong> the climatology prior onto canonical landmarks: T<sub>prior</sub> = Warp(T<sub>clim</sub>; MLD, D26).</li><li>Add residual on canonical: T<sub>canon</sub> = T<sub>prior</sub> + T<sub>res</sub>.</li><li><strong>Unwarp</strong> back to physical depth: T<sub>phys</sub> = Unwarp(T<sub>canon</sub>; MLD, D26).</li></ol>{{diagram}}<p>Warp samples physical values onto the canonical numeric z-grid by interpolating at mapped coordinates. Unwarp is the inverse map.</p>",
-      "equation": "T_{\\mathrm{phys}}=\\mathrm{Unwarp}\\big(\\mathrm{Warp}(T_{\\mathrm{clim}};\\mathrm{MLD},\\mathrm{D26})+Vz_T+\\mu_T\\big)",
+      "title": "Residual then unwarp",
+      "subtitle": "physical_ts",
+      "body": "<p>Warp climatology onto canonical depth. Add the residual. Unwarp back to physical depth.</p>{{diagram}}",
+      "equation": "T=\\mathrm{Unwarp}(\\mathrm{Warp}(T_{\\mathrm{clim}})+T_{\\mathrm{res}})",
       "diagram": "unwarp",
-      "code": "T_prior = warp(T_clim, MLD, D26)\\nT_canon = T_prior + T_res\\nT_phys  = unwarp(T_canon, MLD, D26)"
+      "code": "mld, d26, T_res, S_res = self.decode_ts(mu)\nT_prior = self._warp(self.T_clim[idx], self.z, mld, d26)\nT = self._unwarp(T_prior + T_res, self.z, mld, d26)"
     },
     {
       "id": "da",
       "accent": "da",
-      "title": "DA handoff contract",
-      "subtitle": "What to serve · what not to invent",
-      "body": "<p><span class=\"hl-da\">Serve μ profiles</span> on the cache depth grid (1801 levels, 0…1800 m). If the forward width is 2d, take <code>[:, :d]</code> only.</p><p><strong>R</strong> is the observation-error covariance used by Data Assimilation / Optimal Interpolation (OI). Today we ingest a <strong>diagonal</strong> R: R ≈ diag((σ<sub>o</sub>)<sup>2</sup>).</p><p><strong>H</strong> is the TSIS observation operator: it averages the 1 m T/S profile into the <strong>41 HYCOM layers</strong> whose interfaces come from the background column thickness (<code>thknss</code>). Do not apply H in the ML export path — TSIS applies H on the cycle.</p><p><strong>Dai σ<sub>o</sub></strong> is the per-layer observation-error scale: RMSE of the model vs Argo <em>after</em> H, then floored (0.05 °C / 0.02 psu). It is <strong>not</strong> 1 m RMSE and <strong>not</strong> CRPS-head σ. Export: <code>reports/sigma_o_hycom.csv</code>.</p><p><strong>Hard rule:</strong> never mix a checkpoint with a different cache (PCA lives in the cache). Pair them.</p>",
-      "equation": "y^{o}=\\mu(z),\\quad R=\\mathrm{diag}\\big(\\sigma_o^{\\mathrm{Dai}}(H\\mu)\\big)^2",
+      "title": "What DA gets",
+      "subtitle": "Mean profiles, Dai R",
+      "body": "<p>Serve μ on the 1 m grid. TSIS averages into 41 HYCOM layers. R is Dai RMSE after that average, floored. Pair each checkpoint with its cache.</p>",
+      "equation": "y^{o}=\\mu(z),\\quad R=\\mathrm{diag}(\\sigma_o^{\\mathrm{Dai}})^2",
       "diagram": "da",
-      "code": "serve μ only (1 m grid)\\nH: 1 m → 41 HYCOM layers (TSIS)\\nR ← Dai σ_o after H (floored)\\npair ckpt ↔ cache"
+      "code": "def apply_H(z_1m, T_1m, S_1m, p_ifc, zmax=ZMAX, fill=True):\n    return (\n        layer_sample(z_1m, T_1m, p_ifc, zmax, fill=fill),\n        layer_sample(z_1m, S_1m, p_ifc, zmax, fill=fill),\n    )"
     },
     {
       "id": "tradeoffs",
       "accent": "da",
-      "title": "Architectural tradeoffs",
-      "subtitle": "Choices that matter for DA and research",
-      "body": "<p><strong>Marginal CRPS vs joint R.</strong> Training scores each PCA mode separately. Induced Σ = V diag(σ²) Vᵀ is not a learned joint error model. For OI, diagonal R has been the safer ingest.</p><p><strong>Native PCA vs heave.</strong> A×CRPS decodes T/S PCs on physical z. Heave predicts landmarks + residuals on a warped canonical grid, then unwinds. Better thermocline geometry is the bet; clim prior fallback is basin-mean when the cache has no climatology field.</p><p><strong>Uncertainty for DA.</strong> CRPS σ is a research signal until ENCE-by-band gates; operational R stays Dai σ<sub>o</sub>.</p>",
-      "equation": "\\underbrace{\\mathrm{CRPS\\ on\\ scores}}_{\\mathrm{train}}\\;\\parallel\\;\\underbrace{\\mathrm{Dai\\,}\\sigma_o}_{\\mathrm{ingest\\ }R}",
+      "title": "Tradeoffs",
+      "subtitle": "Train vs ingest",
+      "body": "<p>Training scores each PCA mode alone. That is not a joint error for OI. Heave bets on thermocline geometry. Until calibration gates pass, ingest stays Dai.</p>",
+      "equation": "\\mathrm{CRPS}(\\mu,\\sigma,y_{\\mathrm{pc}})\\;\\|\\;\\mathrm{Dai}\\,\\sigma_o",
       "diagram": "tradeoffs",
-      "code": "train:  marginal CRPS(μ,σ,y_pc)\\nserve:  μ(z)\\ningest: diag Dai σ_o"
+      "code": "if self.prob_mode == \"crps\":\n    return torch.mean(\n        gaussian_crps_torch(mu, sigma, target, sigma_min=self.sigma_min)\n    )"
     }
   ]
 };

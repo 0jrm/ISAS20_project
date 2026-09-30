@@ -252,10 +252,22 @@ const DEFAULT_DECK = {
   "title": "MAPS lab update · NeSPReSO DA loops",
   "defaultLayout": "a",
   "legend": [
-    { "key": "encoder", "label": "NeSPReSO obs path" },
-    { "key": "da", "label": "TSIS / DA cycle" },
-    { "key": "heave", "label": "HYCOM apply / forecast" },
-    { "key": "uncertainty", "label": "Scores / RMSE" }
+    {
+      "key": "encoder",
+      "label": "NeSPReSO obs path"
+    },
+    {
+      "key": "da",
+      "label": "TSIS / DA cycle"
+    },
+    {
+      "key": "heave",
+      "label": "HYCOM apply / forecast"
+    },
+    {
+      "key": "uncertainty",
+      "label": "Scores / RMSE"
+    }
   ],
   "slides": [
     {
@@ -263,138 +275,157 @@ const DEFAULT_DECK = {
       "accent": "da",
       "layout": "b",
       "title": "NeSPReSO into HYCOM / TSIS",
-      "subtitle": "Graduate lab update · ~15 min · Aug 2026",
-      "body": "<p>Progress update on Aim 2’s data-assimilation loop. I own the pipe from a HYCOM restart through TSIS into an owned forecast, and I have scored NeSPReSO profiles against a traditional analysis on the same background.</p><p>Today: what works, what lost to a free run, and where I want feedback. This is <strong>not</strong> an OSSE skill claim.</p>",
+      "subtitle": "Lab update · ~15 min · Aug 2026",
+      "body": "<p>I own the pipe from a HYCOM restart through TSIS into a forecast. Today: what beats a free run, what lost, and where I want feedback. Not an OSSE.</p>",
       "equation": "\\text{HYCOM bg} \\xrightarrow{\\text{TSIS}} \\delta x \\xrightarrow{\\texttt{incflg}=-1} \\text{forecast}",
       "diagram": "cover",
-      "code": "lab update\\npipe owned · ops wins\\nNeSPReSO profile-only loses"
+      "code": "bash stage_hycom.sh freerun\nbash submit.sh freerun freerun 4\n$VENV_PY build_obs.py both\nbash run_tsis.sh ops\nbash submit.sh ops forecast 7"
     },
     {
       "id": "bottom_line",
       "accent": "da",
       "layout": "a",
-      "title": "Bottom line · three facts",
-      "subtitle": "Pipe · traditional DA · NeSPReSO profiles",
-      "body": "<p><span class=\"hl-heave\">One.</span> The pipe is owned. Stage a restart, run TSIS, convert the NetCDF increment, apply it in owned HYCOM, forecast a week.</p><p><span class=\"hl-da\">Two.</span> Traditional TSIS on a Gulf that has already drifted four days beats the free run against Argo. Analysis-time T RMSE 0.912 → 0.496 °C; ops still ahead at day 7.</p><p><span class=\"hl-uncertainty\">Three.</span> Profile-only NeSPReSO on that same background did <strong>not</strong> beat doing nothing. A separate V08 HYCOM matches abozec expt 05.3 byte-for-byte on the first archive (configuration ownership, not DA skill).</p>",
-      "equation": "\\mathrm{RMSE}^{\\mathrm{ops}}_{\\mathrm{anl}} = 0.496^{\\circ}\\mathrm{C} \\lt \\mathrm{RMSE}^{\\mathrm{null}} = 0.912 \\lt \\mathrm{RMSE}^{\\mathrm{Nesp}}",
+      "title": "Bottom line",
+      "subtitle": "Pipe · ops · NeSPReSO",
+      "body": "<p>The pipe runs. Ops cuts analysis T RMSE from 0.912 to 0.496 °C and stays ahead at day 7. NeSPReSO profiles on that same ocean do worse than doing nothing.</p>",
+      "equation": "\\mathrm{RMSE}^{\\mathrm{ops}}_{\\mathrm{anl}}=0.496^{\\circ}\\mathrm{C} \\lt 0.912 \\lt \\mathrm{RMSE}^{\\mathrm{Nesp}}",
       "diagram": "bottom",
-      "codeHtml": true,
-      "code": "<div class=\"bkt bkt-heave\"><span class=\"bkt-label\">pipe</span>restart → TSIS → xa2inc<br>→ incflg=-1 → forecast</div><div class=\"bkt bkt-da\"><span class=\"bkt-label\">ops wins</span>0.912 → 0.496 °C (anl)<br>still ahead at +168 h</div><div class=\"bkt bkt-uncertainty\"><span class=\"bkt-label\">NeSPReSO loses</span>argo 1.414 · tracks 1.815<br>worse than null at anl</div>"
+      "code": "bash run_tsis.sh ops\nbash run_tsis.sh nespreso_argo\nbash run_tsis.sh nespreso_tracks\nbash submit.sh ops forecast 7\nbash submit.sh nespreso_argo forecast 7"
     },
     {
       "id": "three_machines",
       "accent": "da",
       "layout": "a",
-      "title": "Three machines that must agree",
-      "subtitle": "NeSPReSO estimates profiles · TSIS analyzes · HYCOM absorbs",
-      "body": "<p><span class=\"hl-encoder\">NeSPReSO</span> turns surface context into estimated T/S profiles. Think of it as an observation operator that estimates profile-like information where floats are missing.</p><p><span class=\"hl-da\">TSIS</span> compares those observations to a HYCOM background and writes an increment (xprep → xgmrf → xa2inc).</p><p><span class=\"hl-heave\">HYCOM</span> is the dynamical ocean. It forecasts forward and must absorb the increment without blowing up. A messy increment shows up as spin-up noise the next day.</p>",
-      "equation": "y^{o}=\\mathcal{H}_{\\mathrm{Nesp}}(\\mathrm{SST},\\mathrm{SSS},\\mathrm{SSH}),\\quad \\delta x=\\mathrm{TSIS}(y^{o}-H x^{b})",
+      "title": "Three machines",
+      "subtitle": "Profiles · analysis · forecast",
+      "body": "<p>NeSPReSO writes T/S profiles. TSIS turns obs minus background into an increment. HYCOM applies that increment and forecasts. A bad increment shows up tomorrow.</p>",
+      "equation": "y^{o}=\\mathcal{H}_{\\mathrm{Nesp}},\\quad \\delta x=\\mathrm{TSIS}(y^{o}-H x^{b})",
       "diagram": "machines",
-      "codeHtml": true,
-      "code": "<div class=\"bkt bkt-encoder\"><span class=\"bkt-label\">NeSPReSO</span>surface → μ(z) profiles<br>API / serve path</div><div class=\"bkt bkt-da\"><span class=\"bkt-label\">TSIS</span>xprep → xgmrf → xa2inc<br>writes incupd diff archive</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">HYCOM</span>reads incupd<br>incflg=-1 applies patch</div>"
+      "code": "def apply_H(z_1m, T_1m, S_1m, p_ifc, zmax=ZMAX, fill=True):\n    return (\n        layer_sample(z_1m, T_1m, p_ifc, zmax, fill=fill),\n        layer_sample(z_1m, S_1m, p_ifc, zmax, fill=fill),\n    )"
     },
     {
       "id": "daily_loop",
       "accent": "da",
       "layout": "a",
-      "title": "Daily loop I now own",
-      "subtitle": "Background → analysis → difference archive → apply",
-      "body": "<p>Read the <span class=\"hl-da\">TSIS</span> bracket as the analysis chain, then the <span class=\"hl-heave\">HYCOM</span> bracket as the model apply.</p><p>xa2inc writes a <em>difference</em> archive (header says diff day; T mins/maxes are a few degrees, not 0–30). HYCOM must treat it as a patch: <code>incflg=-1</code>. Positive one treats the file as a target state. That is how early attempts blew up layer thickness (<code>neg dp</code>).</p><p>On the drifted forecast members, apply logs show 97 <code>finished incupdate</code> lines and zero <code>neg dp</code>.</p>",
-      "equation": "\\texttt{incflg}=-1:\\; x \\leftarrow x + \\Delta_{\\mathrm{xa2inc}},\\quad \\texttt{incflg}=+1:\\; \\text{treat as target (unsafe)}",
+      "title": "Daily loop I own",
+      "subtitle": "Background, analysis, apply",
+      "body": "<p>xa2inc writes a difference file. HYCOM must add it (incflg=-1). Treating it as a full state crashed layer thickness. Drifted apply logs: 97 updates, zero crashes.</p>",
+      "equation": "\\texttt{incflg}=-1:\\; x \\leftarrow x + \\Delta",
       "diagram": "loop",
-      "codeHtml": true,
-      "code": "<div class=\"bkt bkt-heave\"><span class=\"bkt-label\">HYCOM bg</span>integrate restart<br>→ archv / restart_dayN<div class=\"bkt bkt-da\"><span class=\"bkt-label\">TSIS</span>xprep (ops) or prebuilt obs<br>xgmrf → inc.*.nc<br>xa2inc → incupd.*</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">apply</span>incflg=-1 day 1 only<br>then forecast incflg=0</div></div>"
+      "code": "bash stage_hycom.sh freerun\nbash submit.sh freerun freerun 4\n$VENV_PY build_obs.py both\nbash run_tsis.sh ops\nbash submit.sh ops forecast 7"
     },
     {
       "id": "campaigns",
       "accent": "da",
       "layout": "a",
-      "title": "Three campaigns this summer",
-      "subtitle": "2 Jan twins · 6 Jan drifted · 05.3 canary",
-      "body": "<p><strong>2 Jan twins</strong> (13 Aug). Four copies from the same restart; analysis six hours later. Too close to reanalysis. Ops beat null. NeSPReSO and dense lost.</p><p><strong>6 Jan drifted</strong> (18 Aug). Four free days with no assimilation, then TSIS once against that drifted ocean, then seven forecast days. Every member shares <code>restart_day04</code>. Innovations are NeSPReSO minus the <em>drifted</em> column.</p><p><strong>05.3 canary</strong> (20 Aug). V08 binary matches abozec expt 05.3 on the first archive byte-for-byte. Configuration ownership, separate from DA skill.</p>",
-      "equation": "\\underbrace{t_{0}+6\\mathrm{h}}_{\\text{2 Jan}}\\;\\big\\|\\;\\underbrace{t_{0}+4\\mathrm{d}}_{\\text{drifted}}\\;\\big\\|\\;\\underbrace{\\mathrm{archm}_{1}}_{\\text{05.3 bit-id}}",
+      "title": "Three campaigns",
+      "subtitle": "2 Jan · 6 Jan · 05.3",
+      "body": "<p>2 Jan is analysis 6 h after restart, too easy. 6 Jan is four free days, then one TSIS, then a week. Same ranking. V08 matching 05.3 is config ownership, not DA skill.</p>",
+      "equation": "t_{0}+6\\mathrm{h}\\;\\|\\;t_{0}+4\\mathrm{d}\\;\\|\\;\\mathrm{archm}_{1}",
       "diagram": "campaigns",
-      "codeHtml": true,
-      "code": "<div class=\"bkt bkt-da\"><span class=\"bkt-label\">members</span>null · ops<br>nespreso_argo · tracks/dense</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">shared bg</span>2 Jan: near restart<br>6 Jan: restart_day04</div><div class=\"bkt bkt-encoder\"><span class=\"bkt-label\">NeSPReSO sites</span>argo: GDAC columns<br>tracks: 0.25° SLA thin</div>"
+      "code": "bash stage_hycom.sh null\nbash stage_hycom.sh ops\nbash stage_hycom.sh nespreso_argo\nbash stage_hycom.sh nespreso_tracks"
     },
     {
       "id": "obs_path",
       "accent": "encoder",
       "layout": "a",
       "title": "NeSPReSO obs on the drifted state",
-      "subtitle": "Profile-only write-out · satellites masked",
-      "body": "<p><span class=\"hl-encoder\">build_obs.py</span> loads the drifted 3D T/S/thk, calls the NeSPReSO profile or grid API, layer-averages onto HYCOM interfaces, masks every satellite obs/inov variable, sets profiles-only gates.</p><p><span class=\"hl-da\">Ops</span> takes a different path. qcobs has no 6 Jan file, so <code>run_tsis.sh ops</code> runs xprep from cargo <code>ocn_obs</code> (Argo ±4 d, L3/L4 SLA, L4 SST; no L3 SST).</p><p>Mechanical fact: NeSPReSO members write T, S, thickness. Their increment <code>uvl</code>, <code>vvl</code>, and <code>ssh</code> are identically zero. Ops SSH increment RMS is 0.075.</p>",
-      "equation": "d = y^{\\mathrm{Nesp}} - H x^{b}_{\\mathrm{drifted}},\\quad \\mathrm{SSH}^{\\mathrm{inc}}_{\\mathrm{Nesp}}\\equiv 0",
+      "subtitle": "Profiles only",
+      "body": "<p>NeSPReSO members get profiles only. Satellites are masked. Ops uses cargo Argo, SLA, and SST via xprep. NeSPReSO increment SSH and velocity are zero. Ops SSH rms is 0.075.</p>",
+      "equation": "d = y^{\\mathrm{Nesp}} - H x^{b},\\quad \\mathrm{SSH}^{\\mathrm{inc}}_{\\mathrm{Nesp}}\\equiv 0",
       "diagram": "obs",
-      "media": { "type": "img", "src": "media/inc_nespreso_argo_tem.png", "caption": "2 Jan · nespreso_argo T increment map (SSH blank on purpose)." },
-      "codeHtml": true,
-      "code": "<div class=\"bkt bkt-heave\"><span class=\"bkt-label\">drifted bg</span>archv.2024_005_18</div><div class=\"bkt bkt-encoder\"><span class=\"bkt-label\">build_obs</span>API profiles / tracks<br>layer-avg → HYCOM<br>mask satellites · SPVAL<div class=\"bkt bkt-da\"><span class=\"bkt-label\">xgmrf</span>skip xprep (NeSPReSO)<br>ops: xprep then xgmrf</div></div><div class=\"bkt bkt-uncertainty\"><span class=\"bkt-label\">sanity</span>9 argo cols · 119 tracks<br>SSH/uv ≡ 0 in inc</div>"
+      "media": {
+        "type": "img",
+        "src": "media/inc_nespreso_argo_tem.png",
+        "caption": "2 Jan · nespreso_argo T increment (SSH blank on purpose)."
+      },
+      "code": "SPVAL = 2.0**100\nval_t, val_s = apply_H(z_1m, T_1m, S_1m, p_ifc, fill=False)\nid_t = live_id(val_t, zmid, dpbl_use, k0=k0)\nval_t = np.where(id_t == 1, val_t, np.nan)"
     },
     {
       "id": "headlines",
       "accent": "uncertainty",
       "layout": "b",
-      "title": "Headline scores (Argo T RMSE)",
-      "subtitle": "Analysis-time ranking · drifted campaign",
-      "body": "<p>Pooled GDAC Argo temperature RMSE (°C) at analysis on the drifted loop. Profile counts are small (8–11 floats/day). Ranking is still clear.</p><ul><li><span class=\"hl-da\">ops 0.496</span> — only member that beats the free run</li><li><span class=\"hl-heave\">null 0.912</span> — drifted free run</li><li><span class=\"hl-uncertainty\">nespreso_argo 1.414</span> — worse than null at the floats it assimilated</li><li><span class=\"hl-uncertainty\">nespreso_tracks 1.815</span> — denser sampling, worse still</li></ul><p>2 Jan contrast (near restart): null 1.03, ops 0.64, nespreso_argo 2.34, dense 4.36.</p>",
-      "equation": "\\mathrm{rank:\\ ops \\prec null \\prec nesp\\_argo \\prec nesp\\_tracks}",
+      "title": "Headline scores",
+      "subtitle": "Argo T RMSE at analysis",
+      "body": "<p>Ops 0.496 beats the free run 0.912. nespreso_argo 1.414 and tracks 1.815 both lose. 8–11 floats per day. Same order on 2 Jan, closer to restart.</p>",
+      "equation": "\\mathrm{ops} \\prec \\mathrm{null} \\prec \\mathrm{nesp\\_argo} \\prec \\mathrm{tracks}",
       "diagram": "headlines",
-      "media": { "type": "img", "src": "media/argo_rmse_T.png", "caption": "2 Jan Argo RMSE bars (packet figure)." }
+      "media": {
+        "type": "img",
+        "src": "media/argo_rmse_T.png",
+        "caption": "2 Jan Argo RMSE bars."
+      },
+      "code": "FLOOR_T = 0.05\nFLOOR_S = 0.02\nsig_t = np.maximum(rt, floor_t)\nsig_s = np.maximum(rs, floor_s)"
     },
     {
       "id": "rmse_table",
       "accent": "uncertainty",
       "layout": "c",
-      "title": "Full Argo T RMSE table (drifted)",
-      "subtitle": "Source: MAPS-handoff-drift-loop.html verification · da_loop_20240106",
-      "body": "<p>Pooled at native Argo pressures. Counts 9 / 11 / 8 / 10 at anl / +24 h / +48 h / +168 h.</p><table><thead><tr><th>Member</th><th>anl</th><th>+24 h</th><th>+48 h</th><th>+168 h</th><th>incupd</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.496</td><td>0.667</td><td>0.510</td><td>0.748</td><td>97</td></tr><tr><td>null</td><td>0.912</td><td>0.840</td><td>0.783</td><td>0.853</td><td>0</td></tr><tr class=\"hl-bad\"><td>nespreso_argo</td><td>1.414</td><td>0.850</td><td>0.771</td><td>0.849</td><td>97</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>1.815</td><td>1.784</td><td>1.681</td><td>1.553</td><td>97</td></tr></tbody></table><p>Ops stays better than null through +168 h. Tracks stay cold all week. Analysis-time T bias vs Argo: null −0.26, ops −0.18, argo −0.44, tracks −0.78 °C.</p>",
-      "equation": "\\mathrm{RMSE}_T\\ (^{\\circ}\\mathrm{C})\\ \\text{vs GDAC Argo, Gulf subset}",
-      "diagram": "none"
+      "title": "Argo T RMSE, drifted",
+      "subtitle": "da_loop_20240106",
+      "body": "<p>Pooled vs Argo. Counts 9 / 11 / 8 / 10.</p><table><thead><tr><th>Member</th><th>anl</th><th>+24 h</th><th>+48 h</th><th>+168 h</th><th>incupd</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.496</td><td>0.667</td><td>0.510</td><td>0.748</td><td>97</td></tr><tr><td>null</td><td>0.912</td><td>0.840</td><td>0.783</td><td>0.853</td><td>0</td></tr><tr class=\"hl-bad\"><td>nespreso_argo</td><td>1.414</td><td>0.850</td><td>0.771</td><td>0.849</td><td>97</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>1.815</td><td>1.784</td><td>1.681</td><td>1.553</td><td>97</td></tr></tbody></table><p>Ops stays ahead through day 7. Tracks stay cold. Bias: null −0.26, ops −0.18, argo −0.44, tracks −0.78 °C.</p>",
+      "equation": "\\mathrm{RMSE}_T\\ (^{\\circ}\\mathrm{C})\\ \\text{vs GDAC Argo}",
+      "diagram": "none",
+      "code": "sig_t = np.maximum(rt, 0.05)\nsig_s = np.maximum(rs, 0.02)"
     },
     {
       "id": "movie",
       "accent": "heave",
       "layout": "b",
       "mediaTop": true,
-      "title": "Movie · drifted members versus ops",
-      "subtitle": "SST / SSS / SSH · first 96 h shared freerun",
-      "body": "<p>Absolute columns: null, ops, NeSPReSO argo, tracks. Difference columns are member minus ops.</p><p>First 96 hours are the shared free run (differences zero). Apply starts 5 Jan 19Z.</p><p>Look at tracks−ops SSH. Basin-scale mismatch even though increment SSH is identically zero. That is steric/thickness response (<em>inference</em>), not a written SSH patch. Ops increment SSH RMS = 0.075.</p>",
-      "equation": "\\Delta \\mathrm{SSH}_{\\mathrm{tracks}} \\neq 0 \\quad\\text{even though}\\quad \\delta\\mathrm{SSH}^{\\mathrm{inc}}\\equiv 0",
-      "media": { "type": "video", "src": "media/drift_vs_null.mp4", "caption": "264 hourly frames · differences = member − ops." }
+      "title": "Movie · drifted members vs ops",
+      "subtitle": "SST / SSS / SSH",
+      "body": "<p>First 96 h are the shared free run. Then apply. Tracks minus ops SSH is not zero even though increment SSH is. That is thickness, not a written SSH patch.</p>",
+      "equation": "\\Delta \\mathrm{SSH}_{\\mathrm{tracks}} \\neq 0 \\quad\\text{while}\\quad \\delta\\mathrm{SSH}^{\\mathrm{inc}}\\equiv 0",
+      "media": {
+        "type": "video",
+        "src": "media/drift_vs_null.mp4",
+        "caption": "264 hourly frames · differences = member − ops."
+      },
+      "code": "ONEM = 9806.0\ndp_m = np.asarray(dp, dtype=np.float64) / ONEM"
     },
     {
       "id": "next",
       "accent": "da",
       "layout": "a",
-      "title": "What we learned · open questions · next",
-      "subtitle": "Feedback wanted on error model, SSH, ingest, OSSE gate",
-      "body": "<p><strong>Learned.</strong> Traditional DA on this drifted ocean works. Profile-only NeSPReSO does not beat null. More columns made it worse. Bottleneck is the observation (cold bias, error model, missing SSH), not HYCOM apply.</p><p><strong>Ask the room.</strong> (1) Error model / native NeSPReSO vs those nine GDAC profiles on 6 Jan was not recomputed here. (2) Write SSH, keep satellites on, or stay profile-only until T/S bias is honest? (3) Production Class 3 still wants xprep to write the profile. (4) No OSSE until obs quality is why we win or lose.</p><p><strong>Next.</strong> Score native NeSPReSO vs GDAC on drifted dates · fix error model / vertical remap (not another dense grid) · optional SSH/hybrid once T/S stops pulling floats the wrong way · keep V08 and masterB separate · OSSE only after beating ops or a documented reason not to.</p>",
-      "equation": "\\text{obs quality first},\\quad \\text{OSSE later}",
+      "title": "What we learned",
+      "subtitle": "Ask · next",
+      "body": "<p>Traditional DA works here. More NeSPReSO columns made it worse. Fix the obs, bias, error, SSH, before another grid. OSSE waits until we know why we win or lose.</p>",
+      "equation": "\\text{obs quality first}",
       "diagram": "next",
-      "codeHtml": true,
-      "code": "<div class=\"bkt bkt-uncertainty\"><span class=\"bkt-label\">bottleneck</span>cold bias · R · no SSH<br>not apply / neg dp</div><div class=\"bkt bkt-da\"><span class=\"bkt-label\">ask</span>error model · SSH?<br>xprep ingest · OSSE gate</div><div class=\"bkt bkt-heave\"><span class=\"bkt-label\">keep separate</span>masterB (DA, 92)<br>V08 (05.3, 189)</div>"
+      "code": "FLOOR_T = 0.05\nFLOOR_S = 0.02\nsig_t = np.maximum(rt, floor_t)\nsig_s = np.maximum(rs, floor_s)"
     },
     {
       "id": "backup_inc",
       "accent": "uncertainty",
       "layout": "c",
       "title": "Backup · how big was the correction?",
-      "subtitle": "Size of the TSIS increment · apply stayed healthy",
-      "body": "<p><strong>Takeaway.</strong> Ops wrote a real surface-height correction (SSH rms 0.075) plus a modest temperature patch (T rms 0.070). NeSPReSO members wrote <em>no</em> SSH and <em>no</em> velocity — only T/S/thickness. Their temperature patches were smaller (argo 0.047) or larger and colder (tracks 0.167), and both still lost to Argo. The model applied every increment cleanly (97 update steps, zero negative-thickness crashes).</p><table><thead><tr><th>Member</th><th>SSH rms</th><th>T rms</th><th>plain reading</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.075</td><td>0.070</td><td>has SSH + T</td></tr><tr><td>nespreso_argo</td><td>0</td><td>0.047</td><td>T/S only</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>0</td><td>0.167</td><td>T/S only, larger T</td></tr></tbody></table><p>Thickness numbers in the raw files use HYCOM pressure units (<code>onem≈9806 ≈ 1 m</code>). Treat thickness stats as untrusted until someone reports wet-ocean-only values.</p>",
-      "equation": "\\texttt{onem}\\approx 9806 \\Rightarrow \\Delta p/\\texttt{onem}\\ \\text{in meters}",
+      "subtitle": "Increment size · apply stayed healthy",
+      "body": "<p>Ops writes SSH (0.075) and T (0.070). NeSPReSO writes T/S only. Apply was clean: 97 steps, no thickness crash.</p><table><thead><tr><th>Member</th><th>SSH rms</th><th>T rms</th></tr></thead><tbody><tr class=\"hl-ops\"><td>ops</td><td>0.075</td><td>0.070</td></tr><tr><td>nespreso_argo</td><td>0</td><td>0.047</td></tr><tr class=\"hl-bad\"><td>nespreso_tracks</td><td>0</td><td>0.167</td></tr></tbody></table><p>Thickness in the files uses HYCOM pressure units.</p>",
+      "equation": "\\texttt{onem}\\approx 9806",
       "diagram": "none",
-      "media": { "type": "img", "src": "media/still_anl.png", "caption": "Drifted movie poster · analysis time." }
+      "media": {
+        "type": "img",
+        "src": "media/still_anl.png",
+        "caption": "Drifted movie poster · analysis time."
+      },
+      "code": "ONEM = 9806.0\ndp_m = np.asarray(dp, dtype=np.float64) / ONEM"
     },
     {
       "id": "backup_053",
       "accent": "heave",
       "layout": "b",
       "title": "Backup · 05.3 free-run canary",
-      "subtitle": "V08 · 189 ranks · first archm bit-identical",
-      "body": "<p>Same source family, namelist, IC, nest, interpolated CFSv2 forcing, 189 ranks, SERIAL_IO rebuild. First 6-hour archive matched 05.3 byte-for-byte.</p><p>Month-3 interior SST RMS 0.17 K and SSH 2.8 cm is expected mesoscale wander, not the old hour-1 southern Montgomery band from mixing masterB namelist hacks.</p><p>If DA must share that ocean, port DA hycom to V08. Do not strip <code>hybthn</code> to force masterB onto 05.3 blkdat.</p>",
+      "subtitle": "V08 · first archive bit-identical",
+      "body": "<p>First 6-hour archive matches 05.3 bit for bit. Later SST/SSH drift is mesoscale wander. If DA shares that ocean, port DA hycom to V08. Do not strip hybthn.</p>",
       "equation": "\\mathrm{archm}_{1}(\\mathrm{V08}) \\equiv \\mathrm{archm}_{1}(05.3)",
       "diagram": "canary",
-      "media": { "type": "video", "src": "media/3mo_fromic_owned_vs_053.mp4", "caption": "91 daily frames · SSH in m (srfhgt/9.806) · Δ ±5 cm · frame 1 should look empty." }
+      "media": {
+        "type": "video",
+        "src": "media/3mo_fromic_owned_vs_053.mp4",
+        "caption": "91 daily frames · SSH in m · Δ ±5 cm · frame 1 should look empty."
+      },
+      "code": "bash stage_hycom.sh freerun\nbash submit.sh freerun freerun 4"
     }
   ]
 };
@@ -561,14 +592,20 @@ function legendHTML() {
   ).join("")}</div>`;
 }
 
+function mediaRel(src) {
+  const name = String(src || "").split(/[/\\]/).pop();
+  return name ? ("media/" + name) : "";
+}
+
 function mediaHTML(media, top) {
-  if (!media || !media.src) return "";
+  const src = mediaRel(media && media.src);
+  if (!src) return "";
   const cap = media.caption ? `<div class="media-cap">${esc(media.caption)}</div>` : "";
   const cls = top ? "media-block media-top" : "media-block";
   if (media.type === "video") {
-    return `<div class="${cls}"><video controls preload="metadata" src="${esc(media.src)}"></video>${cap}</div>`;
+    return `<div class="${cls}"><video controls preload="metadata" src="${esc(src)}"><source src="${esc(src)}" type="video/mp4"></video>${cap}</div>`;
   }
-  return `<div class="${cls}"><img src="${esc(media.src)}" alt="${esc(media.caption || "")}" />${cap}</div>`;
+  return `<div class="${cls}"><img src="${esc(src)}" alt="${esc(media.caption || "")}" />${cap}</div>`;
 }
 
 function codeColumn(s) {

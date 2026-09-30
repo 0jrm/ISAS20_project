@@ -1,0 +1,14 @@
+cell	label	T	S	ence_T	T_50_200	n	note	source
+ops	A_CRPS_z32 + 19 cube operators (frozen sat-skill leader)	0.53545	0.09077	0.67058		623	sat leader; 19 ops	frozen
+roni	A_CRPS_z32 + ONI/RONI, no operators (frozen)	0.53819	0.09057	0.46134	nan	623	sat+ONI/RONI	frozen
+stoch_eof	Stochastic EOF, 9-d SSS/SST/SSH (frozen ENCE bar)	0.54503	0.08929	0.151	nan	623	9-d sat; ENCE bar	frozen
+pair_argo	Pair MLP: satellites + earlier Argo PCs (frozen; needs a neighbor)	0.5309	0.0846	0.279	nan	623	needs legal earlier float	frozen
+persist	Persistence: copy earlier Argo profile, no network (frozen)	0.68539	0.10455	nan	nan	623	copy earlier Argo; no net	frozen
+cell0_gem	Linear GEM: ridge SSH/SST/SSS/season/lon → T PC1–4 and S PC1–2; other PCs climatology	0.5845298421193283	0.09785526675200917		1.365627998444159	623	ridge easy PCs; rest climatology	/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/reports/pc_routing_spec.json
+cell0_ridge64	Linear ridge: same 6 inputs → all 64 T/S PCs	0.5839280441108141	0.09661942007803304		1.3676194041739032	623	ridge all 64 PCs from easy inputs	/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/reports/pc_routing_spec.json
+cell4_trunc16	Linear ridge on 64 PCs, then zero T/S PC 17–32	0.5838973097827679	0.09661472633204439		1.3676700488683395	623	ridge64 with PC>16 zeroed	/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/reports/pc_routing_spec.json
+clim	Climatology: decode all 64 PCs as 0	1.7361398845470117	0.2164182771595298		3.518541984458777	623	PCA mean (all PCs 0)	/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/reports/pc_routing_spec.json
+pc_skip_smoke	Skip-easy MLP, 2+2 epoch smoke (not a bake-off)	0.5864533005442497	0.09942693133791763			623	2+2 epoch smoke; not a bake-off row	../reports/eval_pc_skip_smoke_s42.json
+pc_skip	Skip-easy MLP: frozen linear GEM on T PC1–4 / S PC1–2, network residual on the rest	0.574950608512687	0.09526694896844043	0.5204954782043164	0.7685299894315276	623	Skip-easy MLP: frozen linear GEM on T PC1–4 / S PC1–2, network residual on the rest	../reports/eval_pc_skip_s42.json
+pc_aux	Aux stem: 19 operators added only onto hard PCs (not T1–2 / S1–2)	0.5337096496494141	0.09083781670430673	0.3708755512241473	0.5267909010762821	623	Aux stem: 19 operators added only onto hard PCs (not T1–2 / S1–2)	../reports/eval_pc_aux_s42.json
+pc_wk	PC CRPS reweighted by unexplained variance (1−r²)	0.5379635639371463	0.08928358945504669	0.45432945971367183	0.5253389251390199	623	PC CRPS reweighted by unexplained variance (1−r²)	../reports/eval_pc_wk_s42.json

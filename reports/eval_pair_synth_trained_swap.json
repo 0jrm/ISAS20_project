@@ -1,0 +1,49 @@
+{
+  "n_forward": 623,
+  "n_reverse": 618,
+  "persist_forward_argo": {
+    "T": {
+      "mean": 0.6853861808776855,
+      "median": 0.4558522403240204
+    },
+    "S": {
+      "mean": 0.10454873740673065,
+      "median": 0.07583945989608765
+    }
+  },
+  "persist_reverse_argo": {
+    "T": {
+      "mean": 0.7022168040275574,
+      "median": 0.4637845754623413
+    },
+    "S": {
+      "mean": 0.1059926226735115,
+      "median": 0.07504023611545563
+    }
+  },
+  "forward_argo": {
+    "T": 0.8662220239639282,
+    "S": 0.15872333943843842
+  },
+  "forward_synth": {
+    "T": 0.5544977188110352,
+    "S": 0.09031673520803452
+  },
+  "reverse_argo": {
+    "T": 0.849148154258728,
+    "S": 0.1541069597005844
+  },
+  "reverse_synth": {
+    "T": 0.5513075590133667,
+    "S": 0.08945222944021225
+  },
+  "reverse_synth_absdt": {
+    "T": 0.5507602095603943,
+    "S": 0.08920791000127792
+  },
+  "sat_only_stoch_eof_on_test": {
+    "temperature": 0.5450314146457836,
+    "salinity": 0.08929103002688413
+  },
+  "note": "forward: earlier neighbor. reverse: later neighbor, signed dt (OOD) or absdt. synth = 9-d stoch_eof mu PCs. No retrain."
+}

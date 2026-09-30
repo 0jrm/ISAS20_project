@@ -1,0 +1,92 @@
+{
+  "cells": [
+    {
+      "label": "A_CRPS_s42",
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s42_s2/p5_A_CRPS_v2_s42_s2/model_best.pth",
+      "exists": true,
+      "n": 623,
+      "T_rmse": 0.5620075048690764,
+      "S_rmse": 0.09148611757753779,
+      "n2_profile": 0.3852327447833066,
+      "n2_level": 0.0028624933119315143,
+      "mean_profile": {
+        "n2_profile": 0.0,
+        "n2_level": 0.0,
+        "mean_T_d2_rms": 0.0004550304232510052,
+        "mean_S_d2_rms": 9.668207947521194e-05
+      },
+      "mean_profile_true": {
+        "n2_profile": 0.0,
+        "n2_level": 0.0,
+        "mean_T_d2_rms": 0.0006257744327562179,
+        "mean_S_d2_rms": 0.00029491654073404553
+      }
+    },
+    {
+      "label": "A_CRPS_z32",
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/acrps_phys_pca32_b/models/NeSPReSO2_ARGO_GoM_acrps_phys_pca32_b_acrps_phys_pca32_b_s42_s2/acrps_phys_pca32_b_s42_s2/model_best.pth",
+      "exists": true,
+      "n": 623,
+      "T_rmse": 0.5595045520462252,
+      "S_rmse": 0.09474475929427618,
+      "n2_profile": 0.7672552166934189,
+      "n2_level": 0.00717852684144819,
+      "mean_profile": {
+        "n2_profile": 0.0,
+        "n2_level": 0.0,
+        "mean_T_d2_rms": 0.001012280714058266,
+        "mean_S_d2_rms": 0.0005511738959957004
+      },
+      "mean_profile_true": {
+        "n2_profile": 0.0,
+        "n2_level": 0.0,
+        "mean_T_d2_rms": 0.0006257744327562179,
+        "mean_S_d2_rms": 0.00029491654073404553
+      }
+    },
+    {
+      "label": "A_CRPS_z",
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/acrps_z/models/NeSPReSO2_ARGO_GoM_A_CRPS_z_acrps_z_s42_s2/acrps_z_s42_s2/model_best.pth",
+      "exists": true,
+      "n": 623,
+      "T_rmse": 0.5512632095745598,
+      "S_rmse": 0.391796228931812,
+      "n2_profile": 1.0,
+      "n2_level": 0.34202960584983055,
+      "mean_profile": {
+        "n2_profile": 1.0,
+        "n2_level": 0.33444444444444443,
+        "mean_T_d2_rms": 0.008164185099303722,
+        "mean_S_d2_rms": 0.012563182972371578
+      },
+      "mean_profile_true": {
+        "n2_profile": 0.0,
+        "n2_level": 0.0,
+        "mean_T_d2_rms": 0.0006257744327562179,
+        "mean_S_d2_rms": 0.00029491654073404553
+      }
+    },
+    {
+      "label": "A_CRPS_z_roni_ops",
+      "checkpoint": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate/saved/acrps_z_roni_ops/models/NeSPReSO2_ARGO_GoM_A_CRPS_z_roni_ops_acrps_z_roni_ops_s42_s2/acrps_z_roni_ops_s42_s2/model_best.pth",
+      "exists": true,
+      "n": 623,
+      "T_rmse": 0.5633082314767991,
+      "S_rmse": 0.12486654350578885,
+      "n2_profile": 1.0,
+      "n2_level": 0.30060370964865346,
+      "mean_profile": {
+        "n2_profile": 1.0,
+        "n2_level": 0.2966666666666667,
+        "mean_T_d2_rms": 0.00262469076551497,
+        "mean_S_d2_rms": 0.004300644621253014
+      },
+      "mean_profile_true": {
+        "n2_profile": 0.0,
+        "n2_level": 0.0,
+        "mean_T_d2_rms": 0.0006257744327562179,
+        "mean_S_d2_rms": 0.00029491654073404553
+      }
+    }
+  ]
+}

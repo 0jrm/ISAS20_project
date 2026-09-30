@@ -52,6 +52,23 @@
         "ence_T_50_200_recalib": 0.381
       },
       "note": "Protocol is val ENCE stop. An earlier s2 snapshot printed T RMSE 0.533 in tmux before the path vanished."
+    },
+    "ops_heave": {
+      "config": "NeSPReSO2_onTemplate/config/argo/config_argo_A_CRPS_z32_ops_heave.json",
+      "cache": "data/cache/train_ready_heave_ops.pkl",
+      "checkpoint_s42": "NeSPReSO2_onTemplate/saved/acrps_z32_ops_heave/models/NeSPReSO2_ARGO_GoM_A_CRPS_z32_ops_heave_acrps_z32_ops_heave_s42_s2/acrps_z32_ops_heave_s42_s2/model_best.pth",
+      "eval": {
+        "rmse": "reports/eval_A_CRPS_z32_ops_heave_s42.json",
+        "cal": "reports/eval_A_CRPS_z32_ops_heave_cal.json"
+      },
+      "test_s42": {
+        "raw_profile_rmse_T": 0.544,
+        "raw_profile_rmse_S": 0.092,
+        "ence_T_raw": 0.191,
+        "ence_T_recalib_depth_band_var": 0.315,
+        "ence_T_50_200_recalib": 0.561
+      },
+      "note": "T RMSE vs A_CRPS_z32 pin only. Loses to ops-alone. Not ingest."
     }
   },
   "md": "reports/eval_A_CRPS_z32_ablation.md"
