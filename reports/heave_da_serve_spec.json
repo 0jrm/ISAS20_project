@@ -1,0 +1,178 @@
+{
+  "spec_version": 1,
+  "purpose": "Pins for nespreso_api DA profile endpoints. Not a Flask app. Load this file; do not retrain; do not swap NESPRESO_MODEL_PATH onto these .pth files.",
+  "source_note": "reports/heave_da_compare.md",
+  "repo_root": "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project",
+  "code_home": "NeSPReSO2_onTemplate",
+  "conda_env": "nespreso",
+  "pythonpath": [
+    "/unity/g2/jmiranda/SubsurfaceFields/Data/ISAS20_ARGO/ISAS20_project/NeSPReSO2_onTemplate"
+  ],
+  "legacy_sat_api": {
+    "keep_unchanged": true,
+    "routes": ["/v1_profile", "/v1_profile/grid"],
+    "reason": "Ozavala TorchScript + 15-PC sklearn pca_stats.pkl. Different PCA, depth, and architecture from the cells below."
+  },
+  "routes_to_add": {
+    "profile": "POST /v1_profile/{model}",
+    "grid": "POST /v1_profile/{model}/grid",
+    "model_enum": ["A_CRPS", "HeaveFast", "ops"],
+    "A_CRPS_seed_query": "optional ?seed=42|43|44, default 42"
+  },
+  "hard_rules": [
+    "Never mix a checkpoint with a different cache. PCA lives in the cache pickle.",
+    "Serve mu only. If forward output width is 2*d, take [:, :d]. Do not write CRPS-head sigma into NetCDF err/R.",
+    "Ingest R is Dai sigma_o after H (sigma_o_csv), floors 0.05 C / 0.02 psu. Not 1 m RMSE, not dense Sigma.",
+    "Do not apply HYCOM layer_sample here. TSIS applies H on cycle thknss.",
+    "Do not serve conv3, bathy, bathy_wind, Heave s42d, Latent, or Direct.",
+    "torch.load(..., map_location='cpu', weights_only=False); arch from ckpt['config']['arch']."
+  ],
+  "gold_decode": {
+    "entry": "scripts/thermocline_scorecard.py:_load_ckpt_pred",
+    "A_CRPS": "scripts/phase5_physical_space_score.py:_decode_pcs_to_ts",
+    "heave": "scripts/thermocline_scorecard.py:_decode_heave_ts -> model.loss.HeaveResidualFastLoss.physical_ts",
+    "enso_splice": "preproc.enso.inject_enso_columns",
+    "match_tol_T_S": 1e-5,
+    "match_tol_D26_m": 1e-4
+  },
+  "depth_grid": {
+    "PRES": "cache['PRES']",
+    "n_z": 1801,
+    "z0_m": 0.0,
+    "z_bot_m": 1800.0,
+    "dz_m": 1.0
+  },
+  "r_kind": "dai_sigma_o_after_H",
+  "sigma_o_csv": "reports/sigma_o_hycom.csv",
+  "sigma_o_floors": {"T_C": 0.05, "S_psu": 0.02},
+  "lc_box": {"lat": [24.0, 28.0], "lon": [-88.0, -84.0]},
+  "do_not_serve": ["conv3", "bathy", "bathy_wind", "heave_s42d", "Latent", "Direct"],
+  "shared_sat": {
+    "products": ["sss", "sst", "ssh"],
+    "note": "Reuse nespreso_api load_satellite_data. Harmonics: cos/sin(2pi*doy/365), cos/sin(2pi*lat/180), cos/sin(2pi*lon/360). MATLAB-style datenum is fine if doy matches the cache builder (juld % 365 in preproc_isas_sat)."
+  },
+  "enso": {
+    "needed_by": ["HeaveFast", "ops"],
+    "splice": "after 6 harmonics, before sat",
+    "n_enc_base": 6,
+    "files": {
+      "oni": "data/indices/oni.ascii.txt",
+      "roni": "data/indices/RONI.ascii.txt"
+    },
+    "fn": "preproc.enso.lookup_enso / inject_enso_columns"
+  },
+  "models": {
+    "A_CRPS": {
+      "role": "frozen TSIS ingest and OSSE xb",
+      "arch_type": "PatchConvMLP",
+      "input_dim": 9,
+      "output_dim": 32,
+      "n_enc": 6,
+      "n_sat": 3,
+      "probabilistic": true,
+      "input_layout": ["timecos", "timesin", "latcos", "latsin", "loncos", "lonsin", "sss", "sst", "ssh"],
+      "config_path": "NeSPReSO2_onTemplate/saved/runs/phase5_matrix/configs/p5_A_CRPS_v2_s42.json",
+      "cache_path": "data/cache/train_ready_3adcff404b0b.pkl",
+      "cache_hash": "3adcff404b0b",
+      "pca": "cache['pca_models']['temperature'|'salinity'] — 16 PCs, mean (1801,). Not models/pca_stats.pkl.",
+      "decode": "mu[:, :16] T PCs, mu[:, 16:32] S PCs; sklearn inverse_transform; native z, no warp",
+      "default_seed": 42,
+      "ckpts": {
+        "42": "NeSPReSO2_onTemplate/saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s42_s2/p5_A_CRPS_v2_s42_s2/model_best.pth",
+        "43": "NeSPReSO2_onTemplate/saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s43_s2/p5_A_CRPS_v2_s43_s2/model_best.pth",
+        "44": "NeSPReSO2_onTemplate/saved/phase5_matrix/A_CRPS_v2/models/NeSPReSO2_ARGO_GoM_p5_A_CRPS_v2_p5_A_CRPS_v2_s44_s2/p5_A_CRPS_v2_s44_s2/model_best.pth"
+      },
+      "sigma_o": "csv model=A_CRPS, 3-seed mean, regime=all for the first ingest file"
+    },
+    "HeaveFast": {
+      "role": "heave-family challenger; basin ingest if only one heave cell ships",
+      "arch_type": "HeaveResidualFast",
+      "input_dim": 11,
+      "output_dim": 35,
+      "n_warp": 3,
+      "n_enc": 8,
+      "n_sat": 3,
+      "probabilistic": true,
+      "input_layout": ["timecos", "timesin", "latcos", "latsin", "loncos", "lonsin", "oni", "roni", "sss", "sst", "ssh"],
+      "config_path": "NeSPReSO2_onTemplate/config/argo/config_argo_heave_residual_fast.json",
+      "cache_path": "data/cache/train_ready_3adcff404b0b.pkl",
+      "cache_hash": "3adcff404b0b",
+      "ckpt": "NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_residual_fast/heave_fast_s42/model_best.pth",
+      "seed": 42,
+      "loss_mode": "heave_residual_fast",
+      "decode": "HeaveResidualFastLoss.decode_ts then physical_ts. Residual PCs are on the canonical z-grid, not native-z PCA. decode_warp raw=0 -> MLD 50 m / D26 120 m. z_bot=1800.",
+      "clim_prior": "These caches have no climatology/clim_profiles. Loss fallback is nanmean of cache true_profiles, broadcast to every row. Reproduce that basin-mean prior; do not nearest-neighbor Argo rows.",
+      "residual_pca": "Fitted inside HeaveResidualFastLoss on train-split warped residuals (chronological 70/15/15 via base.split_utils.build_split_indices). Extract t_components/t_mean/s_components/s_mean once from a loss built on this cache.",
+      "enso": true,
+      "sigma_o": "csv model=HeaveFast, seed=42, regime=all (or lc/complement if two err profiles)"
+    },
+    "ops": {
+      "role": "LC-box second challenger only. Not a better basin ingest than HeaveFast.",
+      "arch_type": "HeaveResidualFast",
+      "input_dim": 30,
+      "output_dim": 35,
+      "n_warp": 3,
+      "n_enc": 11,
+      "n_sat": 19,
+      "probabilistic": true,
+      "pin_arch_dims": true,
+      "input_layout": ["timecos", "timesin", "latcos", "latsin", "loncos", "lonsin", "oni", "roni", "sss", "sst", "ssh"],
+      "ops_layout": [
+        "sst.grad_x@local",
+        "sst.grad_y@local",
+        "sst.grad_x@1.0deg",
+        "sst.grad_y@1.0deg",
+        "sss.grad_x@local",
+        "sss.grad_y@local",
+        "sss.grad_x@1.0deg",
+        "sss.grad_y@1.0deg",
+        "ssh.grad_x@local",
+        "ssh.grad_y@local",
+        "ssh.grad_x@1.0deg",
+        "ssh.grad_y@1.0deg",
+        "ssh.laplacian@1.0deg",
+        "sst.tendency@7d",
+        "ssh.tendency@7d",
+        "ssh.geo_u@local",
+        "ssh.geo_v@local",
+        "ssh.geo_u@1.0deg",
+        "ssh.geo_v@1.0deg"
+      ],
+      "config_path": "NeSPReSO2_onTemplate/config/argo/config_argo_heave_fast_ops.json",
+      "cache_path": "data/cache/train_ready_heave_ops.pkl",
+      "cache_kind": "heave_ops",
+      "cache_inputs_width": 28,
+      "cache_inputs_note": "9 v2 columns + 19 ops. ONI/RONI splice at load -> 30. cache_hash field is still 3adcff404b0b (inherited); identify this file by path and cache_kind, not that hash.",
+      "ckpt": "NeSPReSO2_onTemplate/saved/models/NeSPReSO2_ARGO_GoM_heave_fast_ops/heave_ops_s42/model_best.pth",
+      "seed": 42,
+      "loss_mode": "heave_residual_fast",
+      "decode": "same as HeaveFast; residual PCA from THIS ops cache, not the 9-d cache",
+      "clim_prior": "same nanmean fallback as HeaveFast, on this cache's true_profiles",
+      "enso": true,
+      "ops_zscored": false,
+      "ops_at_request": {
+        "do_not_use": "NeSPReSO2_onTemplate/data/cache/train_ready_2ab55b15b14f.pkl",
+        "reason": "Argo-row aligned (n=4145). Not an arbitrary (lat,lon,date) accessor.",
+        "compute_from": "NeSPReSO2_onTemplate/data/cube/gom_cube.zarr",
+        "sampler": "preproc.features.sampler + preproc.features.operators",
+        "names": "preproc.export_heave_ablation_cache.OP_NAMES",
+        "missing_cube": "HTTP 503, do not zero-fill"
+      },
+      "sigma_o": "csv model=ops, seed=42; prefer regime=lc if splitting err profiles"
+    }
+  },
+  "netcdf_attrs": {
+    "model": "A_CRPS|HeaveFast|ops",
+    "seed": "int",
+    "checkpoint": "basename or relative path",
+    "cache_hash": "from cache, with ops caveat above",
+    "decode": "pca_inverse|heave_residual_fast",
+    "r_kind": "dai_sigma_o_after_H"
+  },
+  "suggested_slices": [
+    "A_CRPS (9-d sat path, cache PCA inverse)",
+    "HeaveFast (ONI/RONI + warp decode + basin-mean clim)",
+    "ops (cube operators at request time)",
+    "nespreso_client model= kwarg; default URL stays Ozavala SAT"
+  ]
+}
