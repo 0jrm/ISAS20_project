@@ -16,3 +16,4 @@ Landmines only. Anything an agent can discover by reading the code does not belo
 - The control repo pins this tree by commit in `config/repos.toml`. Do not rewrite history on `NHT`.
 - `reports/xb_argo_compare/` holds 20 MB of untracked data that gom-da-workspace scripts read by path. Do not move or delete it.
 - `reports/heave_da_serve_spec.json` and `reports/sigma_o_hycom.csv` are runtime inputs of the deployed NeSPReSO API (`services/common/v2_spec.py`), not reports. Never move or archive them; the 2026-09-30 freeze did and broke inference until they were restored.
+- `reports/pc_routing_spec.json` is read by the `config/argo/config_argo_pc_*.json` training configs (`routing_spec`). It is an input, not a report. Restored on 2026-10-01 after the freeze archived it.
