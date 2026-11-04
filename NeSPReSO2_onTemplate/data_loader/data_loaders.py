@@ -26,6 +26,44 @@ class NeSPReSODataset(Dataset):
         return self.inputs[idx], self.targets[idx], idx
 
 
+SAT_CHANNELS = ("sss", "sst", "ssh")
+
+
+class NoisyPointInputs(Dataset):
+    """Adds fresh Gaussian noise to the trailing SSS, SST and SSH columns of a point model's inputs on every read.
+
+    The columns hold physical values (psu, degC, m), so ``sigma`` is in those units. One generator seeded once
+    gives a new draw per sample and epoch, reproducible for a given seed and read order.
+    """
+
+    def __init__(self, base, sigma, seed):
+        self.base = base
+        self.sigma = torch.tensor([float(sigma[k]) for k in SAT_CHANNELS], dtype=torch.float32)
+        self.generator = torch.Generator().manual_seed(int(seed))
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, i = self.base[idx]
+        x = x.clone()
+        x[-3:] += torch.randn(3, generator=self.generator) * self.sigma
+        return x, y, i
+
+
+def check_input_noise(spec, cache, use_err, pair):
+    """The noise hook supports point caches whose last three input columns are SSS, SST and SSH."""
+    unknown = set(spec) - set(SAT_CHANNELS) - {"seed"}
+    if unknown or "seed" not in spec:
+        raise ValueError(f"input_noise needs keys {SAT_CHANNELS} (missing ones are 0) and seed; got {sorted(spec)}")
+    if any(float(spec.get(k, 0.0)) < 0 for k in SAT_CHANNELS):
+        raise ValueError("input_noise sigmas must be >= 0")
+    patched = int(cache.get("spatial_pad", 0)) or int(cache.get("temporal_pad", 0)) or cache.get("sat_patch_shape")
+    if patched or use_err or pair:
+        raise ValueError("input_noise supports point inputs only (no patch, error channels or pairs)")
+    return {k: float(spec.get(k, 0.0)) for k in SAT_CHANNELS}
+
+
 class PairDataset(Dataset):
     """Rows are pairs; the index tensor is cache ``target_i``, not the pair row."""
 
@@ -120,6 +158,9 @@ class NeSPReSODataLoader(DataLoader):
             miss_t = torch.tensor(miss, dtype=torch.float32)
             inputs = torch.cat([inputs, err, miss_t], dim=-1)
         pair = bool(kwargs.pop("pair", False))
+        input_noise = kwargs.pop("input_noise", None)
+        if input_noise:
+            noise_sigma = check_input_noise(input_noise, self.cache, use_err, pair)
         k_train = int(kwargs.pop("k_train", 4))
         k_eval = int(kwargs.pop("k_eval", 1))
         pair_max_km = float(kwargs.pop("max_km", 250))
@@ -226,6 +267,8 @@ class NeSPReSODataLoader(DataLoader):
         if split not in subsets:
             raise ValueError(f"split must be train|val|test, got {split}")
         active = subsets[split]
+        if input_noise and split == "train":
+            active = NoisyPointInputs(active, noise_sigma, input_noise["seed"])
 
         self.cache_path = cache_path
         self.pca_models = self.cache["pca_models"]
